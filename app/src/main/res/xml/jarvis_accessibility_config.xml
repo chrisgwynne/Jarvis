@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    JarvisAccessibilityService configuration.
+
+    Purpose: tap the Send button inside WhatsApp after Jarvis has composed a
+    message via the whatsapp://send intent.  Android does not expose any
+    programmatic way to send a WhatsApp message (by design, to prevent spam);
+    an AccessibilityService that explicitly taps the button is the only route.
+
+    Scope is restricted as tightly as possible:
+      - packageNames filters events to WhatsApp only
+      - feedbackType="generic" (no spoken/haptic feedback)
+      - canPerformGestures not declared — we only use performAction(ACTION_CLICK)
+-->
+<accessibility-service
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100"
+    android:packageNames="com.whatsapp,com.whatsapp.w4b" />

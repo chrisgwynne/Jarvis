@@ -1,0 +1,29 @@
+# Jarvis baseline profile — hot startup paths
+# Generated manually — update after significant architecture changes
+
+# App entry point
+HSPLcom/jarvis/assistant/JarvisApp;->onCreate()V
+
+# Service startup path
+HSPLcom/jarvis/assistant/service/JarvisService;->onCreate()V
+HSPLcom/jarvis/assistant/service/JarvisService;->onStartCommand(Landroid/content/Intent;II)I
+
+# Runtime core
+HSPLcom/jarvis/assistant/runtime/JarvisRuntime;-><init>(Landroid/content/Context;Lcom/jarvis/assistant/util/SettingsStore;Lkotlin/jvm/functions/Function1;)V
+HSPLcom/jarvis/assistant/runtime/JarvisRuntime;->start()V
+
+# Audio pipeline (critical for first-activation latency)
+HSPLcom/jarvis/assistant/audio/TtsEngine;-><init>(Landroid/content/Context;)V
+HSPLcom/jarvis/assistant/audio/WakeWordDetector;->start()V
+HSPLcom/jarvis/assistant/audio/SpeechCapture;->listen()Ljava/lang/String;
+
+# LLM
+HSPLcom/jarvis/assistant/llm/LlmRouter;->completeWithMessages(Ljava/util/List;)Ljava/lang/String;
+HSPLcom/jarvis/assistant/llm/NetworkClient;->post(Ljava/lang/String;Ljava/util/Map;Ljava/lang/String;)Ljava/lang/String;
+
+# Tool registry
+HSPLcom/jarvis/assistant/tools/framework/ToolRegistry;->match(Ljava/lang/String;Z)Lkotlin/Pair;
+
+# Settings
+HSPLcom/jarvis/assistant/util/SettingsStore;-><init>(Landroid/content/Context;)V
+HSPLcom/jarvis/assistant/ui/MainActivity;->onCreate(Landroid/os/Bundle;)V

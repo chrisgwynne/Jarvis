@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Jarvis</string>
+    <string name="notification_channel_name">Jarvis Assistant</string>
+    <string name="notification_channel_desc">Persistent notification while Jarvis is active</string>
+    <string name="notification_title">Jarvis is listening</string>
+    <string name="notification_text">Tap to open</string>
+    <string name="accessibility_service_description">Allows Jarvis to tap the Send button in WhatsApp after composing a message by voice.</string>
+</resources>

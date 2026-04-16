@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Cleartext (HTTP) is permitted globally so that self-hosted LLM servers
+    on Tailscale (100.x.x.x IPs or *.ts.net hostnames) and local LAN
+    addresses work without TLS certificates.  Public HTTPS APIs are
+    unaffected — OkHttp uses HTTPS when the URL starts with https://.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <!-- Trust user-installed certificates (e.g. self-signed certs for
+                 OpenClaw/Tailscale servers installed via Settings → Security). -->
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

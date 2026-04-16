@@ -1,0 +1,45 @@
+package com.jarvis.assistant.proactive
+
+/**
+ * ContextSnapshot — an immutable, point-in-time view of the device and
+ * assistant state captured once per polling tick by [ProactiveEngine].
+ *
+ * All fields are plain types; no Android framework objects escape into the
+ * scoring pipeline, making the model easy to construct in unit tests.
+ *
+ * @param currentTimeMillis             Wall-clock time at snapshot creation.
+ * @param batteryLevel                  Current battery percentage (0–100).
+ * @param isCharging                    True if the device is connected to a charger.
+ * @param screenOn                      True if the display is currently interactive.
+ * @param isJarvisSpeaking              True if TTS output is currently playing.
+ * @param isJarvisListening             True if the speech recogniser is open.
+ * @param lastUserInteractionTimeMillis Wall-clock ms of the most recent user
+ *                                      voice interaction, or null if none recorded.
+ * @param activeReminderCount           Number of PENDING reminders in the future.
+ * @param nextReminderAtMillis          Epoch ms of the soonest pending reminder,
+ *                                      or null if there are none.
+ * @param missedCallsCount              Number of unacknowledged missed calls.
+ * @param lastMissedCallAtMillis        Epoch ms of the most recent missed call,
+ *                                      or null if [missedCallsCount] is zero.
+ * @param lastMissedCallContactName     Display name of the caller, or null if
+ *                                      unknown or [missedCallsCount] is zero.
+ * @param currentLocationName           City-level location string (e.g. "London, UK"),
+ *                                      or null if unavailable / permission denied.
+ * @param networkAvailable              True if the device has a validated internet connection.
+ */
+data class ContextSnapshot(
+    val currentTimeMillis: Long,
+    val batteryLevel: Int,
+    val isCharging: Boolean,
+    val screenOn: Boolean,
+    val isJarvisSpeaking: Boolean,
+    val isJarvisListening: Boolean,
+    val lastUserInteractionTimeMillis: Long?,
+    val activeReminderCount: Int,
+    val nextReminderAtMillis: Long?,
+    val missedCallsCount: Int,
+    val lastMissedCallAtMillis: Long?,
+    val lastMissedCallContactName: String?,
+    val currentLocationName: String?,
+    val networkAvailable: Boolean
+)

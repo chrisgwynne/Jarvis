@@ -1,0 +1,47 @@
+package com.jarvis.assistant.proactive
+
+/**
+ * ProactiveConfig — all tuneable constants for the proactive engine.
+ *
+ * Centralising configuration here means each decision threshold, cooldown
+ * window, and penalty weight can be adjusted without touching any logic.
+ *
+ * @param pollingIntervalMs       How often the engine polls for new events (ms).
+ * @param passiveThreshold        finalScore must exceed this to produce a PassiveAction.
+ * @param activeThreshold         finalScore must exceed this to produce a SpeakAction.
+ * @param cooldownLowBatteryMs    Minimum gap between consecutive LOW_BATTERY surfacings.
+ * @param cooldownUpcomingReminderMs Minimum gap between consecutive UPCOMING_REMINDER surfacings.
+ * @param cooldownMissedCallMs    Minimum gap between consecutive MISSED_CALL surfacings.
+ * @param minGlobalGapMs          Minimum wall-clock gap between *any* two surfaced actions.
+ * @param batteryLow              Battery level (%) at which the low-battery generator activates.
+ * @param batteryVeryLow          Battery level (%) mapped to high urgency.
+ * @param batteryCritical         Battery level (%) mapped to critical urgency.
+ * @param reminderWindowMs        Look-ahead window for upcoming reminders (ms).
+ * @param reminderHighWindowMs    Window for high-urgency reminder scoring (ms).
+ * @param reminderUrgentMs        Window for critical/urgent reminder scoring (ms).
+ * @param repetitionPenalty       Score penalty applied when an event is within its cooldown window.
+ * @param speakingPenalty         Score penalty applied when Jarvis is currently speaking.
+ * @param recentInteractionPenalty Score penalty applied when the user just interacted.
+ * @param recentInteractionWindowMs Window within which the user is considered to have just interacted.
+ * @param eventStalenessMs        Events older than this are discarded by DecisionEngine.
+ */
+data class ProactiveConfig(
+    val pollingIntervalMs: Long           = 10_000L,
+    val passiveThreshold: Float           = 0.55f,
+    val activeThreshold: Float            = 0.80f,
+    val cooldownLowBatteryMs: Long        = 10 * 60 * 1000L,
+    val cooldownUpcomingReminderMs: Long  = 5  * 60 * 1000L,
+    val cooldownMissedCallMs: Long        = 15 * 60 * 1000L,
+    val minGlobalGapMs: Long              = 60_000L,
+    val batteryLow: Int                   = 15,
+    val batteryVeryLow: Int               = 10,
+    val batteryCritical: Int              = 5,
+    val reminderWindowMs: Long            = 10 * 60 * 1000L,
+    val reminderHighWindowMs: Long        = 5  * 60 * 1000L,
+    val reminderUrgentMs: Long            = 60_000L,
+    val repetitionPenalty: Float          = 0.30f,
+    val speakingPenalty: Float            = 0.20f,
+    val recentInteractionPenalty: Float   = 0.25f,
+    val recentInteractionWindowMs: Long   = 30_000L,
+    val eventStalenessMs: Long            = 30_000L
+)

@@ -26,8 +26,11 @@ object SpeakerEmbeddingEngine {
     /**
      * Cosine similarity ≥ this (and < THRESHOLD_HIGH) → LOW_CONFIDENCE_OR_AMBIGUOUS.
      * Below this → UNKNOWN.
+     * Note: both LOW_CONFIDENCE and UNKNOWN prompt "who's this?" — raising this
+     * threshold reduces how often the system presents a mismatched person as a
+     * candidate for silent enrolment in future code paths.
      */
-    const val THRESHOLD_LOW  = 0.60f
+    const val THRESHOLD_LOW  = 0.70f
 
     // ── Embedding extraction ──────────────────────────────────────────────────
 

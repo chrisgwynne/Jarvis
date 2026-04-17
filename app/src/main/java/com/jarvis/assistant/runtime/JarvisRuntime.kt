@@ -1110,13 +1110,7 @@ class JarvisRuntime(
                                         }
                                     }
                                 }
-                                SpeakerIdentityResult.ConfidenceBand.LOW_CONFIDENCE_OR_AMBIGUOUS -> {
-                                    identResult.personId?.let { pid ->
-                                        scope.launch(Dispatchers.IO) {
-                                            speakerCoordinator.enrollUtterance(pid, utterancePcm)
-                                        }
-                                    }
-                                }
+                                SpeakerIdentityResult.ConfidenceBand.LOW_CONFIDENCE_OR_AMBIGUOUS,
                                 SpeakerIdentityResult.ConfidenceBand.UNKNOWN -> {
                                     if (anyoneEnrolled) {
                                         sessionSpeaker = sessionSpeaker.copy(

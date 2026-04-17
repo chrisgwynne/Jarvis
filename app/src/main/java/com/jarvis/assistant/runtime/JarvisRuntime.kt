@@ -1197,14 +1197,30 @@ class JarvisRuntime(
 
                     // ── "Train my voice" / manual enrollment request ──────────────
                     if (ENROLL_VOICE_PATTERN.containsMatchIn(transcript)) {
-                        // Resolve whose profile to enroll into.  In owner trust mode the
-                        // session personId is null, so fall back to the stored owner record.
-                        var enrollPersonId   = sessionSpeaker.result.personId
-                        var enrollName       = sessionSpeaker.result.displayName
-                        if (enrollPersonId == null) {
-                            val owner = withContext(Dispatchers.IO) { speakerStore.getOwner() }
-                            enrollPersonId = owner?.id
-                            enrollName     = owner?.displayName
+                        var enrollPersonId = sessionSpeaker.result.personId
+                        var enrollName     = sessionSpeaker.result.displayName
+                        when {
+                            enrollPersonId != null -> {
+                                // Known speaker with a stored profile — enroll directly.
+                            }
+                            enrollName != null -> {
+                                // Guest introduced by name this session but not yet stored.
+                                // Enrolling into the owner profile would be wrong here.
+                                speakAndRecord(
+                                    "I know your name, $enrollName, but I don't have a stored " +
+                                    "voice profile for you yet. Say 'remember me' first and then " +
+                                    "I can train your voice."
+                                )
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                            else -> {
+                                // Owner trust mode — no one enrolled yet, fall back to owner record.
+                                val owner = withContext(Dispatchers.IO) { speakerStore.getOwner() }
+                                enrollPersonId = owner?.id
+                                enrollName     = owner?.displayName
+                            }
                         }
                         if (enrollPersonId != null) {
                             sessionSpeaker = sessionSpeaker.copy(

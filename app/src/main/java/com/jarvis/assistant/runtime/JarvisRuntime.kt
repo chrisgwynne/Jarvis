@@ -129,6 +129,20 @@ class JarvisRuntime(
             """remember\s+me|save\s+my\s+(?:voice|profile)|add\s+me""",
             RegexOption.IGNORE_CASE
         )
+
+        private val ENROLL_VOICE_PATTERN = Regex(
+            """(?:train|enroll|enrol|learn|teach\s+you)\s+my\s+voice|add\s+(?:my\s+)?voice\s+samples?|improve\s+(?:my\s+)?(?:voice|recognition)""",
+            RegexOption.IGNORE_CASE
+        )
+
+        private const val SAMPLES_TO_COLLECT = 5
+        private val ENROLLMENT_PROMPTS = listOf(
+            "hey Jarvis, what's the weather today",
+            "set a timer for five minutes please",
+            "turn off the kitchen lights",
+            "what time does the supermarket close",
+            "play some music in the living room"
+        )
     }
 
     // ── Core ──────────────────────────────────────────────────────────────────
@@ -1094,6 +1108,36 @@ class JarvisRuntime(
                             syncState(JarvisState.Listening)
                             continue
                         }
+                        sessionSpeaker.awaitingVoiceEnrollmentSample -> {
+                            val pid = sessionSpeaker.result.personId
+                            if (pid != null && utterancePcm != null) {
+                                withContext(Dispatchers.IO) {
+                                    speakerCoordinator.enrollUtterance(pid, utterancePcm)
+                                }
+                            } else if (utterancePcm == null) {
+                                Log.w(TAG, "Voice enrollment: no PCM captured for sample, skipping")
+                            }
+                            val remaining = sessionSpeaker.voiceEnrollmentSamplesRemaining - 1
+                            if (remaining > 0) {
+                                val nextPrompt = ENROLLMENT_PROMPTS[SAMPLES_TO_COLLECT - remaining]
+                                sessionSpeaker = sessionSpeaker.copy(voiceEnrollmentSamplesRemaining = remaining)
+                                speakAndRecord("Good. $remaining more — please say: \"$nextPrompt\"")
+                            } else {
+                                anyoneEnrolled = true
+                                val name = sessionSpeaker.result.displayName?.substringBefore(' ') ?: "there"
+                                sessionSpeaker = sessionSpeaker.copy(
+                                    awaitingVoiceEnrollmentSample   = false,
+                                    voiceEnrollmentSamplesRemaining = 0
+                                )
+                                speakAndRecord(
+                                    "All done, $name! I've collected $SAMPLES_TO_COLLECT voice samples " +
+                                    "and will recognise you much better now. How can I help?"
+                                )
+                            }
+                            machine.transition(JarvisState.Listening)
+                            syncState(JarvisState.Listening)
+                            continue
+                        }
                         utterancePcm != null && !sessionSpeaker.isKnown -> {
                             // First turn with PCM available — attempt speaker identification.
                             val identResult = withContext(Dispatchers.IO) {
@@ -1146,6 +1190,44 @@ class JarvisRuntime(
                             "Sure! Say a sentence so I can learn your voice — " +
                             "for example: hey Jarvis, what's the weather today?"
                         )
+                        machine.transition(JarvisState.Listening)
+                        syncState(JarvisState.Listening)
+                        continue
+                    }
+
+                    // ── "Train my voice" / manual enrollment request ──────────────
+                    if (ENROLL_VOICE_PATTERN.containsMatchIn(transcript)) {
+                        // Resolve whose profile to enroll into.  In owner trust mode the
+                        // session personId is null, so fall back to the stored owner record.
+                        var enrollPersonId   = sessionSpeaker.result.personId
+                        var enrollName       = sessionSpeaker.result.displayName
+                        if (enrollPersonId == null) {
+                            val owner = withContext(Dispatchers.IO) { speakerStore.getOwner() }
+                            enrollPersonId = owner?.id
+                            enrollName     = owner?.displayName
+                        }
+                        if (enrollPersonId != null) {
+                            sessionSpeaker = sessionSpeaker.copy(
+                                awaitingVoiceEnrollmentSample   = true,
+                                voiceEnrollmentSamplesRemaining = SAMPLES_TO_COLLECT,
+                                result = SpeakerIdentityResult(
+                                    confidence  = 1f,
+                                    personId    = enrollPersonId,
+                                    displayName = enrollName,
+                                    band        = SpeakerIdentityResult.ConfidenceBand.HIGH_CONFIDENCE_MATCH
+                                )
+                            )
+                            val firstName = enrollName?.substringBefore(' ') ?: "there"
+                            speakAndRecord(
+                                "Sure, $firstName! I'll collect $SAMPLES_TO_COLLECT voice samples. " +
+                                "Please say: \"${ENROLLMENT_PROMPTS.first()}\""
+                            )
+                        } else {
+                            speakAndRecord(
+                                "I don't have a profile to link your voice to. " +
+                                "Tell me your name first and I'll set one up."
+                            )
+                        }
                         machine.transition(JarvisState.Listening)
                         syncState(JarvisState.Listening)
                         continue

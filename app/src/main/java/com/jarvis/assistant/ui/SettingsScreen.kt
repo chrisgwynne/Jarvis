@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Person
 import com.jarvis.assistant.audio.TtsEngine
@@ -465,8 +466,9 @@ fun SettingsScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     speakerProfiles.forEach { person ->
                         SpeakerProfileRow(
-                            person    = person,
-                            onDelete  = { vm.deleteSpeakerProfile(person.id) }
+                            person   = person,
+                            onDelete = { vm.deleteSpeakerProfile(person.id) },
+                            onTrain  = { vm.scheduleVoiceEnrollment(person.id) }
                         )
                     }
                 }
@@ -891,8 +893,10 @@ private fun OpenAiOAuthSection(
 @Composable
 private fun SpeakerProfileRow(
     person  : PersonRecord,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onTrain : () -> Unit
 ) {
+    var trainScheduled by remember { mutableStateOf(false) }
     val statusLabel = when (person.typedEnrollmentStatus) {
         PersonRecord.EnrollmentStatus.NONE       -> "No voice samples"
         PersonRecord.EnrollmentStatus.TRAINING   -> "Training (${person.enrolledUtteranceCount} samples)"
@@ -955,6 +959,19 @@ private fun SpeakerProfileRow(
                 Text("Delete", color = Color(0xFFFF5252), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
         } else {
+            // Train voice button — schedules enrollment for the next Jarvis session.
+            IconButton(
+                onClick = { onTrain(); trainScheduled = true },
+                modifier = Modifier.size(32.dp),
+                enabled = !trainScheduled
+            ) {
+                Icon(
+                    Icons.Default.Mic,
+                    contentDescription = "Train voice for ${person.displayName}",
+                    tint = if (trainScheduled) Cyan else TextMuted,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
             IconButton(
                 onClick  = { confirmingDelete = true },
                 modifier = Modifier.size(32.dp)
@@ -966,6 +983,14 @@ private fun SpeakerProfileRow(
                     modifier = Modifier.size(18.dp)
                 )
             }
+        }
+        if (trainScheduled) {
+            Text(
+                "Activate Jarvis to start",
+                color = Cyan,
+                fontSize = 10.sp,
+                modifier = Modifier.padding(top = 2.dp)
+            )
         }
     }
 }

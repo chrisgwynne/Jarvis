@@ -45,6 +45,9 @@ class SettingsStore(context: Context) {
         const val KEY_OPENAI_CODE_VERIFIER = "openai_code_verifier"
         const val KEY_OPENAI_OAUTH_ENABLED = "openai_oauth_enabled"
 
+        // Voice enrollment trigger (set from Settings UI, consumed at next session start)
+        const val KEY_PENDING_ENROLL_PID  = "pending_voice_enrollment_pid"
+
         // OpenClaw remote routing keys
         const val KEY_OPENCLAW_ENABLED    = "openclaw_enabled"
         const val KEY_OPENCLAW_HOST       = "openclaw_host"
@@ -181,6 +184,15 @@ class SettingsStore(context: Context) {
     var openClawTimeoutMs: Long
         get() = prefs.getLong(KEY_OPENCLAW_TIMEOUT_MS, 30_000L)
         set(v) = prefs.edit().putLong(KEY_OPENCLAW_TIMEOUT_MS, v).apply()
+
+    /**
+     * One-shot trigger: when ≥ 0, JarvisRuntime will auto-start voice enrollment
+     * for this personId at the next session start, then reset the value to -1.
+     * Written by the Settings UI; consumed (and cleared) by JarvisRuntime.
+     */
+    var pendingVoiceEnrollmentPersonId: Long
+        get() = prefs.getLong(KEY_PENDING_ENROLL_PID, -1L)
+        set(v) = prefs.edit().putLong(KEY_PENDING_ENROLL_PID, v).apply()
 
     fun clearOpenAiOAuth() {
         prefs.edit()

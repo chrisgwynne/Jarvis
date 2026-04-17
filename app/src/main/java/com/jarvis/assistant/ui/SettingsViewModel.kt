@@ -51,7 +51,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     private val store         = SettingsStore(app)
     private val openClawRepo  = OpenClawSettingsRepository(store)
     private val db            = JarvisDatabase.getInstance(app)
-    private val speakerStore  = SpeakerProfileStore(db.personRecordDao(), db.speakerEmbeddingDao())
+    private val speakerStore  = SpeakerProfileStore(db.personRecordDao(), db.speakerEmbeddingDao(), db.recentGuestDao())
 
     // ── Exposed state ──────────────────────────────────────────────────────
 
@@ -108,6 +108,15 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             speakerStore.deletePerson(personId)
             _speakerProfiles.value = speakerStore.getAllPersons()
         }
+    }
+
+    /**
+     * Schedule a voice enrollment session for [personId].
+     * JarvisRuntime will auto-start the 5-sample enrollment flow at the next
+     * session start, then clear this flag.
+     */
+    fun scheduleVoiceEnrollment(personId: Long) {
+        store.pendingVoiceEnrollmentPersonId = personId
     }
 
     // ── Memory management ──────────────────────────────────────────────────────

@@ -88,6 +88,7 @@ import com.jarvis.assistant.speaker.SpeakerProfileStore
 import com.jarvis.assistant.speaker.SpeakerRecognitionCoordinator
 import com.jarvis.assistant.speaker.SpeakerSessionContext
 import com.jarvis.assistant.speaker.audio.SpeakerAudioCapture
+import com.jarvis.assistant.speaker.audio.SpeakerEmbeddingEngine
 
 /**
  * JarvisRuntime — the central orchestrator for the voice pipeline.
@@ -359,7 +360,7 @@ class JarvisRuntime(
         )
 
         // Speaker recognition
-        speakerStore = SpeakerProfileStore(db.personRecordDao(), db.speakerEmbeddingDao())
+        speakerStore = SpeakerProfileStore(db.personRecordDao(), db.speakerEmbeddingDao(), db.recentGuestDao())
         speakerEnrollment = SpeakerEnrollmentManager(speakerStore)
         speakerCoordinator = SpeakerRecognitionCoordinator(speakerStore, speakerEnrollment)
 
@@ -867,6 +868,9 @@ class JarvisRuntime(
 
                 ttsEngine.playChime()
 
+                // Load neural speaker encoder once (no-op on subsequent sessions).
+                SpeakerEmbeddingEngine.init(context)
+
                 // First-run onboarding: no owner name recorded yet — prompt for setup.
                 // Re-read from DB to avoid a race with the async load in start().
                 if (!anyoneRegistered) {
@@ -876,6 +880,31 @@ class JarvisRuntime(
                 if (!anyoneRegistered) {
                     speakAndRecord("Hi! I'm Jarvis. I haven't been set up yet — what's your name?")
                     sessionSpeaker = sessionSpeaker.copy(awaitingOwnerName = true)
+                }
+
+                // Settings-triggered enrollment: user tapped "Train Voice" in the Settings UI.
+                val pendingEnrollPid = settings.pendingVoiceEnrollmentPersonId
+                if (pendingEnrollPid >= 0L && !sessionSpeaker.awaitingOwnerName) {
+                    settings.pendingVoiceEnrollmentPersonId = -1L
+                    val pendingPerson = withContext(Dispatchers.IO) { speakerStore.getPersonById(pendingEnrollPid) }
+                    if (pendingPerson != null) {
+                        sessionSpeaker = SpeakerSessionContext(
+                            result = SpeakerIdentityResult(
+                                confidence  = 1f,
+                                personId    = pendingPerson.id,
+                                displayName = pendingPerson.displayName,
+                                band        = SpeakerIdentityResult.ConfidenceBand.HIGH_CONFIDENCE_MATCH
+                            ),
+                            awaitingVoiceEnrollmentSample   = true,
+                            voiceEnrollmentSamplesRemaining = SAMPLES_TO_COLLECT
+                        )
+                        val firstName = pendingPerson.displayName.substringBefore(' ')
+                        speakAndRecord(
+                            "Hi $firstName! Starting voice enrollment. " +
+                            "Say: \"${ENROLLMENT_PROMPTS.first()}\""
+                        )
+                        machine.transitionAnd(JarvisState.Listening) { syncState(JarvisState.Listening) }
+                    }
                 }
 
                 machine.transitionAnd(JarvisState.Listening) { syncState(JarvisState.Listening) }
@@ -1040,44 +1069,74 @@ class JarvisRuntime(
                                 // they accumulate samples in subsequent sessions.
                                 Log.w(TAG, "Owner onboarding: no PCM available — voice profile not seeded")
                             }
-                            val owner = withContext(Dispatchers.IO) { speakerStore.getOwner() }
+                            val owner         = withContext(Dispatchers.IO) { speakerStore.getOwner() }
+                            val alreadyHave   = if (utterancePcm != null) 1 else 0
+                            val remaining     = SAMPLES_TO_COLLECT - alreadyHave
+                            val firstPromptIdx = alreadyHave.coerceIn(0, ENROLLMENT_PROMPTS.lastIndex)
                             sessionSpeaker = SpeakerSessionContext(
                                 result = SpeakerIdentityResult(
                                     confidence  = 1f,
                                     personId    = owner?.id,
                                     displayName = owner?.displayName ?: ownerName,
                                     band        = SpeakerIdentityResult.ConfidenceBand.HIGH_CONFIDENCE_MATCH
-                                )
+                                ),
+                                awaitingVoiceEnrollmentSample   = remaining > 0,
+                                voiceEnrollmentSamplesRemaining = remaining
                             )
                             promptAssembler.invalidateProfileCache()
-                            speakAndRecord(
-                                "Got it, $ownerName! I'll get better at recognising you over time. " +
-                                "How can I help?"
-                            )
+                            if (remaining > 0) {
+                                speakAndRecord(
+                                    "Got it, $ownerName! A few more voice samples will help me recognise " +
+                                    "you straight away. Say: \"${ENROLLMENT_PROMPTS[firstPromptIdx]}\""
+                                )
+                            } else {
+                                speakAndRecord("Got it, $ownerName! How can I help?")
+                            }
                             machine.transition(JarvisState.Listening)
                             syncState(JarvisState.Listening)
                             continue
                         }
                         sessionSpeaker.awaitingIntroductionReply -> {
-                            // Unknown speaker told us their name — greet but don't persist.
                             val name = speakerCoordinator.parseIntroductionName(transcript)
                             if (name != null) {
-                                // Use LOW_CONFIDENCE, not HIGH_CONFIDENCE — the name was parsed
-                                // from text, not verified by voice.  HIGH_CONFIDENCE would
-                                // unlock personal tools (calls, messages) for any speaker who
-                                // simply claims a name.
-                                sessionSpeaker = SpeakerSessionContext(
-                                    result = SpeakerIdentityResult(
-                                        confidence  = 0.5f,
-                                        personId    = null,   // not enrolled yet
-                                        displayName = name,
-                                        band        = SpeakerIdentityResult.ConfidenceBand.LOW_CONFIDENCE_OR_AMBIGUOUS
+                                val captured = sessionSpeaker.pendingPcm
+                                // Check if a stored profile already carries this name — if so,
+                                // link the session to it at LOW_CONFIDENCE rather than treating
+                                // the person as a brand-new guest (fixes cross-session re-intro).
+                                val existingPerson = withContext(Dispatchers.IO) {
+                                    speakerStore.getPersonByName(name)
+                                }
+                                if (existingPerson != null) {
+                                    sessionSpeaker = SpeakerSessionContext(
+                                        result = SpeakerIdentityResult(
+                                            confidence  = 0.5f,
+                                            personId    = existingPerson.id,
+                                            displayName = existingPerson.displayName,
+                                            band        = SpeakerIdentityResult.ConfidenceBand.LOW_CONFIDENCE_OR_AMBIGUOUS
+                                        ),
+                                        pendingPcm = captured
                                     )
-                                )
-                                speakAndRecord(
-                                    "Hi $name! I'll use your name for this conversation. " +
-                                    "Say 'remember me' if you'd like me to recognise you next time."
-                                )
+                                    speakAndRecord(
+                                        "Welcome back, ${existingPerson.displayName}! " +
+                                        "I've linked this session to your profile. How can I help?"
+                                    )
+                                } else {
+                                    // New person — record for cross-session memory and set up guest session.
+                                    scope.launch(Dispatchers.IO) { speakerStore.recordRecentGuest(name) }
+                                    sessionSpeaker = SpeakerSessionContext(
+                                        result = SpeakerIdentityResult(
+                                            confidence  = 0.5f,
+                                            personId    = null,
+                                            displayName = name,
+                                            band        = SpeakerIdentityResult.ConfidenceBand.LOW_CONFIDENCE_OR_AMBIGUOUS
+                                        ),
+                                        pendingPcm = captured  // preserved for enrollment seeding on "remember me"
+                                    )
+                                    speakAndRecord(
+                                        "Hi $name! I'll use your name for this conversation. " +
+                                        "Say 'remember me' if you'd like me to recognise you next time."
+                                    )
+                                }
                                 machine.transition(JarvisState.Listening)
                                 syncState(JarvisState.Listening)
                                 continue
@@ -1086,24 +1145,43 @@ class JarvisRuntime(
                             sessionSpeaker = sessionSpeaker.copy(awaitingIntroductionReply = false)
                         }
                         sessionSpeaker.awaitingGuestEnrollmentSample -> {
-                            // Guest said "remember me" — enroll their voice and create a profile.
-                            val name = sessionSpeaker.result.displayName ?: "you"
+                            // Guest said "remember me" — create profile, enroll this utterance
+                            // plus the original unknown utterance (pendingPcm) if available.
+                            val name          = sessionSpeaker.result.displayName ?: "you"
+                            val introductionPcm = sessionSpeaker.pendingPcm
                             val person = withContext(Dispatchers.IO) {
                                 speakerCoordinator.createPersonFromIntroduction(name, utterancePcm)
                             }
+                            if (introductionPcm != null) {
+                                withContext(Dispatchers.IO) {
+                                    speakerCoordinator.enrollUtterance(person.id, introductionPcm)
+                                }
+                            }
                             anyoneRegistered = true
                             anyoneEnrolled   = true
+                            // Chain directly into multi-sample enrollment so the profile reaches
+                            // SUFFICIENT status in the same session rather than stopping at 1–2 samples.
+                            val alreadyEnrolled = if (introductionPcm != null) 2 else 1
+                            val remaining       = SAMPLES_TO_COLLECT - alreadyEnrolled
+                            val firstPromptIdx  = SAMPLES_TO_COLLECT - remaining
                             sessionSpeaker = SpeakerSessionContext(
                                 result = SpeakerIdentityResult(
                                     confidence  = 1f,
                                     personId    = person.id,
                                     displayName = person.displayName,
                                     band        = SpeakerIdentityResult.ConfidenceBand.HIGH_CONFIDENCE_MATCH
+                                ),
+                                awaitingVoiceEnrollmentSample   = remaining > 0,
+                                voiceEnrollmentSamplesRemaining = remaining
+                            )
+                            if (remaining > 0) {
+                                speakAndRecord(
+                                    "Profile saved, ${person.displayName}! A few more samples will help me " +
+                                    "recognise you reliably. Say: \"${ENROLLMENT_PROMPTS[firstPromptIdx]}\""
                                 )
-                            )
-                            speakAndRecord(
-                                "Done, ${person.displayName}! I'll recognise you next time. How can I help?"
-                            )
+                            } else {
+                                speakAndRecord("Done, ${person.displayName}! I'll recognise you next time. How can I help?")
+                            }
                             machine.transition(JarvisState.Listening)
                             syncState(JarvisState.Listening)
                             continue
@@ -1149,7 +1227,11 @@ class JarvisRuntime(
                                 SpeakerIdentityResult.ConfidenceBand.HIGH_CONFIDENCE_MATCH -> {
                                     identResult.personId?.let { pid ->
                                         scope.launch(Dispatchers.IO) {
-                                            speakerCoordinator.enrollUtterance(pid, utterancePcm)
+                                            // Only enroll at SILENT_ENROLL_THRESHOLD (above THRESHOLD_HIGH)
+                                            // to prevent profile drift from borderline false-positives.
+                                            if (identResult.confidence >= SpeakerEmbeddingEngine.SILENT_ENROLL_THRESHOLD) {
+                                                speakerCoordinator.enrollUtterance(pid, utterancePcm)
+                                            }
                                             speakerCoordinator.recordInteraction(pid)
                                         }
                                     }
@@ -1157,12 +1239,22 @@ class JarvisRuntime(
                                 SpeakerIdentityResult.ConfidenceBand.LOW_CONFIDENCE_OR_AMBIGUOUS,
                                 SpeakerIdentityResult.ConfidenceBand.UNKNOWN -> {
                                     if (anyoneEnrolled) {
+                                        // Surface recent guests to avoid a cold "who's this?" every time.
+                                        val recentGuests = withContext(Dispatchers.IO) {
+                                            speakerStore.getRecentGuests()
+                                        }
+                                        val prompt = if (recentGuests.isNotEmpty()) {
+                                            val names = recentGuests.take(2).joinToString(" or ") { it.displayName }
+                                            "Hi! I don't recognise your voice. Are you $names, or someone new?"
+                                        } else {
+                                            "Hi, I don't recognise your voice. Who's this?"
+                                        }
                                         sessionSpeaker = sessionSpeaker.copy(
                                             askedForIntroduction      = true,
                                             awaitingIntroductionReply = true,
                                             pendingPcm                = utterancePcm
                                         )
-                                        speakAndRecord("Hi, I don't recognise your voice. Who's this?")
+                                        speakAndRecord(prompt)
                                         machine.transition(JarvisState.Listening)
                                         syncState(JarvisState.Listening)
                                         continue
@@ -1171,10 +1263,13 @@ class JarvisRuntime(
                             }
                         }
                         utterancePcm != null -> {
-                            // Ongoing session with a known speaker — silently improve their profile.
-                            sessionSpeaker.result.personId?.let { pid ->
-                                scope.launch(Dispatchers.IO) {
-                                    speakerCoordinator.enrollUtterance(pid, utterancePcm)
+                            // Ongoing session — only silently enroll for confirmed HIGH_CONFIDENCE
+                            // sessions to prevent drifting a profile with unverified utterances.
+                            if (sessionSpeaker.isHighConfidence) {
+                                sessionSpeaker.result.personId?.let { pid ->
+                                    scope.launch(Dispatchers.IO) {
+                                        speakerCoordinator.enrollUtterance(pid, utterancePcm)
+                                    }
                                 }
                             }
                         }

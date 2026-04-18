@@ -13,7 +13,21 @@ object OpenClawConnectionBuilder {
         return "$scheme://$host:${settings.port}/gateway"
     }
 
-    /** HTTP health endpoint: http(s)://host:port/health */
+    /** OpenAI-compatible chat completions endpoint: http(s)://host:port/v1/chat/completions */
+    fun buildChatEndpoint(settings: OpenClawSettings): String {
+        val scheme = if (settings.secure) "https" else "http"
+        val host   = settings.host.trim().trimEnd('/')
+        return "$scheme://$host:${settings.port}/v1/chat/completions"
+    }
+
+    /** OpenAI-compatible models endpoint: http(s)://host:port/v1/models (used for health checks) */
+    fun buildModelsEndpoint(settings: OpenClawSettings): String {
+        val scheme = if (settings.secure) "https" else "http"
+        val host   = settings.host.trim().trimEnd('/')
+        return "$scheme://$host:${settings.port}/v1/models"
+    }
+
+    /** HTTP health endpoint: http(s)://host:port/health (kept for backward compat) */
     fun buildHealthEndpoint(settings: OpenClawSettings): String {
         val scheme = if (settings.secure) "https" else "http"
         val host   = settings.host.trim().trimEnd('/')

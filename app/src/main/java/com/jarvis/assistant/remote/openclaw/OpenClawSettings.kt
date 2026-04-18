@@ -10,7 +10,9 @@ data class OpenClawSettings(
     val port:      Int,
     val secure:    Boolean,
     val authToken: String,
-    val timeoutMs: Long
+    val timeoutMs: Long,
+    val modelName: String = "openclaw",
+    val keyword:   String = "computer"
 ) {
     companion object {
         const val DEFAULT_PORT       = 8765

@@ -1,6 +1,7 @@
 package com.jarvis.assistant.remote.openclaw
 
 import android.util.Log
+import com.jarvis.assistant.llm.Message
 import java.util.UUID
 
 /**
@@ -9,18 +10,18 @@ import java.util.UUID
  *
  * ROUTING RULES
  * ─────────────
- * LOCAL_FAST  — short queries, small-talk, calculations, simple yes/no
- *               questions, queries mentioning "you" (asking about Jarvis
- *               itself).  Handled entirely on-device.
+ * 1. Keyword match  — transcript starts with [OpenClawSettings.keyword] →
+ *                     always REMOTE (LONG if it also matches a LONG_PATTERN, else FAST).
+ *                     The keyword is stripped before sending so OpenClaw receives the
+ *                     clean query.
  *
- * REMOTE_LONG — anything that sounds like it will take meaningful effort:
- *               multi-step research, "write me a …", "find out …",
- *               "generate …", "plan …", "explain in detail".
- *               Jarvis speaks "Looking into that." first so the user isn't
- *               left in silence.
+ * 2. LOCAL_FAST     — matches a LOCAL_PATTERN → kept on-device entirely.
  *
- * REMOTE_FAST — everything else that isn't LOCAL_FAST.  Sent to OpenClaw
- *               silently; reply appears as soon as the server responds.
+ * 3. REMOTE_LONG    — matches a LONG_PATTERN (research, writing, planning tasks).
+ *                     Jarvis speaks "Looking into that." first.
+ *
+ * 4. Default        — LOCAL_FAST (stay on device). Only keyword + LONG_PATTERN hits
+ *                     go to OpenClaw automatically; everything else stays local.
  */
 class OpenClawRouter(
     private val settingsRepo: OpenClawSettingsRepository,
@@ -30,7 +31,7 @@ class OpenClawRouter(
     companion object {
         private const val TAG = "OpenClawRouter"
 
-        // Patterns that classify as LOCAL_FAST — keep on-device
+        // Patterns that force LOCAL_FAST — keep on device
         private val LOCAL_PATTERNS = listOf(
             Regex("""^(?:what(?:'s| is) (?:the )?(?:time|date|day)|what day is it)\b""", RegexOption.IGNORE_CASE),
             Regex("""^(?:how are you|what(?:'s| are) you|are you|do you|can you|tell me about yourself)\b""", RegexOption.IGNORE_CASE),
@@ -40,7 +41,7 @@ class OpenClawRouter(
             Regex("""(?:alarm|timer|reminder|note|call|text|message|photo|selfie|record)\b""", RegexOption.IGNORE_CASE)
         )
 
-        // Patterns that classify as REMOTE_LONG — long-running research tasks
+        // Patterns that classify as REMOTE_LONG — long-running research/generation tasks
         private val LONG_PATTERNS = listOf(
             Regex("""^(?:write|draft|compose|create)\s+(?:me\s+)?(?:a|an|the)\s+\w""", RegexOption.IGNORE_CASE),
             Regex("""^(?:explain|describe|summarise|summarize)\s+(?:in detail|everything|how|why|what)\b""", RegexOption.IGNORE_CASE),
@@ -52,36 +53,51 @@ class OpenClawRouter(
 
     /**
      * Returns true when OpenClaw is enabled and fully configured.
-     * Call before [execute] to avoid needlessly opening a WebSocket.
+     * Call before [execute] to avoid needlessly building a request.
      */
     fun shouldRoute(): Boolean = settingsRepo.isConfigured()
 
     /**
      * Classify a transcript into a [RouteType].
-     * Always returns a value — falls back to [RouteType.REMOTE_FAST].
+     *
+     * Checks in order: keyword → LOCAL_FAST patterns → LONG_PATTERNS → default LOCAL_FAST.
      */
     fun classify(transcript: String): RouteType {
-        val t = transcript.trim()
+        val t      = transcript.trim()
+        val kw     = settingsRepo.snapshot().keyword.trim().lowercase()
+
+        // 1. Explicit keyword → always REMOTE
+        if (kw.isNotBlank() && t.lowercase().startsWith(kw)) {
+            return if (LONG_PATTERNS.any { it.containsMatchIn(t) }) RouteType.REMOTE_LONG
+                   else RouteType.REMOTE_FAST
+        }
+
+        // 2. LOCAL_FAST patterns → stay on device
         if (LOCAL_PATTERNS.any { it.containsMatchIn(t) }) return RouteType.LOCAL_FAST
-        if (LONG_PATTERNS.any  { it.containsMatchIn(t) }) return RouteType.REMOTE_LONG
-        return RouteType.REMOTE_FAST
+
+        // 3. Auto-classify clearly complex queries → REMOTE_LONG
+        if (LONG_PATTERNS.any { it.containsMatchIn(t) }) return RouteType.REMOTE_LONG
+
+        // 4. Default → stay local (do not silently intercept all queries)
+        return RouteType.LOCAL_FAST
     }
 
     /**
      * Route [transcript] to OpenClaw and return the execution result.
      *
      * Returns [OpenClawExecutionResult.Bypassed] when:
-     *   - OpenClaw is not configured
+     *   - OpenClaw is not configured/enabled
      *   - The transcript classifies as [RouteType.LOCAL_FAST]
      *
-     * Callers are responsible for:
-     *   - Speaking the REMOTE_LONG acknowledgement ("Looking into that.") BEFORE
-     *     calling this function — this router does not do that to keep concerns
-     *     separated.
+     * Callers are responsible for speaking the REMOTE_LONG acknowledgement
+     * ("Looking into that.") BEFORE calling this function.
+     *
+     * @param recentMessages  Last N turns from ConversationStore for context injection.
      */
     suspend fun execute(
-        transcript: String,
-        sessionId:  String
+        transcript:     String,
+        sessionId:      String,
+        recentMessages: List<Message> = emptyList()
     ): OpenClawExecutionResult {
         if (!shouldRoute()) return OpenClawExecutionResult.Bypassed
 
@@ -91,13 +107,23 @@ class OpenClawRouter(
 
         if (route == RouteType.LOCAL_FAST) return OpenClawExecutionResult.Bypassed
 
+        // Strip keyword prefix so OpenClaw receives the clean query
+        val kw = settings.keyword.trim().lowercase()
+        val cleanTranscript = if (kw.isNotBlank() && transcript.trim().lowercase().startsWith(kw))
+            transcript.trim().substring(kw.length).trim()
+        else transcript
+
+        // Build OpenAI message array: recent history (up to 6 turns) + current user turn
+        val ocMessages = buildList {
+            recentMessages.takeLast(6)
+                .filter { it.role == "user" || it.role == "assistant" }
+                .forEach { add(OpenClawChatMessage(role = it.role, content = it.content)) }
+            add(OpenClawChatMessage(role = "user", content = cleanTranscript))
+        }
+
         val request = OpenClawRequest(
-            requestId      = UUID.randomUUID().toString(),
-            transcript     = transcript,
-            routeType      = route,
-            sessionId      = sessionId,
-            timeoutMs      = settings.timeoutMs,
-            isVoiceRequest = true
+            model    = settings.modelName,
+            messages = ocMessages
         )
 
         return client.send(settings, request)

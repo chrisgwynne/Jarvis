@@ -8,10 +8,16 @@ import kotlinx.coroutines.flow.flow
  * A single turn in a conversation.
  * role is "system", "user", or "assistant" — matches the OpenAI convention
  * which every major LLM API has also adopted.
+ *
+ * imageBase64: optional JPEG image payload (base64, no data-URI prefix).
+ * When present, providers that support vision will include it as an inline
+ * image content block alongside the text.  Providers that don't support vision
+ * fall back to text-only.
  */
 data class Message(
     val role: String,
-    val content: String
+    val content: String,
+    val imageBase64: String? = null
 )
 
 /**
@@ -20,8 +26,10 @@ data class Message(
 sealed class LlmResult {
     /** Normal text response from the model. */
     data class Text(val content: String) : LlmResult()
-    /** The model wants to call a tool. */
+    /** The model wants to call a single tool. */
     data class ToolCall(val toolName: String, val argsJson: String) : LlmResult()
+    /** The model wants to call multiple tools in parallel. */
+    data class MultiToolCall(val calls: List<ToolCall>) : LlmResult()
 }
 
 /**

@@ -39,7 +39,7 @@ class AnthropicProvider(private val apiKey: String, private val maxTokens: Int =
         val systemText = messages.firstOrNull { it.role == "system" }?.content ?: ""
         val chatMessages = messages
             .filter { it.role != "system" }
-            .map { AnthropicMessage(role = it.role, content = it.content) }
+            .map { AnthropicMessage(role = it.role, content = buildAnthropicContent(it)) }
 
         val requestBody = NetworkClient.gson.toJson(
             AnthropicRequest(
@@ -74,7 +74,7 @@ class AnthropicProvider(private val apiKey: String, private val maxTokens: Int =
         val systemText = messages.firstOrNull { it.role == "system" }?.content ?: ""
         val chatMessages = messages
             .filter { it.role != "system" }
-            .map { AnthropicMessage(role = it.role, content = it.content) }
+            .map { AnthropicMessage(role = it.role, content = buildAnthropicContent(it)) }
 
         val requestBody = NetworkClient.gson.toJson(
             AnthropicStreamRequest(
@@ -106,7 +106,7 @@ class AnthropicProvider(private val apiKey: String, private val maxTokens: Int =
 
         val systemText   = messages.firstOrNull { it.role == "system" }?.content ?: ""
         val chatMessages = messages.filter { it.role != "system" }
-            .map { AnthropicMessage(role = it.role, content = it.content) }
+            .map { AnthropicMessage(role = it.role, content = buildAnthropicContent(it)) }
 
         val anthropicTools = tools.map { schema ->
             AnthropicTool(
@@ -133,14 +133,41 @@ class AnthropicProvider(private val apiKey: String, private val maxTokens: Int =
         )
 
         val parsed = NetworkClient.gson.fromJson(responseBody, AnthropicToolResponse::class.java)
-        val toolBlock = parsed.content?.firstOrNull { it.type == "tool_use" }
-        return if (toolBlock != null) {
-            val argsJson = NetworkClient.gson.toJson(toolBlock.input ?: emptyMap<String, Any>())
-            LlmResult.ToolCall(toolName = toolBlock.name ?: "", argsJson = argsJson)
-        } else {
-            val text = parsed.content?.firstOrNull { it.type == "text" }?.text?.trim() ?: ""
-            LlmResult.Text(text)
+        val toolBlocks = parsed.content?.filter { it.type == "tool_use" } ?: emptyList()
+        return when {
+            toolBlocks.size > 1 -> {
+                LlmResult.MultiToolCall(toolBlocks.map { tb ->
+                    val argsJson = NetworkClient.gson.toJson(tb.input ?: emptyMap<String, Any>())
+                    LlmResult.ToolCall(toolName = tb.name ?: "", argsJson = argsJson)
+                })
+            }
+            toolBlocks.size == 1 -> {
+                val tb = toolBlocks.first()
+                val argsJson = NetworkClient.gson.toJson(tb.input ?: emptyMap<String, Any>())
+                LlmResult.ToolCall(toolName = tb.name ?: "", argsJson = argsJson)
+            }
+            else -> {
+                val text = parsed.content?.firstOrNull { it.type == "text" }?.text?.trim() ?: ""
+                LlmResult.Text(text)
+            }
         }
+    }
+
+    // ── Image content builder ─────────────────────────────────────────────────
+
+    /**
+     * Build Anthropic content: if the message carries an image, return a list of
+     * content blocks (image + text); otherwise return the plain text string.
+     */
+    private fun buildAnthropicContent(msg: Message): Any = if (msg.imageBase64 != null) {
+        listOf(
+            mapOf("type" to "image",
+                  "source" to mapOf("type" to "base64", "media_type" to "image/jpeg",
+                                    "data" to msg.imageBase64)),
+            mapOf("type" to "text", "text" to msg.content)
+        )
+    } else {
+        msg.content
     }
 
     /**
@@ -161,7 +188,7 @@ class AnthropicProvider(private val apiKey: String, private val maxTokens: Int =
 
     // ── Wire-format data classes ───────────────────────────────────────────────
 
-    private data class AnthropicMessage(val role: String, val content: String)
+    private data class AnthropicMessage(val role: String, val content: Any)
     private data class CacheControl(val type: String)
     private data class SystemBlock(val type: String, val text: String, val cache_control: CacheControl)
 

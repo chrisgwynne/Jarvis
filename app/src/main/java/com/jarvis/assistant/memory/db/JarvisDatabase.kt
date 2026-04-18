@@ -39,6 +39,8 @@ import com.jarvis.assistant.speaker.db.PersonRecord
 import com.jarvis.assistant.speaker.db.PersonRecordDao
 import com.jarvis.assistant.speaker.db.RecentGuest
 import com.jarvis.assistant.speaker.db.RecentGuestDao
+import com.jarvis.assistant.shortcuts.db.VoiceShortcut
+import com.jarvis.assistant.shortcuts.db.VoiceShortcutDao
 import com.jarvis.assistant.speaker.db.SpeakerEmbedding
 import com.jarvis.assistant.speaker.db.SpeakerEmbeddingDao
 
@@ -61,9 +63,10 @@ import com.jarvis.assistant.speaker.db.SpeakerEmbeddingDao
         ContradictionRecord::class,
         PendingFollowUp::class,
         BrainEvent::class,
-        BrainPattern::class
+        BrainPattern::class,
+        VoiceShortcut::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 abstract class JarvisDatabase : RoomDatabase() {
@@ -85,6 +88,7 @@ abstract class JarvisDatabase : RoomDatabase() {
     abstract fun pendingFollowUpDao(): PendingFollowUpDao
     abstract fun brainEventDao(): BrainEventDao
     abstract fun brainPatternDao(): BrainPatternDao
+    abstract fun voiceShortcutDao(): VoiceShortcutDao
 
     companion object {
         private const val DB_NAME = "jarvis.db"
@@ -343,6 +347,28 @@ abstract class JarvisDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Migration 9 → 10: add voice_shortcuts table for custom trigger sequences.
+         */
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS voice_shortcuts (
+                        id                 INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name               TEXT    NOT NULL,
+                        triggerNormalized  TEXT    NOT NULL,
+                        commands           TEXT    NOT NULL,
+                        createdAt          INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_voice_shortcuts_triggerNormalized ON voice_shortcuts(triggerNormalized)"
+                )
+            }
+        }
+
         fun getInstance(context: Context): JarvisDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -350,7 +376,9 @@ abstract class JarvisDatabase : RoomDatabase() {
                     JarvisDatabase::class.java,
                     DB_NAME
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
+                                   MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+                                   MIGRATION_9_10)
                     .build()
                     .also { INSTANCE = it }
             }

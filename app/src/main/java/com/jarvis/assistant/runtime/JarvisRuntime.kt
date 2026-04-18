@@ -43,7 +43,9 @@ import com.jarvis.assistant.prompt.PromptAssembler
 import com.jarvis.assistant.reminders.ReminderRepository
 import com.jarvis.assistant.reminders.ReminderScheduler
 import com.jarvis.assistant.proactive.AppBatterySource
+import com.jarvis.assistant.proactive.AppBrainPredictionSource
 import com.jarvis.assistant.proactive.AppCallContextSource
+import com.jarvis.assistant.proactive.AppNotificationSource
 import com.jarvis.assistant.proactive.AppReminderSource
 import com.jarvis.assistant.proactive.AppSpeechStateSource
 import com.jarvis.assistant.proactive.ProactiveConfig
@@ -79,6 +81,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -325,7 +329,8 @@ class JarvisRuntime(
             memoryRetriever        = memoryReader,
             reminderRepository     = reminderRepo,
             outgoingCallController = outgoingCallController,
-            locationProvider       = locationProvider
+            locationProvider       = locationProvider,
+            llmRouter              = llmRouter
         )
         toolDispatcher = ToolDispatcher(context, toolRegistry, machine)
         memoryHandler = MemoryActionHandler(profileMemory)
@@ -341,12 +346,17 @@ class JarvisRuntime(
 
         // Proactive awareness engine
         proactiveEngine = ProactiveEngine(
-            config         = ProactiveConfig(),
-            reminderSource = AppReminderSource(reminderRepo),
-            callSource     = callSource,
-            batterySource  = AppBatterySource(context, contextEngine),
-            speechSource   = speechStateSource,
-            dispatcher     = TtsProactiveDispatcher(
+            config               = ProactiveConfig(),
+            reminderSource       = AppReminderSource(reminderRepo),
+            callSource           = callSource,
+            batterySource        = AppBatterySource(context, contextEngine),
+            speechSource         = speechStateSource,
+            notificationSource   = AppNotificationSource(),
+            brainPredictionSource = AppBrainPredictionSource(
+                brainEngineProvider  = { if (::brainEngine.isInitialized) brainEngine else null },
+                knowledgeQueryEngine = knowledgeQuery
+            ),
+            dispatcher           = TtsProactiveDispatcher(
                 context              = context,
                 ttsEngine            = ttsEngine,
                 onPassiveAction      = { action -> Log.d(TAG, "Proactive passive: ${action.title}") },
@@ -1771,6 +1781,40 @@ class JarvisRuntime(
                                 fcHandled = true
                             }
                             break
+                        }
+
+                        fcResult is LlmResult.MultiToolCall -> {
+                            // ── Parallel tool execution ────────────────────────────
+                            hopsUsed++
+                            val callList = fcResult.calls
+                            val feedbacks = callList.map { tc ->
+                                async(Dispatchers.IO) {
+                                    val tool = toolRegistry.findByName(tc.toolName) ?: return@async null
+                                    @Suppress("UNCHECKED_CAST")
+                                    val argsMap = try {
+                                        (NetworkClient.gson.fromJson(tc.argsJson, Map::class.java) as Map<*, *>)
+                                            .entries.associate { (k, v) -> k.toString() to v.toString() }
+                                    } catch (e: Exception) { emptyMap() }
+                                    val result = toolRegistry.execute(context, tool, ToolInput(transcript, argsMap))
+                                    val fb = when (result) {
+                                        is ToolResult.Success -> result.spokenFeedback
+                                        is ToolResult.Failure -> result.spokenFeedback
+                                        else -> null
+                                    }
+                                    fb?.let { "[${tool.name}]: $it" }
+                                }
+                            }.awaitAll().filterNotNull()
+
+                            if (feedbacks.isEmpty() || hopsUsed >= MAX_TOOL_HOPS) {
+                                val combined = feedbacks.joinToString(". ")
+                                if (combined.isNotBlank()) {
+                                    llmRouter.conversationStore.addMessage("assistant", combined)
+                                    speakAndRecord(combined)
+                                    fcHandled = true
+                                }
+                                break
+                            }
+                            feedbacks.forEach { chainMessages.add(Message("assistant", it)) }
                         }
 
                         fcResult is LlmResult.ToolCall -> {

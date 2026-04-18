@@ -37,7 +37,7 @@ abstract class BaseOpenAiProvider(
         val requestBody = NetworkClient.gson.toJson(
             OAIRequest(
                 model      = model,
-                messages   = messages.map { OAIMessage(role = it.role, content = it.content) },
+                messages   = messages.map { OAIMessage(role = it.role, content = buildOaiContent(it)) },
                 max_tokens = maxTokens
             )
         )
@@ -54,7 +54,7 @@ abstract class BaseOpenAiProvider(
         val requestBody = NetworkClient.gson.toJson(
             OAIStreamRequest(
                 model      = model,
-                messages   = messages.map { OAIMessage(role = it.role, content = it.content) },
+                messages   = messages.map { OAIMessage(role = it.role, content = buildOaiContent(it)) },
                 max_tokens = maxTokens,
                 stream     = true
             )
@@ -69,8 +69,8 @@ abstract class BaseOpenAiProvider(
 
     /**
      * Call the model with function-calling tools.
-     * Returns [LlmResult.ToolCall] if the model elected to use a tool,
-     * or [LlmResult.Text] for a normal text response.
+     * Returns [LlmResult.MultiToolCall] when the model requests multiple tools in parallel,
+     * [LlmResult.ToolCall] for a single tool, or [LlmResult.Text] for a normal response.
      */
     suspend fun completeWithTools(messages: List<Message>, tools: List<ToolSchema>): LlmResult {
         if (apiKey.isBlank()) throw LlmException("No API key configured for $name — go to Settings.")
@@ -89,7 +89,7 @@ abstract class BaseOpenAiProvider(
         val requestBody = NetworkClient.gson.toJson(
             OAIToolRequest(
                 model       = model,
-                messages    = messages.map { OAIMessage(role = it.role, content = it.content) },
+                messages    = messages.map { OAIMessage(role = it.role, content = buildOaiContent(it)) },
                 max_tokens  = maxTokens,
                 tools       = oaiTools,
                 tool_choice = "auto"
@@ -100,20 +100,41 @@ abstract class BaseOpenAiProvider(
         val parsed       = NetworkClient.gson.fromJson(responseBody, OAIToolResponse::class.java)
         val choice       = parsed.choices?.firstOrNull()
 
-        val toolCall = choice?.message?.tool_calls?.firstOrNull()
-        return if (toolCall != null) {
-            LlmResult.ToolCall(
-                toolName = toolCall.function.name,
-                argsJson = toolCall.function.arguments
-            )
-        } else {
-            LlmResult.Text(choice?.message?.content?.trim() ?: "")
+        val toolCalls = choice?.message?.tool_calls
+        return when {
+            toolCalls != null && toolCalls.size > 1 -> {
+                LlmResult.MultiToolCall(toolCalls.map { tc ->
+                    LlmResult.ToolCall(toolName = tc.function.name, argsJson = tc.function.arguments)
+                })
+            }
+            toolCalls?.firstOrNull() != null -> {
+                val tc = toolCalls.first()
+                LlmResult.ToolCall(toolName = tc.function.name, argsJson = tc.function.arguments)
+            }
+            else -> LlmResult.Text(choice?.message?.content?.trim() ?: "")
         }
+    }
+
+    // ── Image content builder ─────────────────────────────────────────────────
+
+    /**
+     * Build OpenAI content: if the message carries an image, return a list of
+     * content blocks (image_url + text); otherwise return the plain text string.
+     * Gson serialises Any? correctly — lists become JSON arrays, strings stay strings.
+     */
+    private fun buildOaiContent(msg: Message): Any? = if (msg.imageBase64 != null) {
+        listOf(
+            mapOf("type" to "image_url",
+                  "image_url" to mapOf("url" to "data:image/jpeg;base64,${msg.imageBase64}")),
+            mapOf("type" to "text", "text" to msg.content)
+        )
+    } else {
+        msg.content
     }
 
     // ── Wire-format data classes ──────────────────────────────────────────────
 
-    private data class OAIMessage(val role: String, val content: String?)
+    private data class OAIMessage(val role: String, val content: Any?)
 
     private data class OAIRequest(val model: String, val messages: List<OAIMessage>, val max_tokens: Int)
     private data class OAIStreamRequest(val model: String, val messages: List<OAIMessage>, val max_tokens: Int, val stream: Boolean)

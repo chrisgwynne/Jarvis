@@ -26,6 +26,7 @@ import com.jarvis.assistant.tools.device.ReadNotificationsTool
 import com.jarvis.assistant.tools.device.ShoppingListTool
 import com.jarvis.assistant.tools.device.SmsTool
 import com.jarvis.assistant.tools.device.TimerTool
+import com.jarvis.assistant.tools.device.VoiceShortcutTool
 import com.jarvis.assistant.tools.device.VolumeTool
 import com.jarvis.assistant.tools.device.WhatsAppTool
 import com.jarvis.assistant.tools.web.WebSearchTool
@@ -41,6 +42,9 @@ import com.jarvis.assistant.tools.device.AnalyzeCameraViewTool
 import com.jarvis.assistant.call.OutgoingCallController
 import com.jarvis.assistant.tools.device.AudioRecordingTool
 import com.jarvis.assistant.tools.device.CameraCaptureTool
+import com.jarvis.assistant.tools.device.LocationReminderTool
+import com.jarvis.assistant.shortcuts.VoiceShortcutRepository
+import com.jarvis.assistant.tools.device.ConversationExportTool
 import com.jarvis.assistant.tools.device.EmailTool
 import com.jarvis.assistant.tools.device.EndCallTool
 import com.jarvis.assistant.tools.smart.SmartHomeTool
@@ -91,7 +95,8 @@ class ToolRegistry private constructor(
             memoryRetriever: MemoryRetriever? = null,
             reminderRepository: ReminderRepository? = null,
             outgoingCallController: OutgoingCallController? = null,
-            locationProvider: CurrentLocationProvider? = null
+            locationProvider: CurrentLocationProvider? = null,
+            llmRouter: com.jarvis.assistant.llm.LlmRouter? = null
         ): ToolRegistry {
             val contacts = ContactLookup(context)
             val search   = WebSearch()
@@ -128,13 +133,16 @@ class ToolRegistry private constructor(
                     add(MemoryStatsTool(db.memoryDao(), db.memoryFactDao()))
                     memoryRetriever?.let { add(MemoryRecallTool(it)) }
                     add(DailyBriefingTool(context, reminderRepository))
+                    add(LocationReminderTool(context))
                     add(ImageGenerationTool(context, settings))
                     val shoppingRepo = ShoppingRepository(db.shoppingDao())
                     add(ShoppingListTool(shoppingRepo))
+                    add(ConversationExportTool(context))
+                    add(VoiceShortcutTool(VoiceShortcutRepository(db.voiceShortcutDao())))
                     add(ReadNotificationsTool(context))
                     // Camera + vision tools (before OpenApp to avoid misrouting)
                     add(CameraCaptureTool(context, cameraCapture))
-                    add(AnalyzeCameraViewTool(context, cameraCapture, visionClient))
+                    add(AnalyzeCameraViewTool(context, cameraCapture, visionClient, llmRouter))
                     // Audio recording (start/stop/transcribe/summarize)
                     add(AudioRecordingTool(context, recordingManager, transcriber))
                     add(OpenAppTool(context))

@@ -22,7 +22,10 @@ enum class ProactiveEventType {
     MISSED_CALL,
 
     /** Suggestions or insights derived from user behavior analysis. */
-    BEHAVIORAL_LEARNING;
+    BEHAVIORAL_LEARNING,
+
+    /** One or more important notifications arrived while Jarvis was idle. */
+    UNREAD_NOTIFICATION;
 
     /**
      * Stable, lowercase key used to namespace this type inside [CooldownStore].

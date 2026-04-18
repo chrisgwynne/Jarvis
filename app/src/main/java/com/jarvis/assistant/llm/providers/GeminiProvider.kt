@@ -50,7 +50,7 @@ class GeminiProvider(private val apiKey: String, private val maxTokens: Int = 12
             .map { msg ->
                 GeminiContent(
                     role  = if (msg.role == "assistant") "model" else msg.role,
-                    parts = listOf(GeminiPart(text = msg.content))
+                    parts = buildGeminiParts(msg)
                 )
             }
 
@@ -95,7 +95,7 @@ class GeminiProvider(private val apiKey: String, private val maxTokens: Int = 12
         val contents   = messages.filter { it.role != "system" }.map { msg ->
             GeminiContent(
                 role  = if (msg.role == "assistant") "model" else msg.role,
-                parts = listOf(GeminiPart(text = msg.content))
+                parts = buildGeminiParts(msg)
             )
         }
 
@@ -134,9 +134,21 @@ class GeminiProvider(private val apiKey: String, private val maxTokens: Int = 12
         }
     }
 
+    // ── Image parts builder ───────────────────────────────────────────────────
+
+    /**
+     * Build Gemini parts for a message. If the message carries an image, prepend
+     * an inlineData part so Gemini receives image + text together.
+     */
+    private fun buildGeminiParts(msg: Message): List<GeminiPart> = buildList {
+        msg.imageBase64?.let { add(GeminiPart(inlineData = GeminiInlineData("image/jpeg", it))) }
+        add(GeminiPart(text = msg.content))
+    }
+
     // ── Wire-format data classes ───────────────────────────────────────────────
 
-    private data class GeminiPart(val text: String)
+    private data class GeminiInlineData(val mimeType: String, val data: String)
+    private data class GeminiPart(val text: String? = null, val inlineData: GeminiInlineData? = null)
 
     private data class GeminiContent(val role: String, val parts: List<GeminiPart>)
 

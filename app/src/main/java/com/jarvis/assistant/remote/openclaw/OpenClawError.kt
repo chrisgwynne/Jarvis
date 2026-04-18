@@ -11,9 +11,13 @@ sealed class OpenClawError(val spokenMessage: String) {
         "OpenClaw is not configured. Add a host in Settings."
     )
 
-    /** TCP/DNS failure — host not reachable at all. */
-    class Unreachable(cause: String = "") : OpenClawError(
-        "I couldn't reach your computer${if (cause.isNotBlank()) ": $cause" else "."}  Check the host and that it's on the same network."
+    /**
+     * TCP/DNS failure — host not reachable at all.
+     * [cause] is retained for logging/diagnostics but kept out of the spoken
+     * message to avoid reciting raw socket / exception text to the user.
+     */
+    class Unreachable(val cause: String = "") : OpenClawError(
+        "I couldn't reach your computer. Check the host and that it's on the same network."
     )
 
     /** Server returned auth_failed or HTTP 401/403. */

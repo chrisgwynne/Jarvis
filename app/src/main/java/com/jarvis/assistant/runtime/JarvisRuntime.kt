@@ -1807,7 +1807,10 @@ class JarvisRuntime(
                                     val argsMap = try {
                                         (NetworkClient.gson.fromJson(tc.argsJson, Map::class.java) as Map<*, *>)
                                             .entries.associate { (k, v) -> k.toString() to v.toString() }
-                                    } catch (e: Exception) { emptyMap() }
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Malformed tool args for ${tc.toolName}: ${e.message}")
+                                        emptyMap()
+                                    }
                                     val result = toolRegistry.execute(context, tool, ToolInput(transcript, argsMap))
                                     val fb = when (result) {
                                         is ToolResult.Success -> result.spokenFeedback
@@ -1839,7 +1842,10 @@ class JarvisRuntime(
                             val argsMap = try {
                                 (NetworkClient.gson.fromJson(fcResult.argsJson, Map::class.java) as Map<*, *>)
                                     .entries.associate { (k, v) -> k.toString() to v.toString() }
-                            } catch (e: Exception) { emptyMap() }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Malformed tool args for ${fcResult.toolName}: ${e.message}")
+                                emptyMap()
+                            }
 
                             val result = toolRegistry.execute(context, tool, ToolInput(transcript, argsMap))
                             val feedback = when (result) {

@@ -119,10 +119,10 @@ class AppResolver(
          * by name but the spoken alias matches a generic capability.
          */
         private val CATEGORY_INTENTS: Map<String, () -> Intent> = mapOf(
-            "camera"    to { Intent(Intent.ACTION_MAIN).addCategory("android.intent.category.LAUNCHER") },
+            "camera"    to { Intent(android.provider.MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA) },
             "phone"     to { Intent(Intent.ACTION_DIAL) },
             "dialer"    to { Intent(Intent.ACTION_DIAL) },
-            "browser"   to { Intent(Intent.ACTION_WEB_SEARCH) },
+            "browser"   to { Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.google.com")) },
             "messages"  to { Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_MESSAGING) } },
             "contacts"  to { Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_CONTACTS) } }
         )

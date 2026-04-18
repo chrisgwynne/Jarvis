@@ -2,6 +2,7 @@ package com.jarvis.assistant.tools.device
 
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
@@ -98,7 +99,8 @@ class OpenAppTool(
                 }
             }
         } catch (e: Exception) {
-            ToolResult.Failure("That didn't work — ${e.message ?: "couldn't launch the app"}.")
+            Log.w("OpenAppTool", "Launch failed", e)
+            ToolResult.Failure("That didn't work.")
         }
     }
 
@@ -125,7 +127,8 @@ class OpenAppTool(
             )
             ToolResult.Success(spokenFeedback = "Opening ${pending.label}.")
         } catch (e: Exception) {
-            ToolResult.Failure("That didn't work — ${e.message ?: "couldn't launch the app"}.")
+            Log.w("OpenAppTool", "Launch failed", e)
+            ToolResult.Failure("That didn't work.")
         }
     }
 

@@ -1021,16 +1021,12 @@ class JarvisRuntime(
                             }
                             InterruptionType.CONTINUE -> {
                                 lastInterrupted = null
-                                if (resumable.resumable && resumable.pendingTail.isNotBlank()) {
-                                    // Only replay the tail if it ends cleanly — mid-sentence
-                                    // fragments sound incoherent as a resume point.
-                                    val tail = resumable.pendingTail.trim()
-                                    val cleanTail = tail.takeIf {
-                                        it.last() in ".!?" || it.length > 40
-                                    } ?: resumable.spokenSoFar.takeLast(80)
-                                    speakAndRecord("Right, back to that — $cleanTail")
-                                } else if (resumable.resumable && resumable.spokenSoFar.isNotBlank()) {
-                                    speakAndRecord("Where was I? " + resumable.spokenSoFar.takeLast(80))
+                                if (resumable.resumable && resumable.spokenSoFar.isNotBlank()) {
+                                    // Re-invoke the LLM to continue naturally — never replay
+                                    // words that were already spoken.  The model is told what
+                                    // it said so far and asked to pick up with a short
+                                    // connector ("Right, so…", "Yeah,") and no repetition.
+                                    resumeContinuation(resumable, contextEngine.isOnline())
                                 }
                                 machine.transition(JarvisState.Listening)
                                 syncState(JarvisState.Listening)
@@ -1930,6 +1926,95 @@ class JarvisRuntime(
             // Clear shared references — next turn starts with fresh buffers
             currentSpokenSoFar = ""
             currentPendingTail = ""
+            currentTurnTranscript = ""
+        }
+    }
+
+    /**
+     * Resume an interrupted reply via a fresh LLM call instead of replaying the
+     * original tokens.  The model is shown what was actually spoken before the
+     * interruption and nudged to pick up with a short natural connector
+     * ("Right, so…", "Yeah,") without repeating any of those words.
+     *
+     * The previous assistant message in [ConversationStore] contains the full
+     * pre-interrupt response (spoken + unspoken tail); it's stripped and
+     * replaced with `spokenSoFar` so the LLM's view of history matches what
+     * the user actually heard.
+     */
+    private suspend fun resumeContinuation(
+        resumable: ResumableResponse,
+        isOnline: Boolean
+    ) {
+        if (!isOnline) {
+            speakAndRecord(OfflineManager.offlineLlmFallback(resumable.userTranscript))
+            return
+        }
+
+        val history = llmRouter.conversationStore.getContextMessages()
+            .filter { it.role != "system" }
+            .toMutableList()
+        // Drop the stale full-response assistant turn (what the LLM thinks it
+        // said) — we're about to replace it with what the user actually heard.
+        if (history.lastOrNull()?.role == "assistant") {
+            history.removeAt(history.lastIndex)
+        }
+        history.add(Message("assistant", resumable.spokenSoFar.trim()))
+        history.add(
+            Message(
+                "user",
+                "[You were cut off. Pick up naturally from where you stopped. " +
+                "Open with a short connector like \"Right, so…\" or \"Yeah,\" " +
+                "and do not repeat anything you already said. One or two sentences.]"
+            )
+        )
+
+        val messages = promptAssembler.assemble(
+            userQuery           = resumable.userTranscript,
+            conversationHistory = history,
+            maxMemories         = 2,
+            speakerContext      = sessionSpeaker
+        )
+
+        currentSpokenSoFar    = ""
+        currentPendingTail    = ""
+        currentTurnTranscript = resumable.userTranscript
+
+        val fullResponse    = StringBuilder()
+        var speakingStarted = false
+
+        try {
+            llmRouter.streamWithMessages(messages).collect { sentence ->
+                fullResponse.append(sentence).append(" ")
+                if (!speakingStarted) {
+                    speakingStarted = true
+                    machine.transition(JarvisState.Speaking)
+                    DeviceStateStore.update { copy(ttsPlaying = true) }
+                    syncState(JarvisState.Speaking)
+                    if (settings.voiceResponse) bargeIn.start()
+                }
+                val stillSpeaking = machine.isIn<JarvisState.Speaking>()
+                if (stillSpeaking) currentSpokenSoFar += "$sentence "
+                else currentPendingTail += "$sentence "
+                if (settings.voiceResponse && stillSpeaking) ttsEngine.speak(sentence)
+            }
+            if (settings.voiceResponse && speakingStarted) bargeIn.stop()
+            DeviceStateStore.update { copy(ttsPlaying = false) }
+
+            val responseText = fullResponse.toString().trim()
+            if (responseText.isNotBlank()) {
+                val formatted = ResponseFormatter.format(responseText)
+                memoryWriter.writeTurn(sessionId, "assistant", formatted)
+                DeviceStateStore.update { copy(lastAssistantResponse = formatted) }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Resume error: ${e.message}", e)
+            bargeIn.stop()
+            DeviceStateStore.update { copy(ttsPlaying = false) }
+        } finally {
+            currentSpokenSoFar    = ""
+            currentPendingTail    = ""
             currentTurnTranscript = ""
         }
     }

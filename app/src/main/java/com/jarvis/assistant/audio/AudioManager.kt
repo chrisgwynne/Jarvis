@@ -114,7 +114,7 @@ class AudioManager(
 
     private fun startWakeWordDetection() {
         wakeWordDetector?.stop()
-        wakeWordDetector = WakeWordDetector(
+        val detector = GoogleWakeWordDetector(
             context    = context,
             onDetected = ::onWakeWordDetected,
             onError    = { msg ->
@@ -122,7 +122,8 @@ class AudioManager(
                 onStateChange(JarvisService.State.IDLE)
             }
         )
-        wakeWordDetector!!.start()
+        wakeWordDetector = detector
+        detector.start()
         Log.d(TAG, "Wake-word detection started")
     }
 
@@ -238,8 +239,8 @@ class AudioManager(
             } catch (e: CancellationException) {
                 throw e   // service stopped or silence() called — do not restart
             } catch (e: Exception) {
-                Log.e(TAG, "Pipeline error: ${e.message}", e)
-                onLogEntry("Error: ${e.message}")
+                Log.e(TAG, "Pipeline error", e)
+                onLogEntry("Something went wrong.")
                 backToWakeWord()
             }
         }

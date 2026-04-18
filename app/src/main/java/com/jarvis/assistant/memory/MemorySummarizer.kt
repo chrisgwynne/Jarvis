@@ -46,7 +46,7 @@ class MemorySummarizer(
         // added to ConversationStore.  Using complete() or completeWithMessages()
         // here pollutes the next session's history with meta-prompts and summaries,
         // which confuses the LLM and degrades conversation quality.
-        val summary = try {
+        val llmSummary = try {
             llmRouter.completeSilent(listOf(
                 Message("system",
                     "Summarize this voice assistant conversation in 1–2 factual sentences. " +
@@ -55,12 +55,33 @@ class MemorySummarizer(
                 Message("user", excerpt)
             ))
         } catch (e: Exception) {
-            Log.w(TAG, "LLM summarisation failed, using heuristic: ${e.message}")
-            // Heuristic: first user turn as the summary
+            Log.w(TAG, "LLM summarisation threw, using heuristic: ${e.message}")
+            null
+        }
+
+        // completeSilent doesn't throw on provider errors — it returns an
+        // error string that we don't want persisted as the session summary.
+        val summary = if (llmSummary != null && !looksLikeError(llmSummary)) {
+            llmSummary
+        } else {
+            if (llmSummary != null) {
+                Log.w(TAG, "LLM summariser returned error-shaped output, using heuristic")
+            }
             turns.firstOrNull { it.role == "user" }?.content?.take(200) ?: return
         }
 
         memoryWriter.closeSession(sessionId, summary.take(400))
         Log.d(TAG, "Session $sessionId summarised: ${summary.take(80)}…")
+    }
+
+    /** Heuristic check for the error strings LlmRouter falls back to. */
+    private fun looksLikeError(s: String): Boolean {
+        val t = s.trim()
+        return t.isBlank() ||
+            t == "Something went wrong." ||
+            t.startsWith("Error:") ||
+            t.startsWith("No API key") ||
+            t.startsWith("HTTP ") ||
+            t.startsWith("Network error:")
     }
 }

@@ -63,6 +63,14 @@ internal fun FaqSettingsScreen(
                     "wa Chris saying nice work",
                 ),
             )
+            FaqEntry(
+                what = "Send an email",
+                examples = listOf(
+                    "send an email to Sarah saying thanks for lunch",
+                    "email Chris about the project update",
+                    "compose email to Mum",
+                ),
+            )
         }
 
         FaqSection(title = "Reminders, timers & alarms") {
@@ -103,6 +111,16 @@ internal fun FaqSettingsScreen(
                     "cancel that reminder",
                     "remove my 3pm alarm",
                     "clear all timers",
+                ),
+            )
+            FaqEntry(
+                what = "Location-based reminders",
+                note = "Uses Android geocoding + geofencing.",
+                examples = listOf(
+                    "remind me when I get to the office to submit expenses",
+                    "set a location reminder for home to feed the cat",
+                    "list my location reminders",
+                    "remove location reminder for the office",
                 ),
             )
         }
@@ -172,6 +190,15 @@ internal fun FaqSettingsScreen(
                 ),
             )
             FaqEntry(
+                what = "Add a calendar event",
+                examples = listOf(
+                    "add lunch with Sarah to my calendar Friday at 1pm",
+                    "schedule a meeting tomorrow at 3pm",
+                    "create an appointment for Monday at 10",
+                    "book a call with Chris next week",
+                ),
+            )
+            FaqEntry(
                 what = "Read notifications",
                 note = "Needs notification access (System Settings → Notification access).",
                 examples = listOf(
@@ -215,12 +242,31 @@ internal fun FaqSettingsScreen(
         FaqSection(title = "Search & info") {
             FaqEntry(
                 what = "Search the web",
-                note = "Uses DuckDuckGo by default; add a Brave key for richer results.",
+                note = "Uses Brave Search if a key is set, otherwise DuckDuckGo.",
                 examples = listOf(
-                    "what's the weather",
                     "latest news",
                     "bitcoin price",
                     "coffee shops nearby",
+                    "who won the match",
+                ),
+            )
+            FaqEntry(
+                what = "Weather",
+                note = "Uses free Open-Meteo API. Needs location permission.",
+                examples = listOf(
+                    "what's the weather",
+                    "will it rain today",
+                    "how cold is it outside",
+                    "forecast for today",
+                ),
+            )
+            FaqEntry(
+                what = "Play music",
+                note = "Opens Spotify first, falls back to YouTube Music.",
+                examples = listOf(
+                    "play Bohemian Rhapsody by Queen",
+                    "play some jazz",
+                    "play me something chilled",
                 ),
             )
             FaqEntry(
@@ -258,6 +304,31 @@ internal fun FaqSettingsScreen(
                     "what do you know about me",
                     "list your memories",
                     "what have you stored",
+                ),
+            )
+        }
+
+        FaqSection(title = "Voice shortcuts") {
+            FaqEntry(
+                what = "Create a shortcut",
+                note = "Chain multiple commands under a single trigger word.",
+                examples = listOf(
+                    "add shortcut bedtime: turn off the lights and set an alarm for 7am",
+                    "add shortcut called focus: mute the phone, turn on do not disturb",
+                ),
+            )
+            FaqEntry(
+                what = "Run a shortcut",
+                examples = listOf(
+                    "run shortcut bedtime",
+                    "trigger shortcut focus",
+                ),
+            )
+            FaqEntry(
+                what = "Manage shortcuts",
+                examples = listOf(
+                    "list shortcuts",
+                    "delete shortcut bedtime",
                 ),
             )
         }
@@ -336,6 +407,18 @@ internal fun FaqSettingsScreen(
                     "generate an image of a sunset",
                     "create a picture of a dog",
                     "draw a forest at night",
+                ),
+            )
+        }
+
+        FaqSection(title = "Export") {
+            FaqEntry(
+                what = "Save the current conversation",
+                note = "Writes a markdown transcript to the Downloads folder.",
+                examples = listOf(
+                    "export this conversation",
+                    "save the chat",
+                    "export transcript",
                 ),
             )
         }

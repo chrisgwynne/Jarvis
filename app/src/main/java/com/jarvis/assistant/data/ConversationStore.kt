@@ -19,6 +19,10 @@ class ConversationStore(private val context: Context) : CompressibleStore {
     companion object {
         const val MAX_HISTORY_PAIRS = 6
 
+        // Cap the rolling summary so it can't grow unbounded as new
+        // pairs are repeatedly compressed and appended across a long session.
+        private const val ROLLING_CONTEXT_MAX_CHARS = 4_000
+
         private val DATE_FORMAT = DateTimeFormatter.ofPattern("EEEE, MMMM d yyyy")
         private val TIME_FORMAT = DateTimeFormatter.ofPattern("h:mm a")
 
@@ -46,6 +50,7 @@ class ConversationStore(private val context: Context) : CompressibleStore {
     }
 
     private val history = ArrayDeque<Message>()
+    private val lock = Any()
 
     /**
      * Rolling summary of turn-pairs that have been compressed out of [history].
@@ -55,41 +60,49 @@ class ConversationStore(private val context: Context) : CompressibleStore {
     @Volatile var rollingContext: String? = null
         private set
 
-    fun addMessage(role: String, content: String) {
+    fun addMessage(role: String, content: String) = synchronized(lock) {
         history.addLast(Message(role = role, content = content))
         val maxMessages = MAX_HISTORY_PAIRS * 2
         while (history.size > maxMessages) history.removeFirst()
     }
 
-    fun getContextMessages(): List<Message> = buildList {
-        add(Message(role = "system", content = buildSystemPrompt(context)))
-        rollingContext?.let {
-            add(Message(role = "system", content = "Earlier in this conversation: $it"))
+    fun getContextMessages(): List<Message> = synchronized(lock) {
+        buildList {
+            add(Message(role = "system", content = buildSystemPrompt(context)))
+            rollingContext?.let {
+                add(Message(role = "system", content = "Earlier in this conversation: $it"))
+            }
+            addAll(history)
         }
-        addAll(history)
     }
 
     /**
      * Return the oldest [pairs] turn-pairs as a flat list for summarisation.
      * Returns an empty list if fewer pairs are available.
      */
-    override fun oldestPairs(pairs: Int): List<Message> = history.take(pairs * 2).toList()
+    override fun oldestPairs(pairs: Int): List<Message> = synchronized(lock) {
+        history.take(pairs * 2).toList()
+    }
 
     /**
      * Remove the oldest [pairs] turn-pairs from live history and store [summary]
      * as the new rolling context. Called by [ConversationCompressor] on Dispatchers.IO.
      */
-    override fun applyRollingContext(summary: String, pairs: Int) {
+    override fun applyRollingContext(summary: String, pairs: Int) = synchronized(lock) {
         repeat(pairs * 2) { if (history.isNotEmpty()) history.removeFirst() }
-        rollingContext = if (rollingContext != null) {
-            "$rollingContext\n$summary"
+        val combined = rollingContext?.let { "$it\n$summary" } ?: summary
+        // Trim from the start so the most recent summary always survives.
+        rollingContext = if (combined.length > ROLLING_CONTEXT_MAX_CHARS) {
+            combined.takeLast(ROLLING_CONTEXT_MAX_CHARS)
         } else {
-            summary
+            combined
         }
     }
 
     /** Return the last [n] user/assistant messages (no system prompt). */
-    fun getRecentMessages(n: Int): List<Message> = history.takeLast(n).toList()
+    fun getRecentMessages(n: Int): List<Message> = synchronized(lock) {
+        history.takeLast(n).toList()
+    }
 
     /**
      * Replace the most recent assistant message with [content].  No-op if the
@@ -97,9 +110,9 @@ class ConversationStore(private val context: Context) : CompressibleStore {
      * an interrupted response to rewrite what the LLM thinks it said so the
      * next turn doesn't see the unspoken tail as part of history.
      */
-    fun replaceLastAssistant(content: String) {
-        val last = history.lastOrNull() ?: return
-        if (last.role != "assistant") return
+    fun replaceLastAssistant(content: String) = synchronized(lock) {
+        val last = history.lastOrNull() ?: return@synchronized
+        if (last.role != "assistant") return@synchronized
         history.removeLast()
         history.addLast(Message(role = "assistant", content = content))
     }
@@ -109,13 +122,13 @@ class ConversationStore(private val context: Context) : CompressibleStore {
      * start of an interrupted-response resume so the LLM can stream a fresh
      * continuation without a stale assistant turn sitting before it.
      */
-    fun dropLastAssistant() {
-        val last = history.lastOrNull() ?: return
-        if (last.role != "assistant") return
+    fun dropLastAssistant() = synchronized(lock) {
+        val last = history.lastOrNull() ?: return@synchronized
+        if (last.role != "assistant") return@synchronized
         history.removeLast()
     }
 
-    val isEmpty: Boolean get() = history.isEmpty()
-    fun clear() { history.clear(); rollingContext = null }
-    override val size: Int get() = history.size
+    val isEmpty: Boolean get() = synchronized(lock) { history.isEmpty() }
+    fun clear() = synchronized(lock) { history.clear(); rollingContext = null }
+    override val size: Int get() = synchronized(lock) { history.size }
 }

@@ -54,7 +54,11 @@ object InterruptionClassifier {
      */
     fun classify(utterance: String, spokenSoFar: String): InterruptionType {
         val lower = utterance.lowercase().trim()
-        if (lower.isBlank()) return InterruptionType.CONTINUE
+        // Blank utterance = barge-in fired but nothing was transcribed.  Don't
+        // resume the previous response — we have no idea what the user said,
+        // and resuming on top of an unknown interrupt is more jarring than
+        // simply stopping and waiting for the next turn.
+        if (lower.isBlank()) return InterruptionType.URGENT
 
         // 1. URGENT — exact-match or startsWith on hard-stop phrases
         if (URGENT_PHRASES.any { phrase ->

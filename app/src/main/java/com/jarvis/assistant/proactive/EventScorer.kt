@@ -82,7 +82,12 @@ class EventScorer(
         val penalties = mutableMapOf<String, Float>()
 
         // Step 2 — cooldown / repetition penalty
-        val cooldownMs = cooldownMsForType(event.type)
+        // Cooldown stretches with each past ignore of this dedupeKey so that
+        // suggestions the user doesn't engage with back off over time.
+        val baseCooldownMs = cooldownMsForType(event.type)
+        val ignoreCount    = cooldownStore.ignoreCount(event.dedupeKey)
+        val cooldownMs     = (baseCooldownMs *
+            (1f + ignoreCount * config.ignoreEscalationFactor)).toLong()
         val msSinceLast = cooldownStore.msSinceSurfaced(event.dedupeKey)
         val cooldownPenalty = if (msSinceLast < cooldownMs) {
             val fraction = 1f - (msSinceLast.toFloat() / cooldownMs.toFloat())

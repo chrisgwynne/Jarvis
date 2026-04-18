@@ -73,6 +73,16 @@ class ProactiveEngine(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var loopJob: Job? = null
 
+    /**
+     * Last dispatched surfacing pending an ignore/accept verdict.  On each tick
+     * we check whether the user has interacted since [dispatchedAt]; if
+     * [ProactiveConfig.ignoreCheckDelayMs] has elapsed with no interaction the
+     * action counts as ignored and future effective cooldowns for [dedupeKey]
+     * stretch by [ProactiveConfig.ignoreEscalationFactor].
+     */
+    private data class PendingVerdict(val dedupeKey: String, val dispatchedAt: Long)
+    @Volatile private var pendingVerdict: PendingVerdict? = null
+
     // ── Public API ────────────────────────────────────────────────────────────
 
     /**
@@ -131,6 +141,10 @@ class ProactiveEngine(
      */
     private suspend fun tick() {
         val snapshot  = buildSnapshot()
+
+        // Resolve any pending ignore/accept verdict from a previous dispatch.
+        resolvePendingVerdict(snapshot)
+
         val events    = eventGenerator.generate(snapshot)
 
         if (events.isEmpty()) {
@@ -143,6 +157,32 @@ class ProactiveEngine(
 
         if (action !is ProactiveAction.NoAction) {
             dispatch(action)
+        }
+    }
+
+    /**
+     * If there was a recent dispatch awaiting a verdict, decide whether the
+     * user accepted (interacted after it) or ignored it (no interaction within
+     * the configured window) and update the [CooldownStore] accordingly.
+     */
+    private fun resolvePendingVerdict(snapshot: ContextSnapshot) {
+        val verdict = pendingVerdict ?: return
+        val lastUser = snapshot.lastUserInteractionTimeMillis
+        if (lastUser != null && lastUser > verdict.dispatchedAt) {
+            cooldownStore.markAccepted(verdict.dedupeKey)
+            Log.d(TAG, "Accepted verdict for ${verdict.dedupeKey}")
+            pendingVerdict = null
+            return
+        }
+        val age = snapshot.currentTimeMillis - verdict.dispatchedAt
+        if (age >= config.ignoreCheckDelayMs) {
+            cooldownStore.markIgnored(verdict.dedupeKey)
+            Log.d(
+                TAG,
+                "Ignored verdict for ${verdict.dedupeKey} " +
+                "(count=${cooldownStore.ignoreCount(verdict.dedupeKey)})"
+            )
+            pendingVerdict = null
         }
     }
 
@@ -191,12 +231,15 @@ class ProactiveEngine(
      */
     private suspend fun dispatch(action: ProactiveAction) {
         // Mark the dedupeKey in the cooldown store so subsequent ticks respect
-        // the per-type and global gap windows.
-        when (action) {
-            is ProactiveAction.SpeakAction   -> cooldownStore.markSurfaced(action.dedupeKey)
-            is ProactiveAction.PassiveAction -> cooldownStore.markSurfaced(action.dedupeKey)
+        // the per-type and global gap windows, and record a pending verdict so
+        // the next tick can adapt if the user ignores this suggestion.
+        val key = when (action) {
+            is ProactiveAction.SpeakAction   -> action.dedupeKey
+            is ProactiveAction.PassiveAction -> action.dedupeKey
             ProactiveAction.NoAction         -> return
         }
+        cooldownStore.markSurfaced(key)
+        pendingVerdict = PendingVerdict(key, System.currentTimeMillis())
 
         try {
             dispatcher.dispatch(action)

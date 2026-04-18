@@ -18,6 +18,7 @@ import java.util.concurrent.ConcurrentHashMap
 class CooldownStore {
 
     private val lastSurfacedMs = ConcurrentHashMap<String, Long>()
+    private val ignoreCountByKey = ConcurrentHashMap<String, Int>()
 
     @Volatile
     private var lastGlobalSurfaceMs: Long = Long.MIN_VALUE
@@ -72,6 +73,32 @@ class CooldownStore {
     }
 
     /**
+     * Number of times an action with [dedupeKey] was surfaced and the user
+     * did nothing with it.  Used by [EventScorer] to stretch the effective
+     * cooldown — ignored suggestions back off over time.
+     */
+    fun ignoreCount(dedupeKey: String): Int = ignoreCountByKey[dedupeKey] ?: 0
+
+    /**
+     * Record that an action with [dedupeKey] was surfaced and the user did
+     * not engage with it (see [ProactiveConfig.ignoreCheckDelayMs]).  Called
+     * by [ProactiveEngine] on the tick following a dispatch when no user
+     * interaction has happened in the intervening window.
+     */
+    fun markIgnored(dedupeKey: String) {
+        ignoreCountByKey.merge(dedupeKey, 1) { old, _ -> old + 1 }
+    }
+
+    /**
+     * Record that the user engaged with the last action for [dedupeKey] —
+     * resets the ignore counter so future suggestions aren't punished for
+     * earlier misses.
+     */
+    fun markAccepted(dedupeKey: String) {
+        ignoreCountByKey.remove(dedupeKey)
+    }
+
+    /**
      * Clear all recorded timestamps.
      *
      * Intended for use in unit tests so each test case starts with a clean slate
@@ -79,6 +106,7 @@ class CooldownStore {
      */
     fun reset() {
         lastSurfacedMs.clear()
+        ignoreCountByKey.clear()
         lastGlobalSurfaceMs = Long.MIN_VALUE
     }
 }

@@ -344,9 +344,14 @@ class JarvisRuntime(
             settings            = settings
         )
 
-        // Proactive awareness engine
+        // Proactive awareness engine.  Quiet hours enabled in production so
+        // nightly suggestions stay suppressed unless the event is critical
+        // (low battery, imminent reminder); tests construct their own config.
         proactiveEngine = ProactiveEngine(
-            config               = ProactiveConfig(),
+            config               = ProactiveConfig(
+                quietHoursStartHour = 22,
+                quietHoursEndHour   = 7
+            ),
             reminderSource       = AppReminderSource(reminderRepo),
             callSource           = callSource,
             batterySource        = AppBatterySource(context, contextEngine),

@@ -87,7 +87,7 @@ class MusicSearchTool(private val context: Context) : Tool {
                 )
                 ToolResult.Success("Searching for $query on YouTube Music.")
             } catch (e2: Exception) {
-                ToolResult.Failure("Couldn't open a music app: ${e2.message}")
+                ToolResult.Failure("No music app would open.")
             }
         }
     }

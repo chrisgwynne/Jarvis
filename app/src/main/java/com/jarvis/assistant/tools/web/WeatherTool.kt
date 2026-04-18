@@ -61,7 +61,7 @@ class WeatherTool(private val locationProvider: CurrentLocationProvider) : Tool 
 
         val loc = locationProvider.lastResult
         if (loc == null) {
-            return ToolResult.Failure("I don't have your location yet. Make sure location permission is granted.")
+            return ToolResult.Failure("No location yet — check the permission.")
         }
 
         return try {
@@ -70,7 +70,7 @@ class WeatherTool(private val locationProvider: CurrentLocationProvider) : Tool 
             ToolResult.Success(spoken)
         } catch (e: Exception) {
             Log.e(TAG, "Weather fetch failed: ${e.message}", e)
-            ToolResult.Failure("I couldn't get the weather right now. Try again in a moment.")
+            ToolResult.Failure("Weather's not loading right now.")
         }
     }
 

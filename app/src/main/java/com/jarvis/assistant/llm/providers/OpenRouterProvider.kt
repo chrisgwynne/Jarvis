@@ -9,10 +9,11 @@ package com.jarvis.assistant.llm.providers
  * OpenRouter requires an HTTP-Referer header identifying your app.
  * We also send X-Title so it shows up nicely in the OpenRouter dashboard.
  */
-class OpenRouterProvider(apiKey: String) : BaseOpenAiProvider(
-    apiKey  = apiKey,
-    baseUrl = "https://openrouter.ai/api/v1",
-    model   = "openai/gpt-4o-mini"
+class OpenRouterProvider(apiKey: String, maxTokens: Int = 1200) : BaseOpenAiProvider(
+    apiKey    = apiKey,
+    baseUrl   = "https://openrouter.ai/api/v1",
+    model     = "openai/gpt-4o-mini",
+    maxTokens = maxTokens
 ) {
     override val name = "OpenRouter"
 

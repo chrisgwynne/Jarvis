@@ -23,7 +23,9 @@ class EventGenerator(private val config: ProactiveConfig) {
     fun generate(snapshot: ContextSnapshot): List<ProactiveEvent> = listOfNotNull(
         generateBatteryEvent(snapshot),
         generateReminderEvent(snapshot),
-        generateMissedCallEvent(snapshot)
+        generateMissedCallEvent(snapshot),
+        generateNotificationEvent(snapshot),
+        generateBrainContextEvent(snapshot)
     )
 
     /**
@@ -202,6 +204,83 @@ class EventGenerator(private val config: ProactiveConfig) {
                 if (snapshot.lastMissedCallContactName != null) {
                     put("contactName", snapshot.lastMissedCallContactName)
                 }
+            }
+        )
+    }
+
+    /**
+     * Generate a BEHAVIORAL_LEARNING event when there is a high-confidence brain
+     * prediction for the user's current context.
+     *
+     * Uses [ContextSnapshot.topPredictionDescription] which is pre-fetched by
+     * [ProactiveEngine.buildSnapshot] from [BrainPredictionSource].
+     */
+    private fun generateBrainContextEvent(snapshot: ContextSnapshot): ProactiveEvent? {
+        val description = snapshot.topPredictionDescription ?: return null
+        if (snapshot.topPredictionScore < 0.60f) return null
+        // Don't interrupt — only surface when Jarvis is idle
+        if (snapshot.isJarvisSpeaking || snapshot.isJarvisListening) return null
+
+        val knowledge = snapshot.predictionKnowledgeContext
+        val spokenText = buildString {
+            append("Based on your habits: $description.")
+            if (!knowledge.isNullOrBlank()) append(" ${knowledge.take(120).trimEnd('.')}.")
+        }
+
+        return ProactiveEvent(
+            type          = ProactiveEventType.BEHAVIORAL_LEARNING,
+            title         = "Habit insight",
+            spokenText    = spokenText,
+            urgency       = (snapshot.topPredictionScore * 0.7f).coerceAtMost(0.65f),
+            relevance     = snapshot.topPredictionScore,
+            confidence    = snapshot.topPredictionScore,
+            annoyanceCost = 0.40f,
+            dedupeKey     = "brain_ctx_${description.take(40).lowercase().replace(" ", "_")}",
+            metadata      = buildMap {
+                put("predictionScore", snapshot.topPredictionScore.toString())
+                put("description", description)
+            }
+        )
+    }
+
+    /**
+     * Generate an UNREAD_NOTIFICATION event when there are unread notifications
+     * and the user has been idle (not interacting with Jarvis) for a while.
+     *
+     * Only fires when [ContextSnapshot.unreadNotificationCount] > 0 and
+     * Jarvis is neither speaking nor listening.
+     */
+    private fun generateNotificationEvent(snapshot: ContextSnapshot): ProactiveEvent? {
+        if (snapshot.unreadNotificationCount <= 0) return null
+        if (snapshot.isJarvisSpeaking || snapshot.isJarvisListening) return null
+
+        val count = snapshot.unreadNotificationCount
+        val text  = snapshot.lastNotificationText
+        val app   = snapshot.lastNotificationApp
+
+        val countLabel = if (count == 1) "a notification" else "$count notifications"
+        val appLabel   = app?.substringAfterLast('.')?.replaceFirstChar { it.titlecase() }
+        val detail     = when {
+            text != null && appLabel != null -> " from $appLabel: $text"
+            appLabel != null                 -> " from $appLabel"
+            text != null                     -> ": $text"
+            else                             -> ""
+        }
+        val spokenText = "You have $countLabel$detail."
+
+        return ProactiveEvent(
+            type          = ProactiveEventType.UNREAD_NOTIFICATION,
+            title         = "$countLabel",
+            spokenText    = spokenText,
+            urgency       = 0.55f,
+            relevance     = 0.70f,
+            confidence    = 1.0f,
+            annoyanceCost = 0.30f,
+            dedupeKey     = "unread_notification_${snapshot.currentTimeMillis / 60_000L}",
+            metadata      = buildMap {
+                put("count", count.toString())
+                if (app != null) put("app", app)
+                if (text != null) put("text", text)
             }
         )
     }

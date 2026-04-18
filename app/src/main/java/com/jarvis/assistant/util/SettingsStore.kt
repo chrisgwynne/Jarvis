@@ -45,6 +45,20 @@ class SettingsStore(context: Context) {
         const val KEY_OPENAI_CODE_VERIFIER = "openai_code_verifier"
         const val KEY_OPENAI_OAUTH_ENABLED = "openai_oauth_enabled"
 
+        // Voice enrollment trigger (set from Settings UI, consumed at next session start)
+        const val KEY_PENDING_ENROLL_PID  = "pending_voice_enrollment_pid"
+
+        // LLM response length
+        const val KEY_MAX_TOKENS         = "max_tokens"
+        const val DEFAULT_MAX_TOKENS     = 1200
+
+        // Fallback LLM provider (empty = disabled)
+        const val KEY_FALLBACK_PROVIDER  = "fallback_provider"
+
+        // Home Assistant
+        const val KEY_HA_BASE_URL        = "ha_base_url"
+        const val KEY_HA_API_TOKEN       = "ha_api_token"
+
         // OpenClaw remote routing keys
         const val KEY_OPENCLAW_ENABLED    = "openclaw_enabled"
         const val KEY_OPENCLAW_HOST       = "openclaw_host"
@@ -52,6 +66,8 @@ class SettingsStore(context: Context) {
         const val KEY_OPENCLAW_SECURE     = "openclaw_secure"
         const val KEY_OPENCLAW_AUTH_TOKEN = "openclaw_auth_token"
         const val KEY_OPENCLAW_TIMEOUT_MS = "openclaw_timeout_ms"
+        const val KEY_OPENCLAW_MODEL      = "openclaw_model"
+        const val KEY_OPENCLAW_KEYWORD    = "openclaw_keyword"
 
         // Defaults
         const val DEFAULT_PROVIDER       = "OpenAI"
@@ -181,6 +197,44 @@ class SettingsStore(context: Context) {
     var openClawTimeoutMs: Long
         get() = prefs.getLong(KEY_OPENCLAW_TIMEOUT_MS, 30_000L)
         set(v) = prefs.edit().putLong(KEY_OPENCLAW_TIMEOUT_MS, v).apply()
+
+    var openClawModel: String
+        get() = prefs.getString(KEY_OPENCLAW_MODEL, "openclaw") ?: "openclaw"
+        set(v) = prefs.edit().putString(KEY_OPENCLAW_MODEL, v).apply()
+
+    /** Trigger keyword that forces routing to OpenClaw (default: "computer"). */
+    var openClawKeyword: String
+        get() = prefs.getString(KEY_OPENCLAW_KEYWORD, "computer") ?: "computer"
+        set(v) = prefs.edit().putString(KEY_OPENCLAW_KEYWORD, v).apply()
+
+    /**
+     * One-shot trigger: when ≥ 0, JarvisRuntime will auto-start voice enrollment
+     * for this personId at the next session start, then reset the value to -1.
+     * Written by the Settings UI; consumed (and cleared) by JarvisRuntime.
+     */
+    var pendingVoiceEnrollmentPersonId: Long
+        get() = prefs.getLong(KEY_PENDING_ENROLL_PID, -1L)
+        set(v) = prefs.edit().putLong(KEY_PENDING_ENROLL_PID, v).apply()
+
+    /** Max tokens the LLM may generate per response. Range 400–4000. Default 1200. */
+    var maxTokens: Int
+        get() = prefs.getInt(KEY_MAX_TOKENS, DEFAULT_MAX_TOKENS)
+        set(v) = prefs.edit().putInt(KEY_MAX_TOKENS, v).apply()
+
+    /** Secondary provider name tried when the primary fails twice. Empty = disabled. */
+    var fallbackProvider: String
+        get() = prefs.getString(KEY_FALLBACK_PROVIDER, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_FALLBACK_PROVIDER, v).apply()
+
+    // ── Home Assistant ─────────────────────────────────────────────────────
+
+    var haBaseUrl: String
+        get() = prefs.getString(KEY_HA_BASE_URL, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_HA_BASE_URL, v).apply()
+
+    var haApiToken: String
+        get() = prefs.getString(KEY_HA_API_TOKEN, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_HA_API_TOKEN, v).apply()
 
     fun clearOpenAiOAuth() {
         prefs.edit()

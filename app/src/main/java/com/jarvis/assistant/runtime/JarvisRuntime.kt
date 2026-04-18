@@ -5,7 +5,9 @@ import android.util.Log
 import com.jarvis.assistant.audio.AudioFocusManager
 import com.jarvis.assistant.audio.BargeInDetector
 import com.jarvis.assistant.audio.BluetoothScoManager
+import com.jarvis.assistant.audio.GoogleWakeWordDetector
 import com.jarvis.assistant.audio.SpeechCapture
+import com.jarvis.assistant.audio.TFLiteWakeWordDetector
 import com.jarvis.assistant.audio.TtsEngine
 import com.jarvis.assistant.audio.WakeWordDetector
 import com.jarvis.assistant.call.CallCoordinator
@@ -41,7 +43,9 @@ import com.jarvis.assistant.prompt.PromptAssembler
 import com.jarvis.assistant.reminders.ReminderRepository
 import com.jarvis.assistant.reminders.ReminderScheduler
 import com.jarvis.assistant.proactive.AppBatterySource
+import com.jarvis.assistant.proactive.AppBrainPredictionSource
 import com.jarvis.assistant.proactive.AppCallContextSource
+import com.jarvis.assistant.proactive.AppNotificationSource
 import com.jarvis.assistant.proactive.AppReminderSource
 import com.jarvis.assistant.proactive.AppSpeechStateSource
 import com.jarvis.assistant.proactive.ProactiveConfig
@@ -61,8 +65,11 @@ import com.jarvis.assistant.remote.openclaw.OpenClawExecutionResult
 import com.jarvis.assistant.remote.openclaw.OpenClawRouter
 import com.jarvis.assistant.remote.openclaw.OpenClawSettingsRepository
 import com.jarvis.assistant.security.ActionPolicyGate
-import com.jarvis.assistant.security.PolicyResult
+import com.jarvis.assistant.llm.LlmResult
+import com.jarvis.assistant.llm.Message
+import com.jarvis.assistant.llm.NetworkClient
 import com.jarvis.assistant.tools.ContactLookup
+import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolRegistry
 import com.jarvis.assistant.runtime.DrivingModeManager
 import com.jarvis.assistant.util.LatencyTracker
@@ -74,6 +81,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -88,6 +97,7 @@ import com.jarvis.assistant.speaker.SpeakerProfileStore
 import com.jarvis.assistant.speaker.SpeakerRecognitionCoordinator
 import com.jarvis.assistant.speaker.SpeakerSessionContext
 import com.jarvis.assistant.speaker.audio.SpeakerAudioCapture
+import com.jarvis.assistant.speaker.audio.SpeakerEmbeddingEngine
 
 /**
  * JarvisRuntime — the central orchestrator for the voice pipeline.
@@ -124,10 +134,25 @@ class JarvisRuntime(
         private const val TAG                  = "JarvisRuntime"
         private const val FAST_FAIL_THRESHOLD  = 3_000L
         private const val MAX_FAST_FAILS       = 3
+        private const val MAX_TOOL_HOPS        = 3   // agentic chain cap per turn
 
         private val REMEMBER_ME_PATTERN = Regex(
             """remember\s+me|save\s+my\s+(?:voice|profile)|add\s+me""",
             RegexOption.IGNORE_CASE
+        )
+
+        private val ENROLL_VOICE_PATTERN = Regex(
+            """(?:train|enroll|enrol|learn|teach\s+you)\s+my\s+voice|add\s+(?:my\s+)?voice\s+samples?|improve\s+(?:my\s+)?(?:voice|recognition)""",
+            RegexOption.IGNORE_CASE
+        )
+
+        private const val SAMPLES_TO_COLLECT = 5
+        private val ENROLLMENT_PROMPTS = listOf(
+            "hey Jarvis, what's the weather today",
+            "set a timer for five minutes please",
+            "turn off the kitchen lights",
+            "what time does the supermarket close",
+            "play some music in the living room"
         )
     }
 
@@ -137,6 +162,10 @@ class JarvisRuntime(
     private val locationProvider     = CurrentLocationProvider(context)
     private val contextEngine        = ContextEngine(context, locationProvider)
     private val llmRouter            = LlmRouter(context)
+    private val conversationCompressor = com.jarvis.assistant.data.ConversationCompressor(
+        store     = llmRouter.conversationStore,
+        summarise = llmRouter::completeSilent
+    )
 
     // Room — memory layer
     private lateinit var db              : JarvisDatabase
@@ -160,6 +189,7 @@ class JarvisRuntime(
 
     // Tool registry — Phase 3: MemoryRecallTool injected via memoryReader
     private lateinit var toolRegistry : ToolRegistry
+    private lateinit var toolDispatcher  : ToolDispatcher
     private lateinit var memoryHandler     : MemoryActionHandler
     private lateinit var reminderHandler   : ReminderActionHandler
 
@@ -187,6 +217,7 @@ class JarvisRuntime(
 
     // Jarvis Brain — behavioural learning system
     private lateinit var brainEngine: com.jarvis.assistant.brain.BrainEngine
+
 
     // Driving mode — detects car Bluetooth + UiMode car dock
     private val drivingModeManager = DrivingModeManager(context).also { mgr ->
@@ -269,8 +300,9 @@ class JarvisRuntime(
 
         // Room — memory layer
         db = JarvisDatabase.getInstance(context)
-        memoryWriter = MemoryWriter(db.memoryDao(), db.conversationDao())
-        memoryReader = MemoryRetriever(db.memoryDao())
+        val embeddingEngine = com.jarvis.assistant.memory.MemoryEmbeddingEngine.getInstance(context)
+        memoryWriter = MemoryWriter(db.memoryDao(), db.conversationDao(), embeddingEngine)
+        memoryReader = MemoryRetriever(db.memoryDao(), embeddingEngine)
         summarizer = MemorySummarizer(db.conversationDao(), llmRouter, memoryWriter)
         profileMemory = ProfileMemoryService(db.memoryFactDao())
 
@@ -296,8 +328,11 @@ class JarvisRuntime(
             settings               = settings,
             memoryRetriever        = memoryReader,
             reminderRepository     = reminderRepo,
-            outgoingCallController = outgoingCallController
+            outgoingCallController = outgoingCallController,
+            locationProvider       = locationProvider,
+            llmRouter              = llmRouter
         )
+        toolDispatcher = ToolDispatcher(context, toolRegistry, machine)
         memoryHandler = MemoryActionHandler(profileMemory)
         reminderHandler = ReminderActionHandler(reminderRepo)
 
@@ -311,12 +346,17 @@ class JarvisRuntime(
 
         // Proactive awareness engine
         proactiveEngine = ProactiveEngine(
-            config         = ProactiveConfig(),
-            reminderSource = AppReminderSource(reminderRepo),
-            callSource     = callSource,
-            batterySource  = AppBatterySource(context, contextEngine),
-            speechSource   = speechStateSource,
-            dispatcher     = TtsProactiveDispatcher(
+            config               = ProactiveConfig(),
+            reminderSource       = AppReminderSource(reminderRepo),
+            callSource           = callSource,
+            batterySource        = AppBatterySource(context, contextEngine),
+            speechSource         = speechStateSource,
+            notificationSource   = AppNotificationSource(),
+            brainPredictionSource = AppBrainPredictionSource(
+                brainEngineProvider  = { if (::brainEngine.isInitialized) brainEngine else null },
+                knowledgeQueryEngine = knowledgeQuery
+            ),
+            dispatcher           = TtsProactiveDispatcher(
                 context              = context,
                 ttsEngine            = ttsEngine,
                 onPassiveAction      = { action -> Log.d(TAG, "Proactive passive: ${action.title}") },
@@ -345,7 +385,7 @@ class JarvisRuntime(
         )
 
         // Speaker recognition
-        speakerStore = SpeakerProfileStore(db.personRecordDao(), db.speakerEmbeddingDao())
+        speakerStore = SpeakerProfileStore(db.personRecordDao(), db.speakerEmbeddingDao(), db.recentGuestDao())
         speakerEnrollment = SpeakerEnrollmentManager(speakerStore)
         speakerCoordinator = SpeakerRecognitionCoordinator(speakerStore, speakerEnrollment)
 
@@ -793,7 +833,12 @@ class JarvisRuntime(
             }
             // Bail if the runtime was stopped while we were waiting for SCO.
             if (!scope.isActive) return@launch
-            wakeDetector = WakeWordDetector(
+            // Prefer offline TFLite detector when model asset is present; fall back to Google STT.
+            val tflite = TFLiteWakeWordDetector(context, ::onWakeWordDetected) { err ->
+                Log.w(TAG, "TFLite wake-word: $err — falling back to Google STT")
+            }
+            wakeDetector = if (tflite.isAvailable) tflite
+            else GoogleWakeWordDetector(
                 context    = context,
                 onDetected = ::onWakeWordDetected,
                 onError    = { Log.w(TAG, "WakeWordDetector error — will self-heal") }
@@ -853,6 +898,9 @@ class JarvisRuntime(
 
                 ttsEngine.playChime()
 
+                // Load neural speaker encoder once (no-op on subsequent sessions).
+                SpeakerEmbeddingEngine.init(context)
+
                 // First-run onboarding: no owner name recorded yet — prompt for setup.
                 // Re-read from DB to avoid a race with the async load in start().
                 if (!anyoneRegistered) {
@@ -862,6 +910,31 @@ class JarvisRuntime(
                 if (!anyoneRegistered) {
                     speakAndRecord("Hi! I'm Jarvis. I haven't been set up yet — what's your name?")
                     sessionSpeaker = sessionSpeaker.copy(awaitingOwnerName = true)
+                }
+
+                // Settings-triggered enrollment: user tapped "Train Voice" in the Settings UI.
+                val pendingEnrollPid = settings.pendingVoiceEnrollmentPersonId
+                if (pendingEnrollPid >= 0L && !sessionSpeaker.awaitingOwnerName) {
+                    settings.pendingVoiceEnrollmentPersonId = -1L
+                    val pendingPerson = withContext(Dispatchers.IO) { speakerStore.getPersonById(pendingEnrollPid) }
+                    if (pendingPerson != null) {
+                        sessionSpeaker = SpeakerSessionContext(
+                            result = SpeakerIdentityResult(
+                                confidence  = 1f,
+                                personId    = pendingPerson.id,
+                                displayName = pendingPerson.displayName,
+                                band        = SpeakerIdentityResult.ConfidenceBand.HIGH_CONFIDENCE_MATCH
+                            ),
+                            awaitingVoiceEnrollmentSample   = true,
+                            voiceEnrollmentSamplesRemaining = SAMPLES_TO_COLLECT
+                        )
+                        val firstName = pendingPerson.displayName.substringBefore(' ')
+                        speakAndRecord(
+                            "Hi $firstName! Starting voice enrollment. " +
+                            "Say: \"${ENROLLMENT_PROMPTS.first()}\""
+                        )
+                        machine.transitionAnd(JarvisState.Listening) { syncState(JarvisState.Listening) }
+                    }
                 }
 
                 machine.transitionAnd(JarvisState.Listening) { syncState(JarvisState.Listening) }
@@ -1026,44 +1099,74 @@ class JarvisRuntime(
                                 // they accumulate samples in subsequent sessions.
                                 Log.w(TAG, "Owner onboarding: no PCM available — voice profile not seeded")
                             }
-                            val owner = withContext(Dispatchers.IO) { speakerStore.getOwner() }
+                            val owner         = withContext(Dispatchers.IO) { speakerStore.getOwner() }
+                            val alreadyHave   = if (utterancePcm != null) 1 else 0
+                            val remaining     = SAMPLES_TO_COLLECT - alreadyHave
+                            val firstPromptIdx = alreadyHave.coerceIn(0, ENROLLMENT_PROMPTS.lastIndex)
                             sessionSpeaker = SpeakerSessionContext(
                                 result = SpeakerIdentityResult(
                                     confidence  = 1f,
                                     personId    = owner?.id,
                                     displayName = owner?.displayName ?: ownerName,
                                     band        = SpeakerIdentityResult.ConfidenceBand.HIGH_CONFIDENCE_MATCH
-                                )
+                                ),
+                                awaitingVoiceEnrollmentSample   = remaining > 0,
+                                voiceEnrollmentSamplesRemaining = remaining
                             )
                             promptAssembler.invalidateProfileCache()
-                            speakAndRecord(
-                                "Got it, $ownerName! I'll get better at recognising you over time. " +
-                                "How can I help?"
-                            )
+                            if (remaining > 0) {
+                                speakAndRecord(
+                                    "Got it, $ownerName! A few more voice samples will help me recognise " +
+                                    "you straight away. Say: \"${ENROLLMENT_PROMPTS[firstPromptIdx]}\""
+                                )
+                            } else {
+                                speakAndRecord("Got it, $ownerName! How can I help?")
+                            }
                             machine.transition(JarvisState.Listening)
                             syncState(JarvisState.Listening)
                             continue
                         }
                         sessionSpeaker.awaitingIntroductionReply -> {
-                            // Unknown speaker told us their name — greet but don't persist.
                             val name = speakerCoordinator.parseIntroductionName(transcript)
                             if (name != null) {
-                                // Use LOW_CONFIDENCE, not HIGH_CONFIDENCE — the name was parsed
-                                // from text, not verified by voice.  HIGH_CONFIDENCE would
-                                // unlock personal tools (calls, messages) for any speaker who
-                                // simply claims a name.
-                                sessionSpeaker = SpeakerSessionContext(
-                                    result = SpeakerIdentityResult(
-                                        confidence  = 0.5f,
-                                        personId    = null,   // not enrolled yet
-                                        displayName = name,
-                                        band        = SpeakerIdentityResult.ConfidenceBand.LOW_CONFIDENCE_OR_AMBIGUOUS
+                                val captured = sessionSpeaker.pendingPcm
+                                // Check if a stored profile already carries this name — if so,
+                                // link the session to it at LOW_CONFIDENCE rather than treating
+                                // the person as a brand-new guest (fixes cross-session re-intro).
+                                val existingPerson = withContext(Dispatchers.IO) {
+                                    speakerStore.getPersonByName(name)
+                                }
+                                if (existingPerson != null) {
+                                    sessionSpeaker = SpeakerSessionContext(
+                                        result = SpeakerIdentityResult(
+                                            confidence  = 0.5f,
+                                            personId    = existingPerson.id,
+                                            displayName = existingPerson.displayName,
+                                            band        = SpeakerIdentityResult.ConfidenceBand.LOW_CONFIDENCE_OR_AMBIGUOUS
+                                        ),
+                                        pendingPcm = captured
                                     )
-                                )
-                                speakAndRecord(
-                                    "Hi $name! I'll use your name for this conversation. " +
-                                    "Say 'remember me' if you'd like me to recognise you next time."
-                                )
+                                    speakAndRecord(
+                                        "Welcome back, ${existingPerson.displayName}! " +
+                                        "I've linked this session to your profile. How can I help?"
+                                    )
+                                } else {
+                                    // New person — record for cross-session memory and set up guest session.
+                                    scope.launch(Dispatchers.IO) { speakerStore.recordRecentGuest(name) }
+                                    sessionSpeaker = SpeakerSessionContext(
+                                        result = SpeakerIdentityResult(
+                                            confidence  = 0.5f,
+                                            personId    = null,
+                                            displayName = name,
+                                            band        = SpeakerIdentityResult.ConfidenceBand.LOW_CONFIDENCE_OR_AMBIGUOUS
+                                        ),
+                                        pendingPcm = captured  // preserved for enrollment seeding on "remember me"
+                                    )
+                                    speakAndRecord(
+                                        "Hi $name! I'll use your name for this conversation. " +
+                                        "Say 'remember me' if you'd like me to recognise you next time."
+                                    )
+                                }
                                 machine.transition(JarvisState.Listening)
                                 syncState(JarvisState.Listening)
                                 continue
@@ -1072,24 +1175,73 @@ class JarvisRuntime(
                             sessionSpeaker = sessionSpeaker.copy(awaitingIntroductionReply = false)
                         }
                         sessionSpeaker.awaitingGuestEnrollmentSample -> {
-                            // Guest said "remember me" — enroll their voice and create a profile.
-                            val name = sessionSpeaker.result.displayName ?: "you"
+                            // Guest said "remember me" — create profile, enroll this utterance
+                            // plus the original unknown utterance (pendingPcm) if available.
+                            val name          = sessionSpeaker.result.displayName ?: "you"
+                            val introductionPcm = sessionSpeaker.pendingPcm
                             val person = withContext(Dispatchers.IO) {
                                 speakerCoordinator.createPersonFromIntroduction(name, utterancePcm)
                             }
+                            if (introductionPcm != null) {
+                                withContext(Dispatchers.IO) {
+                                    speakerCoordinator.enrollUtterance(person.id, introductionPcm)
+                                }
+                            }
                             anyoneRegistered = true
                             anyoneEnrolled   = true
+                            // Chain directly into multi-sample enrollment so the profile reaches
+                            // SUFFICIENT status in the same session rather than stopping at 1–2 samples.
+                            val alreadyEnrolled = if (introductionPcm != null) 2 else 1
+                            val remaining       = SAMPLES_TO_COLLECT - alreadyEnrolled
+                            val firstPromptIdx  = SAMPLES_TO_COLLECT - remaining
                             sessionSpeaker = SpeakerSessionContext(
                                 result = SpeakerIdentityResult(
                                     confidence  = 1f,
                                     personId    = person.id,
                                     displayName = person.displayName,
                                     band        = SpeakerIdentityResult.ConfidenceBand.HIGH_CONFIDENCE_MATCH
+                                ),
+                                awaitingVoiceEnrollmentSample   = remaining > 0,
+                                voiceEnrollmentSamplesRemaining = remaining
+                            )
+                            if (remaining > 0) {
+                                speakAndRecord(
+                                    "Profile saved, ${person.displayName}! A few more samples will help me " +
+                                    "recognise you reliably. Say: \"${ENROLLMENT_PROMPTS[firstPromptIdx]}\""
                                 )
-                            )
-                            speakAndRecord(
-                                "Done, ${person.displayName}! I'll recognise you next time. How can I help?"
-                            )
+                            } else {
+                                speakAndRecord("Done, ${person.displayName}! I'll recognise you next time. How can I help?")
+                            }
+                            machine.transition(JarvisState.Listening)
+                            syncState(JarvisState.Listening)
+                            continue
+                        }
+                        sessionSpeaker.awaitingVoiceEnrollmentSample -> {
+                            val pid = sessionSpeaker.result.personId
+                            if (pid != null && utterancePcm != null) {
+                                withContext(Dispatchers.IO) {
+                                    speakerCoordinator.enrollUtterance(pid, utterancePcm)
+                                }
+                            } else if (utterancePcm == null) {
+                                Log.w(TAG, "Voice enrollment: no PCM captured for sample, skipping")
+                            }
+                            val remaining = sessionSpeaker.voiceEnrollmentSamplesRemaining - 1
+                            if (remaining > 0) {
+                                val nextPrompt = ENROLLMENT_PROMPTS[SAMPLES_TO_COLLECT - remaining]
+                                sessionSpeaker = sessionSpeaker.copy(voiceEnrollmentSamplesRemaining = remaining)
+                                speakAndRecord("Good. $remaining more — please say: \"$nextPrompt\"")
+                            } else {
+                                anyoneEnrolled = true
+                                val name = sessionSpeaker.result.displayName?.substringBefore(' ') ?: "there"
+                                sessionSpeaker = sessionSpeaker.copy(
+                                    awaitingVoiceEnrollmentSample   = false,
+                                    voiceEnrollmentSamplesRemaining = 0
+                                )
+                                speakAndRecord(
+                                    "All done, $name! I've collected $SAMPLES_TO_COLLECT voice samples " +
+                                    "and will recognise you much better now. How can I help?"
+                                )
+                            }
                             machine.transition(JarvisState.Listening)
                             syncState(JarvisState.Listening)
                             continue
@@ -1105,26 +1257,34 @@ class JarvisRuntime(
                                 SpeakerIdentityResult.ConfidenceBand.HIGH_CONFIDENCE_MATCH -> {
                                     identResult.personId?.let { pid ->
                                         scope.launch(Dispatchers.IO) {
-                                            speakerCoordinator.enrollUtterance(pid, utterancePcm)
+                                            // Only enroll at SILENT_ENROLL_THRESHOLD (above THRESHOLD_HIGH)
+                                            // to prevent profile drift from borderline false-positives.
+                                            if (identResult.confidence >= SpeakerEmbeddingEngine.SILENT_ENROLL_THRESHOLD) {
+                                                speakerCoordinator.enrollUtterance(pid, utterancePcm)
+                                            }
                                             speakerCoordinator.recordInteraction(pid)
                                         }
                                     }
                                 }
-                                SpeakerIdentityResult.ConfidenceBand.LOW_CONFIDENCE_OR_AMBIGUOUS -> {
-                                    identResult.personId?.let { pid ->
-                                        scope.launch(Dispatchers.IO) {
-                                            speakerCoordinator.enrollUtterance(pid, utterancePcm)
-                                        }
-                                    }
-                                }
+                                SpeakerIdentityResult.ConfidenceBand.LOW_CONFIDENCE_OR_AMBIGUOUS,
                                 SpeakerIdentityResult.ConfidenceBand.UNKNOWN -> {
                                     if (anyoneEnrolled) {
+                                        // Surface recent guests to avoid a cold "who's this?" every time.
+                                        val recentGuests = withContext(Dispatchers.IO) {
+                                            speakerStore.getRecentGuests()
+                                        }
+                                        val prompt = if (recentGuests.isNotEmpty()) {
+                                            val names = recentGuests.take(2).joinToString(" or ") { it.displayName }
+                                            "Hi! I don't recognise your voice. Are you $names, or someone new?"
+                                        } else {
+                                            "Hi, I don't recognise your voice. Who's this?"
+                                        }
                                         sessionSpeaker = sessionSpeaker.copy(
                                             askedForIntroduction      = true,
                                             awaitingIntroductionReply = true,
                                             pendingPcm                = utterancePcm
                                         )
-                                        speakAndRecord("Hi, I don't recognise your voice. Who's this?")
+                                        speakAndRecord(prompt)
                                         machine.transition(JarvisState.Listening)
                                         syncState(JarvisState.Listening)
                                         continue
@@ -1133,10 +1293,13 @@ class JarvisRuntime(
                             }
                         }
                         utterancePcm != null -> {
-                            // Ongoing session with a known speaker — silently improve their profile.
-                            sessionSpeaker.result.personId?.let { pid ->
-                                scope.launch(Dispatchers.IO) {
-                                    speakerCoordinator.enrollUtterance(pid, utterancePcm)
+                            // Ongoing session — only silently enroll for confirmed HIGH_CONFIDENCE
+                            // sessions to prevent drifting a profile with unverified utterances.
+                            if (sessionSpeaker.isHighConfidence) {
+                                sessionSpeaker.result.personId?.let { pid ->
+                                    scope.launch(Dispatchers.IO) {
+                                        speakerCoordinator.enrollUtterance(pid, utterancePcm)
+                                    }
                                 }
                             }
                         }
@@ -1152,6 +1315,60 @@ class JarvisRuntime(
                             "Sure! Say a sentence so I can learn your voice — " +
                             "for example: hey Jarvis, what's the weather today?"
                         )
+                        machine.transition(JarvisState.Listening)
+                        syncState(JarvisState.Listening)
+                        continue
+                    }
+
+                    // ── "Train my voice" / manual enrollment request ──────────────
+                    if (ENROLL_VOICE_PATTERN.containsMatchIn(transcript)) {
+                        var enrollPersonId = sessionSpeaker.result.personId
+                        var enrollName     = sessionSpeaker.result.displayName
+                        when {
+                            enrollPersonId != null -> {
+                                // Known speaker with a stored profile — enroll directly.
+                            }
+                            enrollName != null -> {
+                                // Guest introduced by name this session but not yet stored.
+                                // Enrolling into the owner profile would be wrong here.
+                                speakAndRecord(
+                                    "I know your name, $enrollName, but I don't have a stored " +
+                                    "voice profile for you yet. Say 'remember me' first and then " +
+                                    "I can train your voice."
+                                )
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                            else -> {
+                                // Owner trust mode — no one enrolled yet, fall back to owner record.
+                                val owner = withContext(Dispatchers.IO) { speakerStore.getOwner() }
+                                enrollPersonId = owner?.id
+                                enrollName     = owner?.displayName
+                            }
+                        }
+                        if (enrollPersonId != null) {
+                            sessionSpeaker = sessionSpeaker.copy(
+                                awaitingVoiceEnrollmentSample   = true,
+                                voiceEnrollmentSamplesRemaining = SAMPLES_TO_COLLECT,
+                                result = SpeakerIdentityResult(
+                                    confidence  = 1f,
+                                    personId    = enrollPersonId,
+                                    displayName = enrollName,
+                                    band        = SpeakerIdentityResult.ConfidenceBand.HIGH_CONFIDENCE_MATCH
+                                )
+                            )
+                            val firstName = enrollName?.substringBefore(' ') ?: "there"
+                            speakAndRecord(
+                                "Sure, $firstName! I'll collect $SAMPLES_TO_COLLECT voice samples. " +
+                                "Please say: \"${ENROLLMENT_PROMPTS.first()}\""
+                            )
+                        } else {
+                            speakAndRecord(
+                                "I don't have a profile to link your voice to. " +
+                                "Tell me your name first and I'll set one up."
+                            )
+                        }
                         machine.transition(JarvisState.Listening)
                         syncState(JarvisState.Listening)
                         continue
@@ -1270,94 +1487,72 @@ class JarvisRuntime(
 
                     if (matched != null) {
                         val (tool, input) = matched
-
-                        // ── Speaker permission gate: personal actions require identity ──
-                        val speakerDecision = SpeakerPermissionPolicy.evaluate(sessionSpeaker.result, tool.name)
-                        if (!speakerDecision.allowed) {
-                            speakAndRecord(speakerDecision.denyReason ?: "I can't do that right now.")
-                            machine.transition(JarvisState.Listening)
-                            syncState(JarvisState.Listening)
-                            continue
-                        }
-
-                        // ── Policy gate: validate tool against execution allowlist ──
-                        val policyResult = ActionPolicyGate.evaluate(tool.name, transcript)
-                        LatencyTracker.mark("POLICY_EVALUATED")
-                        if (policyResult !is PolicyResult.ActionApproved) {
-                            val message = when (policyResult) {
-                                is PolicyResult.ActionUnsupported -> policyResult.humanMessage
-                                is PolicyResult.ActionDenied      -> policyResult.humanMessage
-                                is PolicyResult.ActionUnsafe      -> policyResult.humanMessage
-                                is PolicyResult.ActionMalformed   -> policyResult.humanMessage
-                                else -> "I can't do that right now."
-                            }
-                            speakAndRecord(message)
-                            machine.transition(JarvisState.Listening)
-                            syncState(JarvisState.Listening)
-                            continue
-                        }
-
-                        machine.transition(JarvisState.ToolRunning(tool.name))
-                        DeviceStateStore.update { copy(currentToolName = tool.name) }
                         syncState(machine.current)
 
-                        val result = toolRegistry.execute(context, tool, input)
-                        LatencyTracker.mark("TOOL_EXECUTED")
+                        val dispatchResult = toolDispatcher.dispatch(tool, input, sessionSpeaker, transcript)
 
-                        DeviceStateStore.update { copy(currentToolName = null) }
-
-                        // Brain: log tool-triggered events
-                        when (tool.name) {
-                            "media_control" -> {
-                                val action = input.param("action")
-                                if (action == "play" || action == "shuffle" || action == "resume") {
-                                    brainEngine.collector.onMediaPlay()
-                                } else if (action == "pause" || action == "stop") {
-                                    brainEngine.collector.onMediaStop()
+                        // Brain: log tool-triggered events for any dispatch that ran the tool
+                        dispatchResult.let { r ->
+                            val hints = when (r) {
+                                is ToolDispatcher.DispatchResult.Done        -> r.hints
+                                is ToolDispatcher.DispatchResult.LlmFollowUp -> r.hints
+                                is ToolDispatcher.DispatchResult.AugmentedLlm -> r.hints
+                                else                                          -> null
+                            }
+                            hints?.let { h ->
+                                when (h.toolName) {
+                                    "media_control" -> {
+                                        val action = h.input.param("action")
+                                        if (action == "play" || action == "shuffle" || action == "resume")
+                                            brainEngine.collector.onMediaPlay()
+                                        else if (action == "pause" || action == "stop")
+                                            brainEngine.collector.onMediaStop()
+                                    }
+                                    "open_app" -> brainEngine.collector.onAppOpen(
+                                        h.input.param("packageName").ifBlank { h.input.transcript }
+                                    )
+                                    "alarm" -> brainEngine.collector.onAlarmSet()
+                                    "timer" -> brainEngine.collector.onTimerSet()
                                 }
                             }
-                            "open_app"      -> brainEngine.collector.onAppOpen(
-                                input.param("packageName").ifBlank { input.transcript }
-                            )
-                            "alarm"         -> brainEngine.collector.onAlarmSet()
-                            "timer"         -> brainEngine.collector.onTimerSet()
                         }
 
-                        when (result) {
-                            is ToolResult.Success -> {
-                                if (result.silent) {
-                                    // No TTS — don't hold audio focus any longer than needed.
-                                    // Return directly to wake-word mode so media apps (Spotify,
-                                    // etc.) can resume without waiting for a SpeechCapture
-                                    // follow-up loop that the user never wanted.
-                                    closeSessionAsync()
-                                    releaseResources()
-                                    backToWakeWord()
-                                    return@launch
-                                }
-                                val spoken = ResponseFormatter.formatToolFeedback(result.spokenFeedback)
-                                speakAndRecord(spoken)
-                                if (!result.requiresLlmFollowUp) {
-                                    machine.transition(JarvisState.Listening)
-                                    syncState(JarvisState.Listening)
-                                    continue
-                                }
-                                // fall through to LLM for follow-up
+                        when (val r = dispatchResult) {
+                            is ToolDispatcher.DispatchResult.Denied -> {
+                                speakAndRecord(r.message)
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
                             }
-                            is ToolResult.Augmented -> {
-                                val response = callLlm(result.augmentedTranscript, isOnline)
+                            is ToolDispatcher.DispatchResult.SilentExit -> {
+                                closeSessionAsync()
+                                releaseResources()
+                                backToWakeWord()
+                                return@launch
+                            }
+                            is ToolDispatcher.DispatchResult.Done -> {
+                                if (r.spokenFeedback.isNotBlank()) speakAndRecord(r.spokenFeedback)
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                            is ToolDispatcher.DispatchResult.Failed -> {
+                                speakAndRecord(r.message)
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                            is ToolDispatcher.DispatchResult.AugmentedLlm -> {
+                                val response = callLlm(r.augmentedTranscript, isOnline)
                                 speakAndRecord(response)
                                 machine.transition(JarvisState.Listening)
                                 syncState(JarvisState.Listening)
                                 continue
                             }
-                            is ToolResult.Failure -> {
-                                speakAndRecord(result.spokenFeedback)
-                                machine.transition(JarvisState.Listening)
-                                syncState(JarvisState.Listening)
-                                continue
+                            is ToolDispatcher.DispatchResult.LlmFollowUp -> {
+                                if (r.spokenFeedback.isNotBlank()) speakAndRecord(r.spokenFeedback)
+                                // fall through to LLM for follow-up
                             }
-                            else -> { /* NotMatched — fall through to LLM */ }
                         }
                     }
 
@@ -1370,7 +1565,11 @@ class JarvisRuntime(
                             ttsEngine.speak("Looking into that.")
                         }
 
-                        val clawResult = openClawRouter.execute(transcript, sessionId)
+                        val clawResult = openClawRouter.execute(
+                            transcript,
+                            sessionId,
+                            llmRouter.conversationStore.getRecentMessages(6)
+                        )
                         LatencyTracker.mark("OPENCLAW_COMPLETE")
 
                         when (clawResult) {
@@ -1565,6 +1764,101 @@ class JarvisRuntime(
                 transcript, history, maxMemories = 4, speakerContext = sessionSpeaker
             )
 
+            // ── Agentic tool chaining (up to MAX_TOOL_HOPS per turn) ──────────────
+            // FC-capable providers return LlmResult; non-FC providers return null
+            // and fall through to the streaming path below unchanged.
+            val schemas = toolRegistry.availableSchemas(isOnline)
+            if (schemas.isNotEmpty()) {
+                val chainMessages = messages.toMutableList()
+                var hopsUsed = 0
+                var fcHandled = false
+
+                while (hopsUsed < MAX_TOOL_HOPS) {
+                    val fcResult = llmRouter.completeWithFunctionCalling(chainMessages, schemas)
+                    when {
+                        fcResult == null -> break   // provider has no FC — fall through to streaming
+
+                        fcResult is LlmResult.Text -> {
+                            if (fcResult.content.isNotBlank()) {
+                                llmRouter.conversationStore.addMessage("assistant", fcResult.content)
+                                speakAndRecord(fcResult.content)
+                                fcHandled = true
+                            }
+                            break
+                        }
+
+                        fcResult is LlmResult.MultiToolCall -> {
+                            // ── Parallel tool execution ────────────────────────────
+                            hopsUsed++
+                            val callList = fcResult.calls
+                            val feedbacks = callList.map { tc ->
+                                async(Dispatchers.IO) {
+                                    val tool = toolRegistry.findByName(tc.toolName) ?: return@async null
+                                    @Suppress("UNCHECKED_CAST")
+                                    val argsMap = try {
+                                        (NetworkClient.gson.fromJson(tc.argsJson, Map::class.java) as Map<*, *>)
+                                            .entries.associate { (k, v) -> k.toString() to v.toString() }
+                                    } catch (e: Exception) { emptyMap() }
+                                    val result = toolRegistry.execute(context, tool, ToolInput(transcript, argsMap))
+                                    val fb = when (result) {
+                                        is ToolResult.Success -> result.spokenFeedback
+                                        is ToolResult.Failure -> result.spokenFeedback
+                                        else -> null
+                                    }
+                                    fb?.let { "[${tool.name}]: $it" }
+                                }
+                            }.awaitAll().filterNotNull()
+
+                            if (feedbacks.isEmpty() || hopsUsed >= MAX_TOOL_HOPS) {
+                                val combined = feedbacks.joinToString(". ")
+                                if (combined.isNotBlank()) {
+                                    llmRouter.conversationStore.addMessage("assistant", combined)
+                                    speakAndRecord(combined)
+                                    fcHandled = true
+                                }
+                                break
+                            }
+                            feedbacks.forEach { chainMessages.add(Message("assistant", it)) }
+                        }
+
+                        fcResult is LlmResult.ToolCall -> {
+                            hopsUsed++
+                            val tool = toolRegistry.findByName(fcResult.toolName)
+                            if (tool == null) break   // unknown tool name — fall through
+
+                            @Suppress("UNCHECKED_CAST")
+                            val argsMap = try {
+                                (NetworkClient.gson.fromJson(fcResult.argsJson, Map::class.java) as Map<*, *>)
+                                    .entries.associate { (k, v) -> k.toString() to v.toString() }
+                            } catch (e: Exception) { emptyMap() }
+
+                            val result = toolRegistry.execute(context, tool, ToolInput(transcript, argsMap))
+                            val feedback = when (result) {
+                                is ToolResult.Success -> result.spokenFeedback
+                                is ToolResult.Failure -> result.spokenFeedback
+                                else -> null
+                            }
+
+                            if (feedback == null || result is ToolResult.Failure || hopsUsed >= MAX_TOOL_HOPS) {
+                                // Failure or chain cap — deliver raw feedback and stop
+                                if (feedback != null) {
+                                    llmRouter.conversationStore.addMessage("assistant", feedback)
+                                    speakAndRecord(feedback)
+                                    fcHandled = true
+                                }
+                                break
+                            }
+
+                            // Inject tool result so the LLM can decide to chain or wrap up
+                            chainMessages.add(Message("assistant", "[${tool.name}]: $feedback"))
+                        }
+
+                        else -> break
+                    }
+                }
+                if (fcHandled) return   // agentic chain complete — skip streaming path
+            }
+
             val fullResponse    = StringBuilder()
             var speakingStarted = false
 
@@ -1612,6 +1906,11 @@ class JarvisRuntime(
                 else base
                 memoryWriter.writeTurn(sessionId, "assistant", formatted)
                 DeviceStateStore.update { copy(lastAssistantResponse = formatted) }
+            }
+
+            // Compress oldest turn-pairs if history is near the context window ceiling
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                conversationCompressor.maybeCompress()
             }
 
         } catch (e: CancellationException) {

@@ -106,6 +106,43 @@ interface SpeechStateSource {
 }
 
 /**
+ * BrainPredictionSource — provides top behavioural predictions for the proactive engine.
+ */
+interface BrainPredictionSource {
+    /**
+     * Returns the highest-scoring current prediction as a human-readable description,
+     * or null if no prediction clears the confidence threshold.
+     */
+    suspend fun getTopPrediction(): BrainPrediction?
+}
+
+data class BrainPrediction(
+    val description: String,
+    val score: Float,
+    val eventType: String,
+    /** Related knowledge context surfaced by KnowledgeQueryEngine, or null. */
+    val knowledgeContext: String? = null
+)
+
+/**
+ * NotificationContextSource — provides recent unread notification data to
+ * the proactive engine so Jarvis can proactively announce important alerts.
+ */
+interface NotificationContextSource {
+    /** Returns the count of unread notifications since the last acknowledgement. */
+    fun getUnreadCount(): Int
+
+    /** Returns the text snippet of the most recent unread notification, or null. */
+    fun getLastNotificationText(): String?
+
+    /** Returns the package name of the app that sent the last notification, or null. */
+    fun getLastNotificationApp(): String?
+
+    /** Called by the engine after surfacing a notification event — resets unread count. */
+    fun acknowledge()
+}
+
+/**
  * ProactiveDispatcher — delivers a [ProactiveAction] to the user.
  *
  * Implementations decide what "delivering" means for each action type

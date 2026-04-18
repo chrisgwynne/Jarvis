@@ -97,6 +97,9 @@ class BrainEngine(
         Log.d(TAG, "BrainEngine stopped")
     }
 
+    /** Expose predictions for external consumers (e.g. ProactiveEngine context push). */
+    suspend fun predict(): List<PredictionEngine.Prediction> = predictor.predict()
+
     // ── Fast loop: predict → decide → act ────────────────────────────────────
 
     private fun startFastLoop() {

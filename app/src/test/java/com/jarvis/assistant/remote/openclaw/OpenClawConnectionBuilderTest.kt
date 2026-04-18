@@ -17,7 +17,9 @@ class OpenClawConnectionBuilderTest {
         port      = port,
         secure    = secure,
         authToken = "tok",
-        timeoutMs = 30_000L
+        timeoutMs = 30_000L,
+        modelName = "openclaw",
+        keyword   = "computer"
     )
 
     // ── WebSocket URL ─────────────────────────────────────────────────────
@@ -94,5 +96,46 @@ class OpenClawConnectionBuilderTest {
     fun `protocol-prefixed host fails validation`() {
         assertFalse(OpenClawConnectionBuilder.validateHost("http://myhost"))
         assertFalse(OpenClawConnectionBuilder.validateHost("ws://myhost"))
+    }
+
+    // ── Chat completions URL ──────────────────────────────────────────────
+
+    @Test
+    fun `insecure chat endpoint uses http scheme`() {
+        val url = OpenClawConnectionBuilder.buildChatEndpoint(settings(secure = false))
+        assertTrue("Expected http://", url.startsWith("http://"))
+    }
+
+    @Test
+    fun `secure chat endpoint uses https scheme`() {
+        val url = OpenClawConnectionBuilder.buildChatEndpoint(settings(secure = true))
+        assertTrue("Expected https://", url.startsWith("https://"))
+    }
+
+    @Test
+    fun `chat endpoint contains v1 chat completions path`() {
+        val url = OpenClawConnectionBuilder.buildChatEndpoint(settings(host = "192.168.1.5", port = 8765))
+        assertEquals("http://192.168.1.5:8765/v1/chat/completions", url)
+    }
+
+    @Test
+    fun `trailing slash in host is stripped from chat endpoint`() {
+        val url = OpenClawConnectionBuilder.buildChatEndpoint(settings(host = "mypc.example.com/"))
+        assertFalse("Trailing slash must be stripped", url.contains("//v1"))
+        assertTrue(url.endsWith("/v1/chat/completions"))
+    }
+
+    // ── Models URL ────────────────────────────────────────────────────────
+
+    @Test
+    fun `models endpoint uses correct path`() {
+        val url = OpenClawConnectionBuilder.buildModelsEndpoint(settings(host = "192.168.1.5", port = 8765))
+        assertEquals("http://192.168.1.5:8765/v1/models", url)
+    }
+
+    @Test
+    fun `secure models endpoint uses https`() {
+        val url = OpenClawConnectionBuilder.buildModelsEndpoint(settings(secure = true))
+        assertTrue("Expected https://", url.startsWith("https://"))
     }
 }

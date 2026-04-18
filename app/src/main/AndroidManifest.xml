@@ -82,8 +82,9 @@
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.SEND_SMS" />
 
-    <!-- Calendar reading -->
+    <!-- Calendar reading and writing -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
 
     <!-- Driving mode — UiModeManager car mode -->
     <uses-permission android:name="android.permission.CHANGE_CONFIGURATION" />

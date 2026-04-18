@@ -21,7 +21,7 @@ object OpenClawHealthMonitor {
     suspend fun check(settings: OpenClawSettings): OpenClawConnectionStatus {
         if (!settings.isFullyConfigured) return OpenClawConnectionStatus.NOT_CONFIGURED
 
-        val url = OpenClawConnectionBuilder.buildHealthEndpoint(settings)
+        val url = OpenClawConnectionBuilder.buildModelsEndpoint(settings)
 
         return withContext(Dispatchers.IO) {
             try {

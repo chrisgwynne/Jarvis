@@ -54,6 +54,12 @@ interface Tool {
      * Must not throw; wrap errors in [ToolResult.Failure].
      */
     suspend fun execute(input: ToolInput): ToolResult
+
+    /**
+     * Return a [ToolSchema] if this tool supports LLM function calling.
+     * Null means the tool is only reachable via the regex [matches] path.
+     */
+    fun schema(): ToolSchema? = null
 }
 
 /** Parsed input for a tool, with typed convenience fields. */

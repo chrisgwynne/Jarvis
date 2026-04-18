@@ -9,8 +9,14 @@ import com.jarvis.assistant.knowledge.db.entity.WikiPage
  *
  * Searches wiki_pages (title + summary LIKE match) and assembles a compact
  * context string. No LLM call here — fast, synchronous-style lookup.
+ *
+ * When [graphTraversal] is provided, graph-aware queries (see [isDeepQuery])
+ * follow PageLink edges up to 2 hops to surface related pages.
  */
-class KnowledgeQueryEngine(private val repo: KnowledgeRepository) {
+class KnowledgeQueryEngine(
+    private val repo: KnowledgeRepository,
+    private val graphTraversal: KnowledgeGraphTraversal = KnowledgeGraphTraversal(repo)
+) {
 
     companion object {
         private const val TAG        = "KnowledgeQueryEngine"
@@ -21,13 +27,24 @@ class KnowledgeQueryEngine(private val repo: KnowledgeRepository) {
 
     /**
      * Search wiki pages and facts for [query].
+     * For deep queries (e.g. "tell me everything about X"), follows PageLink edges
+     * to surface connected pages via graph traversal.
      * Returns a compact context block for prompt injection, or "" if nothing found.
      */
     suspend fun retrieveContext(query: String): String {
         if (query.isBlank()) return ""
 
-        // Extract the most useful search term (first non-trivial word if query is long)
         val searchTerm = extractSearchTerm(query)
+
+        // For deep queries, use graph traversal to follow related links
+        if (isDeepQuery(query)) {
+            val graphContext = graphTraversal.retrieveWithTraversal(searchTerm)
+            if (graphContext.isNotBlank()) {
+                Log.d(TAG, "Graph traversal returned context for: $searchTerm")
+                return graphContext
+            }
+        }
+
         val pages = repo.pages.search(searchTerm).take(MAX_PAGES)
         if (pages.isEmpty()) return ""
 
@@ -49,6 +66,18 @@ class KnowledgeQueryEngine(private val repo: KnowledgeRepository) {
             Log.d(TAG, "Retrieved ${pages.size} pages for query: $searchTerm")
         }
     }
+
+    /** True when the query is phrased as a deep or relational knowledge request. */
+    private fun isDeepQuery(query: String): Boolean {
+        val lower = query.lowercase()
+        return DEEP_QUERY_TRIGGERS.any { lower.contains(it) }
+    }
+
+    private val DEEP_QUERY_TRIGGERS = listOf(
+        "tell me everything", "what do you know", "everything about",
+        "full summary", "tell me all", "what have you learned about",
+        "what's connected to", "related to", "connected to"
+    )
 
     /**
      * Heuristic: is this query asking about something Jarvis might have compiled knowledge on?

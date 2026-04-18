@@ -8,6 +8,8 @@ import com.jarvis.assistant.camera.CameraCaptureManager
 import com.jarvis.assistant.camera.CaptureResult
 import com.jarvis.assistant.camera.VisionClient
 import com.jarvis.assistant.llm.LlmException
+import com.jarvis.assistant.llm.LlmRouter
+import com.jarvis.assistant.llm.Message
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
@@ -30,10 +32,16 @@ import com.jarvis.assistant.tools.framework.ToolResult
  *   Requires OpenAI (gpt-4o) or Anthropic (claude-haiku-4-5). Other providers return
  *   a structured failure with a clear "switch provider" message.
  */
+/**
+ * @param llmRouter When non-null, images are sent through the main LLM pipeline
+ *   (supports all vision-capable providers including Gemini). When null, falls
+ *   back to [visionClient] (OpenAI / Anthropic / OpenRouter only).
+ */
 class AnalyzeCameraViewTool(
     private val context: Context,
     private val captureManager: CameraCaptureManager,
-    private val visionClient: VisionClient
+    private val visionClient: VisionClient,
+    private val llmRouter: LlmRouter? = null
 ) : Tool {
 
     override val name           = "analyze_camera_view"
@@ -80,7 +88,17 @@ class AnalyzeCameraViewTool(
 
         // Step 2+3 — encode + analyse (analysis failure is isolated; image is preserved)
         return try {
-            val description = visionClient.analyze(file, VISION_PROMPT)
+            val description = if (llmRouter != null) {
+                // Route through main LLM pipeline — supports Gemini and all other providers
+                val base64 = visionClient.encodeImageForPipeline(file)
+                val systemMsg = Message("system",
+                    "You are Jarvis, a concise voice assistant. " +
+                    "Describe what you see in 1-2 short conversational sentences.")
+                val userMsg = Message("user", VISION_PROMPT, imageBase64 = base64)
+                llmRouter.completeSilent(listOf(systemMsg, userMsg))
+            } else {
+                visionClient.analyze(file, VISION_PROMPT)
+            }
             Log.d(TAG, "Vision result: ${description.take(100)}")
             ToolResult.Success(description)
         } catch (e: LlmException) {

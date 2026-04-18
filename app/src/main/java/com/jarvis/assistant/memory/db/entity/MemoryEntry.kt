@@ -33,7 +33,8 @@ data class MemoryEntry(
     val createdAt: Long = System.currentTimeMillis(),
     val lastAccessedAt: Long = System.currentTimeMillis(),
     val accessCount: Int = 0,
-    val importanceScore: Float = 0.5f
+    val importanceScore: Float = 0.5f,
+    val embedding: ByteArray? = null    // L2-normalised float32 embedding, null until engine loaded
 )
 
 enum class MemoryType {

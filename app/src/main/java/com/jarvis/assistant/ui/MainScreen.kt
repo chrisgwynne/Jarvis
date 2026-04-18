@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
+import com.jarvis.assistant.ui.ConversationViewModel
 import com.jarvis.assistant.service.JarvisService
 import com.jarvis.assistant.ui.orb.OrbViewModel
 import com.jarvis.assistant.ui.orb.OrbVisualState
@@ -80,6 +81,13 @@ fun MainScreen(onOpenSettings: () -> Unit) {
     val orbViewModel : OrbViewModel = viewModel()
     val visualState  by orbViewModel.visualState.collectAsStateWithLifecycle()
     val amplitude    by orbViewModel.amplitude.collectAsStateWithLifecycle()
+
+    // ── Conversation history ──────────────────────────────────────────────────
+    val convViewModel: ConversationViewModel = viewModel()
+    val turns by convViewModel.turns.collectAsStateWithLifecycle()
+    LaunchedEffect(isRunning) {
+        if (isRunning) convViewModel.startPolling() else { convViewModel.stopPolling(); convViewModel.refresh() }
+    }
 
     // ── Derived ───────────────────────────────────────────────────────────────
     val isSilenceable = isRunning && serviceState != "IDLE"
@@ -164,6 +172,10 @@ fun MainScreen(onOpenSettings: () -> Unit) {
             textAlign     = TextAlign.Center,
             modifier      = Modifier.padding(horizontal = 32.dp)
         )
+
+        // ── Conversation history panel ────────────────────────────────────────
+        Spacer(Modifier.height(12.dp))
+        ConversationPanel(turns = turns)
 
         // ── Flexible spacer below centre ──────────────────────────────────────
         Spacer(Modifier.weight(1f))

@@ -249,7 +249,8 @@ class ToolHandler(
     // ── Volume ────────────────────────────────────────────────────────────────
 
     private fun handleVolume(direction: Int): Result {
-        val am = context.getSystemService(SysAudioManager::class.java)!!
+        val am = context.getSystemService(SysAudioManager::class.java)
+            ?: return Result.Executed("Audio service unavailable.")
         return when {
             direction > 0 -> {
                 am.adjustStreamVolume(SysAudioManager.STREAM_MUSIC, SysAudioManager.ADJUST_RAISE, SysAudioManager.FLAG_SHOW_UI)
@@ -272,9 +273,12 @@ class ToolHandler(
 
     private fun handleTorch(on: Boolean): Result {
         return try {
-            val cm       = context.getSystemService(CameraManager::class.java)!!
-            val cameraId = cm.cameraIdList.firstOrNull()
-                ?: return Result.Executed("No camera available for flashlight.")
+            val cm = context.getSystemService(CameraManager::class.java)
+                ?: return Result.Executed("Camera service unavailable.")
+            val cameraId = cm.cameraIdList.firstOrNull { id ->
+                cm.getCameraCharacteristics(id)
+                    .get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            } ?: return Result.Executed("No flash on this phone.")
             cm.setTorchMode(cameraId, on)
             Result.Executed(if (on) "Flashlight on." else "Flashlight off.")
         } catch (e: Exception) {

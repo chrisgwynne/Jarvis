@@ -27,7 +27,8 @@ class VolumeTool(private val context: Context) : Tool {
     }
 
     override suspend fun execute(input: ToolInput): ToolResult {
-        val am = context.getSystemService(SysAudioManager::class.java)!!
+        val am = context.getSystemService(SysAudioManager::class.java)
+            ?: return ToolResult.Failure("Audio service unavailable.")
         return when (input.param("direction")) {
             "up" -> {
                 am.adjustStreamVolume(SysAudioManager.STREAM_MUSIC, SysAudioManager.ADJUST_RAISE, SysAudioManager.FLAG_SHOW_UI)

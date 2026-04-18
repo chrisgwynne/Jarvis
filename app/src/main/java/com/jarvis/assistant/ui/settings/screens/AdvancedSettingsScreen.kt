@@ -27,6 +27,7 @@ import com.jarvis.assistant.ui.settings.SettingsInfoCard
 import com.jarvis.assistant.ui.settings.SettingsPrimaryButton
 import com.jarvis.assistant.ui.settings.SettingsRowDivider
 import com.jarvis.assistant.ui.settings.SettingsScaffold
+import com.jarvis.assistant.ui.settings.SettingsSliderRow
 import com.jarvis.assistant.ui.settings.SettingsTextFieldRow
 import com.jarvis.assistant.ui.settings.SettingsTheme
 import com.jarvis.assistant.ui.settings.SettingsToggleRow
@@ -39,15 +40,17 @@ internal fun AdvancedSettingsScreen(
 ) {
     val context = LocalContext.current
 
-    val provider        by vm.llmProvider.collectAsStateWithLifecycle()
-    val apiKey          by vm.apiKey.collectAsStateWithLifecycle()
-    val ollamaUrl       by vm.ollamaBaseUrl.collectAsStateWithLifecycle()
-    val miniMaxUrl      by vm.miniMaxBaseUrl.collectAsStateWithLifecycle()
-    val miniMaxModel    by vm.miniMaxModel.collectAsStateWithLifecycle()
+    val provider         by vm.llmProvider.collectAsStateWithLifecycle()
+    val apiKey           by vm.apiKey.collectAsStateWithLifecycle()
+    val ollamaUrl        by vm.ollamaBaseUrl.collectAsStateWithLifecycle()
+    val miniMaxUrl       by vm.miniMaxBaseUrl.collectAsStateWithLifecycle()
+    val miniMaxModel     by vm.miniMaxModel.collectAsStateWithLifecycle()
+    val maxTokens        by vm.maxTokens.collectAsStateWithLifecycle()
+    val fallbackProvider by vm.fallbackProvider.collectAsStateWithLifecycle()
 
-    val openAiClientId  by vm.openAiClientId.collectAsStateWithLifecycle()
-    val openAiSignedIn  by vm.openAiSignedIn.collectAsStateWithLifecycle()
-    val openAiError     by vm.openAiOAuthError.collectAsStateWithLifecycle()
+    val openAiClientId   by vm.openAiClientId.collectAsStateWithLifecycle()
+    val openAiSignedIn   by vm.openAiSignedIn.collectAsStateWithLifecycle()
+    val openAiError      by vm.openAiOAuthError.collectAsStateWithLifecycle()
 
     val openClawEnabled   by vm.openClawEnabled.collectAsStateWithLifecycle()
     val openClawHost      by vm.openClawHost.collectAsStateWithLifecycle()
@@ -55,6 +58,8 @@ internal fun AdvancedSettingsScreen(
     val openClawSecure    by vm.openClawSecure.collectAsStateWithLifecycle()
     val openClawAuthToken by vm.openClawAuthToken.collectAsStateWithLifecycle()
     val openClawTimeoutMs by vm.openClawTimeoutMs.collectAsStateWithLifecycle()
+    val openClawKeyword   by vm.openClawKeyword.collectAsStateWithLifecycle()
+    val openClawModel     by vm.openClawModel.collectAsStateWithLifecycle()
     val openClawStatus    by vm.openClawConnectionStatus.collectAsStateWithLifecycle()
 
     SettingsScaffold(title = "Advanced", onBack = onBack, onClose = onClose) {
@@ -70,6 +75,31 @@ internal fun AdvancedSettingsScreen(
                 selected   = provider,
                 label      = { it },
                 onSelected = vm::setLlmProvider,
+            )
+            SettingsRowDivider()
+            val fallbackOptions = listOf("") + vm.providers
+            SettingsDropdownRow(
+                title       = "Fallback provider",
+                description = "Used if the primary provider fails. Disabled by default.",
+                options     = fallbackOptions,
+                selected    = fallbackProvider,
+                label       = { if (it.isBlank()) "Disabled" else it },
+                onSelected  = vm::setFallbackProvider,
+            )
+        }
+
+        /* ── Response tuning ─────────────────────────────────────────────── */
+        SettingsGroup(
+            title  = "Response tuning",
+            footer = "1200 is a good default. Raise for long-form; lower for snappier replies.",
+        ) {
+            SettingsSliderRow(
+                title       = "Max response tokens",
+                value       = maxTokens.toFloat(),
+                onValueChange = { vm.setMaxTokens(it.toInt()) },
+                valueRange  = 400f..4000f,
+                steps       = 35,
+                valueLabel  = { it.toInt().toString() },
             )
         }
 
@@ -237,6 +267,22 @@ internal fun AdvancedSettingsScreen(
                     onValueChange = vm::setOpenClawAuthToken,
                     placeholder   = "your-secret-token",
                     isSecret      = true,
+                )
+                SettingsRowDivider()
+                SettingsTextFieldRow(
+                    title         = "Keyword trigger",
+                    description   = "Say this word first to always route to OpenClaw " +
+                                    "(e.g. \"computer, who invented the internet\").",
+                    value         = openClawKeyword,
+                    onValueChange = vm::setOpenClawKeyword,
+                    placeholder   = "computer",
+                )
+                SettingsRowDivider()
+                SettingsTextFieldRow(
+                    title         = "Model name",
+                    value         = openClawModel,
+                    onValueChange = vm::setOpenClawModel,
+                    placeholder   = "openclaw",
                 )
                 SettingsRowDivider()
                 Column(

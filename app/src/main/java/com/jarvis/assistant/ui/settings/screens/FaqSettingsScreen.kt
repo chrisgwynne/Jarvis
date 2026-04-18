@@ -288,6 +288,46 @@ internal fun FaqSettingsScreen(
             )
         }
 
+        FaqSection(title = "Smart home (Home Assistant)") {
+            FaqEntry(
+                what = "Turn things on or off",
+                note = "Requires Home Assistant to be configured and connected.",
+                examples = listOf(
+                    "turn on the kitchen lights",
+                    "turn off the bedroom lamp",
+                    "toggle the hallway switch",
+                ),
+            )
+            FaqEntry(
+                what = "Climate",
+                examples = listOf(
+                    "set the living room to 21",
+                    "set the thermostat to 19",
+                ),
+            )
+            FaqEntry(
+                what = "Covers & doors",
+                examples = listOf(
+                    "open the garage",
+                    "close the blinds",
+                ),
+            )
+            FaqEntry(
+                what = "Scenes & scripts",
+                examples = listOf(
+                    "run bedtime scene",
+                    "activate movie mode",
+                ),
+            )
+            FaqEntry(
+                what = "Ask about state",
+                examples = listOf(
+                    "what's the temperature in the bedroom",
+                    "is the front door locked",
+                ),
+            )
+        }
+
         FaqSection(title = "Image generation") {
             FaqEntry(
                 what = "Generate an image",

@@ -103,6 +103,11 @@ dependencies {
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
 
+    // TensorFlow Lite — neural speaker embedding engine
+    // Place speaker_encoder.tflite in app/src/main/assets/ to activate.
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+
     // Baseline Profile installer — installs compiled profile on first launch
     implementation("androidx.profileinstaller:profileinstaller:1.3.1")
 

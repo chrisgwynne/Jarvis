@@ -1,42 +1,32 @@
 package com.jarvis.assistant.remote.openclaw
 
-import org.json.JSONObject
+import com.jarvis.assistant.llm.NetworkClient
 
 /**
- * JSON response received from OpenClaw.
- *
- * Parsed manually with org.json.
+ * OpenAI-compatible chat completions response from OpenClaw.
+ * Parsed via Gson from the HTTP response body.
  */
 data class OpenClawResponse(
-    val requestId:         String,
-    val status:            String,       // "ok" | "error" | "auth_failed"
-    val spokenSummary:     String,       // short spoken reply
-    val fullText:          String,       // full detail (may be empty)
-    val needsConfirmation: Boolean,
-    val isLongJob:         Boolean,
-    val errorCode:         String,       // "" when no error
-    val debugMessage:      String        // "" in production
+    val choices: List<Choice>?,
+    val error:   ErrorBody?
 ) {
-    val isSuccess: Boolean get() = status == "ok"
-    val isAuthFailure: Boolean get() = status == "auth_failed"
+    data class Choice(val message: Msg?, val finish_reason: String?)
+    data class Msg(val role: String?, val content: String?)
+    data class ErrorBody(val message: String?, val code: String?)
+
+    /** The assistant's reply text, trimmed. Empty string if the response was malformed. */
+    val content: String
+        get() = choices?.firstOrNull()?.message?.content?.trim() ?: ""
+
+    /** True when the error body signals an auth problem. */
+    val isAuthError: Boolean
+        get() = error?.code == "invalid_api_key" ||
+                error?.code == "unauthorized" ||
+                error?.message?.contains("401") == true
 
     companion object {
-        /**
-         * Parse from a raw WebSocket text frame.
-         * Returns null if the JSON is structurally invalid.
-         */
         fun fromJson(json: String): OpenClawResponse? = try {
-            val obj = JSONObject(json)
-            OpenClawResponse(
-                requestId         = obj.optString("requestId"),
-                status            = obj.optString("status", "error"),
-                spokenSummary     = obj.optString("spokenSummary"),
-                fullText          = obj.optString("fullText"),
-                needsConfirmation = obj.optBoolean("needsConfirmation", false),
-                isLongJob         = obj.optBoolean("isLongJob", false),
-                errorCode         = obj.optString("errorCode"),
-                debugMessage      = obj.optString("debugMessage")
-            )
+            NetworkClient.gson.fromJson(json, OpenClawResponse::class.java)
         } catch (_: Exception) {
             null
         }

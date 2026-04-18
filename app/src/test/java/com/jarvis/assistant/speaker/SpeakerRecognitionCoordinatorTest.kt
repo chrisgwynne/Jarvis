@@ -1,6 +1,7 @@
 package com.jarvis.assistant.speaker
 
 import com.jarvis.assistant.speaker.db.PersonRecordDao
+import com.jarvis.assistant.speaker.db.RecentGuestDao
 import com.jarvis.assistant.speaker.db.SpeakerEmbeddingDao
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -18,7 +19,7 @@ import org.mockito.kotlin.mock
 class SpeakerRecognitionCoordinatorTest {
 
     private val coordinator: SpeakerRecognitionCoordinator by lazy {
-        val store      = SpeakerProfileStore(mock<PersonRecordDao>(), mock<SpeakerEmbeddingDao>())
+        val store      = SpeakerProfileStore(mock<PersonRecordDao>(), mock<SpeakerEmbeddingDao>(), mock<RecentGuestDao>())
         val enrollment = SpeakerEnrollmentManager(store)
         SpeakerRecognitionCoordinator(store, enrollment)
     }

@@ -10,6 +10,7 @@ import com.jarvis.assistant.llm.providers.MiniMaxProvider
 import com.jarvis.assistant.llm.providers.OllamaProvider
 import com.jarvis.assistant.llm.providers.OpenAiProvider
 import com.jarvis.assistant.llm.providers.OpenRouterProvider
+import com.jarvis.assistant.tools.framework.ToolSchema
 import com.jarvis.assistant.util.SettingsStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -243,29 +244,67 @@ class LlmRouter(context: Context) {
 
     // ── Provider selection ─────────────────────────────────────────────────────
 
-    private fun activeProvider(): LlmProvider {
+    private fun activeProvider(): LlmProvider = providerByName(settings.llmProvider)
+
+    internal fun providerByName(providerName: String): LlmProvider {
         val apiKey    = settings.apiKey
         val ollamaUrl = settings.ollamaBaseUrl
+        val mt        = settings.maxTokens
 
-        return when (settings.llmProvider) {
-            "Anthropic"  -> AnthropicProvider(apiKey)
-            "Gemini"     -> GeminiProvider(apiKey)
+        return when (providerName) {
+            "Anthropic"  -> AnthropicProvider(apiKey, mt)
+            "Gemini"     -> GeminiProvider(apiKey, mt)
             "Ollama"     -> OllamaProvider(ollamaUrl)
-            "OpenRouter" -> OpenRouterProvider(apiKey)
-            "Kimi"       -> KimiProvider(apiKey)
-            "MiniMax"    -> MiniMaxProvider(apiKey, settings.miniMaxBaseUrl, settings.miniMaxModel)
+            "OpenRouter" -> OpenRouterProvider(apiKey, mt)
+            "Kimi"       -> KimiProvider(apiKey, mt)
+            "MiniMax"    -> MiniMaxProvider(apiKey, settings.miniMaxBaseUrl, settings.miniMaxModel, mt)
             else         -> {
-                // OpenAI: prefer OAuth access token if signed in, otherwise API key
                 val openAiToken = if (settings.openAiOAuthEnabled && settings.openAiAccessToken.isNotBlank())
                     settings.openAiAccessToken
                 else
                     apiKey
-                OpenAiProvider(openAiToken)
+                OpenAiProvider(openAiToken, mt)
             }
         }
     }
 
     val currentProviderName: String get() = activeProvider().name
+
+    /**
+     * Call the provider with function-calling tools.
+     *
+     * Returns [LlmResult.ToolCall] or [LlmResult.Text] when a function-calling-capable
+     * provider handles the request, or **null** when the active provider does not
+     * support native function calling (Gemini, Ollama) — the caller should fall back
+     * to the streaming path in that case.
+     *
+     * Note: The assistant response is NOT written to [conversationStore] here.
+     * The caller is responsible for saving it after deciding how to present it.
+     */
+    suspend fun completeWithFunctionCalling(
+        messages: List<Message>,
+        tools: List<ToolSchema>
+    ): LlmResult? {
+        if (tools.isEmpty()) return null
+        val provider = activeProvider()
+        return try {
+            when (provider) {
+                is AnthropicProvider  -> provider.completeWithTools(messages, tools)
+                is OpenAiProvider     -> provider.completeWithTools(messages, tools)
+                is OpenRouterProvider -> provider.completeWithTools(messages, tools)
+                is KimiProvider       -> provider.completeWithTools(messages, tools)
+                is MiniMaxProvider    -> provider.completeWithTools(messages, tools)
+                is GeminiProvider     -> provider.completeWithTools(messages, tools)
+                is OllamaProvider     -> provider.completeWithTools(messages, tools)
+                else                  -> null
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Function calling failed (${e.message}) — falling back to streaming")
+            null
+        }
+    }
 
     // ── Retry logic ────────────────────────────────────────────────────────────
 
@@ -285,17 +324,20 @@ class LlmRouter(context: Context) {
         } catch (e: LlmException) {
             when {
                 isRateLimit(e) -> {
-                    // 429: server asked us to back off — wait longer and retry once
                     Log.w(TAG, "Rate limited — retrying in ${RATE_LIMIT_RETRY_MS}ms")
                     delay(RATE_LIMIT_RETRY_MS)
                     activeProvider().complete(messages)
                 }
-                isNonRetryable(e) -> throw e   // auth/config — no point retrying
+                isNonRetryable(e) -> throw e
                 else -> {
                     val delayMs = retryDelayMs()
                     Log.w(TAG, "First attempt failed (${e.message}) — retrying in ${delayMs}ms")
                     delay(delayMs)
-                    activeProvider().complete(messages)
+                    try {
+                        activeProvider().complete(messages)
+                    } catch (e2: Exception) {
+                        tryFallbackProvider(messages, e2)
+                    }
                 }
             }
         } catch (e: IOException) {
@@ -305,9 +347,22 @@ class LlmRouter(context: Context) {
             delay(delayMs)
             try {
                 activeProvider().complete(messages)
-            } catch (e2: IOException) {
-                throw LlmException("Network error: ${e2.javaClass.simpleName}: ${e2.message}")
+            } catch (e2: Exception) {
+                tryFallbackProvider(messages, e2)
             }
+        }
+    }
+
+    private suspend fun tryFallbackProvider(messages: List<Message>, originalError: Exception): String {
+        val fallback = settings.fallbackProvider.takeIf { it.isNotBlank() }
+            ?: throw if (originalError is LlmException) originalError
+                     else LlmException("Network error: ${originalError.javaClass.simpleName}: ${originalError.message}")
+
+        Log.w(TAG, "Primary provider failed — trying fallback: $fallback")
+        return try {
+            providerByName(fallback).complete(messages)
+        } catch (e: Exception) {
+            throw LlmException("Both primary and fallback ($fallback) failed: ${e.message}")
         }
     }
 

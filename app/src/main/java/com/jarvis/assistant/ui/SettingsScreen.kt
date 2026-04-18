@@ -65,7 +65,7 @@ fun SettingsScreen(
             ActionsAppsSettingsScreen(vm = vm, onBack = popToRoot, onClose = onBack)
         }
         composable(SettingsCategory.HomeAssistant.route) {
-            HomeAssistantSettingsScreen(onBack = popToRoot, onClose = onBack)
+            HomeAssistantSettingsScreen(vm = vm, onBack = popToRoot, onClose = onBack)
         }
         composable(SettingsCategory.Notifications.route) {
             NotificationsSettingsScreen(onBack = popToRoot, onClose = onBack)

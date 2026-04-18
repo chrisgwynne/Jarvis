@@ -12,14 +12,10 @@ import com.jarvis.assistant.auth.OAuthCallbackHolder
 import com.jarvis.assistant.auth.OpenAiOAuthManager
 import com.jarvis.assistant.service.JarvisService
 import com.jarvis.assistant.memory.db.JarvisDatabase
-import com.jarvis.assistant.remote.openclaw.OpenClawClient
 import com.jarvis.assistant.remote.openclaw.OpenClawConnectionStatus
-import com.jarvis.assistant.remote.openclaw.OpenClawError
-import com.jarvis.assistant.remote.openclaw.OpenClawExecutionResult
 import com.jarvis.assistant.remote.openclaw.OpenClawHealthMonitor
-import com.jarvis.assistant.remote.openclaw.OpenClawRequest
 import com.jarvis.assistant.remote.openclaw.OpenClawSettingsRepository
-import com.jarvis.assistant.remote.openclaw.RouteType
+import com.jarvis.assistant.tools.smart.HomeAssistantClient
 import com.jarvis.assistant.speaker.SpeakerProfileStore
 import com.jarvis.assistant.speaker.db.PersonRecord
 import com.jarvis.assistant.util.SettingsStore
@@ -51,7 +47,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     private val store         = SettingsStore(app)
     private val openClawRepo  = OpenClawSettingsRepository(store)
     private val db            = JarvisDatabase.getInstance(app)
-    private val speakerStore  = SpeakerProfileStore(db.personRecordDao(), db.speakerEmbeddingDao())
+    private val speakerStore  = SpeakerProfileStore(db.personRecordDao(), db.speakerEmbeddingDao(), db.recentGuestDao())
 
     // ── Exposed state ──────────────────────────────────────────────────────
 
@@ -108,6 +104,15 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             speakerStore.deletePerson(personId)
             _speakerProfiles.value = speakerStore.getAllPersons()
         }
+    }
+
+    /**
+     * Schedule a voice enrollment session for [personId].
+     * JarvisRuntime will auto-start the 5-sample enrollment flow at the next
+     * session start, then clear this flag.
+     */
+    fun scheduleVoiceEnrollment(personId: Long) {
+        store.pendingVoiceEnrollmentPersonId = personId
     }
 
     // ── Memory management ──────────────────────────────────────────────────────
@@ -278,6 +283,21 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── OpenAI OAuth state ─────────────────────────────────────────────────
 
+    private val _maxTokens = MutableStateFlow(store.maxTokens)
+    val maxTokens: StateFlow<Int> = _maxTokens.asStateFlow()
+
+    private val _fallbackProvider = MutableStateFlow(store.fallbackProvider)
+    val fallbackProvider: StateFlow<String> = _fallbackProvider.asStateFlow()
+
+    private val _haBaseUrl = MutableStateFlow(store.haBaseUrl)
+    val haBaseUrl: StateFlow<String> = _haBaseUrl.asStateFlow()
+
+    private val _haApiToken = MutableStateFlow(store.haApiToken)
+    val haApiToken: StateFlow<String> = _haApiToken.asStateFlow()
+
+    private val _haConnectionStatus = MutableStateFlow<String?>(null)
+    val haConnectionStatus: StateFlow<String?> = _haConnectionStatus.asStateFlow()
+
     private val _openAiClientId = MutableStateFlow(store.openAiClientId)
     val openAiClientId: StateFlow<String> = _openAiClientId.asStateFlow()
 
@@ -309,6 +329,21 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun setBraveSearchApiKey(v: String)  { _braveSearchApiKey.value = v; store.braveSearchApiKey = v }
     fun setDefaultMsgChannel(v: String)  { _defaultMsgChannel.value = v; store.defaultMsgChannel = v }
+    fun setMaxTokens(v: Int)         { _maxTokens.value = v; store.maxTokens = v }
+    fun setFallbackProvider(v: String){ _fallbackProvider.value = v; store.fallbackProvider = v }
+    fun setHaBaseUrl(v: String)      { _haBaseUrl.value = v; store.haBaseUrl = v; _haConnectionStatus.value = null }
+    fun setHaApiToken(v: String)     { _haApiToken.value = v; store.haApiToken = v; _haConnectionStatus.value = null }
+
+    fun testHaConnection() {
+        viewModelScope.launch {
+            _haConnectionStatus.value = "Connecting…"
+            val ok = try {
+                HomeAssistantClient(store.haBaseUrl, store.haApiToken).testConnection()
+            } catch (_: Exception) { false }
+            _haConnectionStatus.value = if (ok) "Connected" else "Unreachable — check URL and token"
+        }
+    }
+
     fun setOpenAiClientId(v: String){ _openAiClientId.value = v; store.openAiClientId = v }
 
     // ── OpenAI OAuth ───────────────────────────────────────────────────────
@@ -385,6 +420,12 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     private val _openClawTimeoutMs  = MutableStateFlow(store.openClawTimeoutMs.toString())
     val openClawTimeoutMs: StateFlow<String> = _openClawTimeoutMs.asStateFlow()
 
+    private val _openClawModel = MutableStateFlow(store.openClawModel)
+    val openClawModel: StateFlow<String> = _openClawModel.asStateFlow()
+
+    private val _openClawKeyword = MutableStateFlow(store.openClawKeyword)
+    val openClawKeyword: StateFlow<String> = _openClawKeyword.asStateFlow()
+
     private val _openClawStatus = MutableStateFlow(OpenClawConnectionStatus.NOT_CONFIGURED)
     val openClawConnectionStatus: StateFlow<OpenClawConnectionStatus> = _openClawStatus.asStateFlow()
 
@@ -425,46 +466,14 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         v.toLongOrNull()?.let { store.openClawTimeoutMs = it }
     }
 
-    /**
-     * Two-stage connection test:
-     *   1. HTTP GET /health  — confirms the server is up and reachable.
-     *   2. WebSocket /gateway — sends a "__ping__" transcript to prove the WS
-     *      transport works end-to-end (any non-unreachable response counts as pass).
-     */
+    fun setOpenClawModel(v: String)   { _openClawModel.value = v;   store.openClawModel = v }
+    fun setOpenClawKeyword(v: String) { _openClawKeyword.value = v; store.openClawKeyword = v }
+
     fun testOpenClawConnection() {
         _openClawStatus.value = OpenClawConnectionStatus.CONNECTING
         viewModelScope.launch {
             val settings = openClawRepo.snapshot()
-
-            // Stage 1 — HTTP health check
-            val healthStatus = OpenClawHealthMonitor.check(settings)
-            if (healthStatus != OpenClawConnectionStatus.CONNECTED) {
-                _openClawStatus.value = healthStatus
-                return@launch
-            }
-
-            // Stage 2 — WebSocket round-trip
-            val pingRequest = OpenClawRequest(
-                requestId      = "ping_${System.currentTimeMillis()}",
-                transcript     = "__ping__",
-                routeType      = RouteType.REMOTE_FAST,
-                sessionId      = "settings_test",
-                timeoutMs      = settings.timeoutMs,
-                isVoiceRequest = false,
-            )
-            val wsResult = OpenClawClient().send(settings, pingRequest)
-            _openClawStatus.value = when (wsResult) {
-                is OpenClawExecutionResult.Success -> OpenClawConnectionStatus.CONNECTED
-                is OpenClawExecutionResult.Failure -> when (wsResult.error) {
-                    is OpenClawError.AuthFailed  -> OpenClawConnectionStatus.AUTH_FAILED
-                    is OpenClawError.TimedOut    -> OpenClawConnectionStatus.TIMED_OUT
-                    is OpenClawError.Unreachable -> OpenClawConnectionStatus.UNREACHABLE
-                    // TaskFailed / MalformedResponse / ConnectionDropped — WS reached the
-                    // server fine, it just didn't recognise the ping payload. Still a pass.
-                    else                         -> OpenClawConnectionStatus.CONNECTED
-                }
-                else -> OpenClawConnectionStatus.CONNECTED
-            }
+            _openClawStatus.value = OpenClawHealthMonitor.check(settings)
         }
     }
 }

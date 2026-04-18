@@ -54,7 +54,9 @@ class ProactiveEngine(
     private val callSource: CallContextSource,
     private val batterySource: BatteryContextSource,
     private val speechSource: SpeechStateSource,
-    private val dispatcher: ProactiveDispatcher
+    private val dispatcher: ProactiveDispatcher,
+    private val notificationSource: NotificationContextSource? = null,
+    private val brainPredictionSource: BrainPredictionSource? = null
 ) {
 
     companion object {
@@ -152,8 +154,9 @@ class ProactiveEngine(
      */
     private suspend fun buildSnapshot(): ContextSnapshot {
         // Suspending calls
-        val nextReminder = reminderSource.getNextPendingReminder()
+        val nextReminder  = reminderSource.getNextPendingReminder()
         val reminderCount = reminderSource.getPendingReminderCount()
+        val topPrediction = brainPredictionSource?.getTopPrediction()
 
         // Non-suspending calls
         val speechState  = speechSource.getSpeechState()
@@ -173,7 +176,13 @@ class ProactiveEngine(
             lastMissedCallAtMillis        = missedCall?.lastCallAtMillis,
             lastMissedCallContactName     = missedCall?.contactName,
             currentLocationName           = batterySource.getLocationName(),
-            networkAvailable              = batterySource.isNetworkAvailable()
+            networkAvailable              = batterySource.isNetworkAvailable(),
+            unreadNotificationCount       = notificationSource?.getUnreadCount() ?: 0,
+            lastNotificationText          = notificationSource?.getLastNotificationText(),
+            lastNotificationApp           = notificationSource?.getLastNotificationApp(),
+            topPredictionDescription      = topPrediction?.description,
+            topPredictionScore            = topPrediction?.score ?: 0f,
+            predictionKnowledgeContext    = topPrediction?.knowledgeContext
         )
     }
 
@@ -191,6 +200,13 @@ class ProactiveEngine(
 
         try {
             dispatcher.dispatch(action)
+            // Acknowledge notification events so the same batch isn't re-announced
+            val isNotifAction = when (action) {
+                is ProactiveAction.SpeakAction   -> action.sourceType == ProactiveEventType.UNREAD_NOTIFICATION
+                is ProactiveAction.PassiveAction -> action.sourceType == ProactiveEventType.UNREAD_NOTIFICATION
+                ProactiveAction.NoAction         -> false
+            }
+            if (isNotifAction) notificationSource?.acknowledge()
         } catch (e: Exception) {
             Log.e(TAG, "Dispatcher threw during dispatch — action dropped", e)
         }

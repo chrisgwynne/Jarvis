@@ -121,6 +121,13 @@ class VisionClient(private val settings: SettingsStore) {
     // ── Image encoding ────────────────────────────────────────────────────────
 
     /**
+     * Encode [file] to a base64 JPEG string (no data-URI prefix) for use in a
+     * [com.jarvis.assistant.llm.Message.imageBase64] field when routing through
+     * the main LLM pipeline.
+     */
+    fun encodeImageForPipeline(file: File): String = encodeImageFile(file)
+
+    /**
      * Two-pass decode:
      *   Pass 1: read only image dimensions (no pixel data loaded).
      *   Pass 2: decode at down-sampled size using inSampleSize (power-of-2 scale).

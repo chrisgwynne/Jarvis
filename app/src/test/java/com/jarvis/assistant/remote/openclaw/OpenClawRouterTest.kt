@@ -19,7 +19,9 @@ class OpenClawRouterTest {
                 port      = 8765,
                 secure    = false,
                 authToken = "tok",
-                timeoutMs = 30_000L
+                timeoutMs = 30_000L,
+                modelName = "openclaw",
+                keyword   = "computer"
             )
         )
         return repo
@@ -99,14 +101,25 @@ class OpenClawRouterTest {
     }
 
     @Test
-    fun `ordinary question classifies as REMOTE_FAST`() {
-        assertEquals(RouteType.REMOTE_FAST, router().classify("who won the Champions League in 2023"))
+    fun `ordinary question without keyword classifies as LOCAL_FAST`() {
+        // Default is LOCAL_FAST — only keyword or LONG_PATTERN hits go to OpenClaw
+        assertEquals(RouteType.LOCAL_FAST, router().classify("who won the Champions League in 2023"))
     }
 
     @Test
-    fun `'what is the capital of France' classifies as REMOTE_FAST`() {
-        // Not LOCAL_FAST (no device trigger), not REMOTE_LONG (not a research/write task)
-        assertEquals(RouteType.REMOTE_FAST, router().classify("what is the capital of France"))
+    fun `'what is the capital of France' classifies as LOCAL_FAST`() {
+        // No keyword, no LONG_PATTERN match → stays local
+        assertEquals(RouteType.LOCAL_FAST, router().classify("what is the capital of France"))
+    }
+
+    @Test
+    fun `keyword prefix forces REMOTE_FAST for simple query`() {
+        assertEquals(RouteType.REMOTE_FAST, router().classify("computer who invented the internet"))
+    }
+
+    @Test
+    fun `keyword prefix forces REMOTE_LONG for research query`() {
+        assertEquals(RouteType.REMOTE_LONG, router().classify("computer research the best ETFs for 2025"))
     }
 
     // ── execute — bypasses when not configured ────────────────────────────

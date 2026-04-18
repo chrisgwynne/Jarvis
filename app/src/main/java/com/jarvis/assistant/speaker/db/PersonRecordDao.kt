@@ -26,4 +26,7 @@ interface PersonRecordDao {
 
     @Query("DELETE FROM person_records WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("SELECT * FROM person_records WHERE LOWER(displayName) = LOWER(:name) LIMIT 1")
+    suspend fun getByDisplayName(name: String): PersonRecord?
 }

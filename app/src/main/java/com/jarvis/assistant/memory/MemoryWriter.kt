@@ -26,7 +26,8 @@ import java.util.UUID
  */
 class MemoryWriter(
     private val memoryDao: MemoryDao,
-    private val conversationDao: ConversationDao
+    private val conversationDao: ConversationDao,
+    private val embeddingEngine: MemoryEmbeddingEngine? = null
 ) {
 
     companion object {
@@ -98,11 +99,12 @@ class MemoryWriter(
         if (!summary.isNullOrBlank() && turns.size >= 2) {
             val keywords = buildKeywords(turns.map { it.content }.joinToString(" "))
             memoryDao.insert(MemoryEntry(
-                type           = MemoryType.SUMMARY,
-                content        = summary,
-                keywords       = keywords,
-                sessionId      = sessionId,
-                importanceScore = 0.7f
+                type            = MemoryType.SUMMARY,
+                content         = summary,
+                keywords        = keywords,
+                sessionId       = sessionId,
+                importanceScore = 0.7f,
+                embedding       = embedBytes(summary)
             ))
         }
 
@@ -122,7 +124,8 @@ class MemoryWriter(
             content         = normalized,
             keywords        = buildKeywords(normalized),
             sessionId       = sessionId,
-            importanceScore = 0.9f
+            importanceScore = 0.9f,
+            embedding       = embedBytes(normalized)
         ))
         Log.d(TAG, "Preference written: $normalized")
     }
@@ -138,7 +141,8 @@ class MemoryWriter(
             content         = normalized,
             keywords        = buildKeywords(normalized),
             sessionId       = sessionId,
-            importanceScore = 0.85f
+            importanceScore = 0.85f,
+            embedding       = embedBytes(normalized)
         ))
         Log.d(TAG, "Task written: $normalized")
     }
@@ -154,7 +158,8 @@ class MemoryWriter(
             content         = normalized,
             keywords        = buildKeywords(normalized),
             sessionId       = sessionId,
-            importanceScore = 0.8f
+            importanceScore = 0.8f,
+            embedding       = embedBytes(normalized)
         ))
     }
 
@@ -198,6 +203,9 @@ class MemoryWriter(
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private fun embedBytes(text: String): ByteArray? =
+        embeddingEngine?.embed(text)?.let { MemoryEmbeddingEngine.toByteArray(it) }
 
     private fun buildKeywords(text: String): String =
         text.lowercase()

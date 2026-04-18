@@ -41,5 +41,17 @@ data class ContextSnapshot(
     val lastMissedCallAtMillis: Long?,
     val lastMissedCallContactName: String?,
     val currentLocationName: String?,
-    val networkAvailable: Boolean
+    val networkAvailable: Boolean,
+    /** Number of unread notifications from important (non-Jarvis) apps since last check. */
+    val unreadNotificationCount: Int = 0,
+    /** Title/text of the most recent unread notification, or null. */
+    val lastNotificationText: String? = null,
+    /** Package name of the app that sent the last notification, or null. */
+    val lastNotificationApp: String? = null,
+    /** Top brain prediction description for proactive context push, or null. */
+    val topPredictionDescription: String? = null,
+    /** Confidence score [0,1] of the top prediction. */
+    val topPredictionScore: Float = 0f,
+    /** Related knowledge context to surface alongside the prediction, or null. */
+    val predictionKnowledgeContext: String? = null
 )

@@ -15,7 +15,9 @@ class OpenClawSettingsRepository(private val store: SettingsStore) {
         port      = store.openClawPort,
         secure    = store.openClawSecure,
         authToken = store.openClawAuthToken,
-        timeoutMs = store.openClawTimeoutMs
+        timeoutMs = store.openClawTimeoutMs,
+        modelName = store.openClawModel,
+        keyword   = store.openClawKeyword
     )
 
     /** True when OpenClaw is enabled AND a host has been entered. */

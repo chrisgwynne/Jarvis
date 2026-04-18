@@ -1,5 +1,6 @@
 package com.jarvis.assistant.remote.openclaw
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,7 +16,9 @@ class OpenClawSettingsTest {
         port      = 8765,
         secure    = false,
         authToken = "",
-        timeoutMs = 30_000L
+        timeoutMs = 30_000L,
+        modelName = "openclaw",
+        keyword   = "computer"
     )
 
     // ── isFullyConfigured ──────────────────────────────────────────────────
@@ -51,6 +54,18 @@ class OpenClawSettingsTest {
     @Test
     fun `default timeout is 30 seconds`() {
         assert(OpenClawSettings.DEFAULT_TIMEOUT_MS == 30_000L)
+    }
+
+    // ── modelName / keyword defaults ──────────────────────────────────────
+
+    @Test
+    fun `default modelName is openclaw`() {
+        assertEquals("openclaw", settings().modelName)
+    }
+
+    @Test
+    fun `default keyword is computer`() {
+        assertEquals("computer", settings().keyword)
     }
 
     // ── RouteType values ──────────────────────────────────────────────────

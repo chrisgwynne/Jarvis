@@ -13,10 +13,11 @@ package com.jarvis.assistant.llm.providers
  *   International: api.minimaxi.chat  (use this if you signed up at platform.minimaxi.com)
  * The base URL is now configurable in Settings → LLM Provider.
  */
-class MiniMaxProvider(apiKey: String, baseUrl: String, model: String) : BaseOpenAiProvider(
-    apiKey  = apiKey,
-    baseUrl = baseUrl,
-    model   = model
+class MiniMaxProvider(apiKey: String, baseUrl: String, model: String, maxTokens: Int = 1200) : BaseOpenAiProvider(
+    apiKey    = apiKey,
+    baseUrl   = baseUrl,
+    model     = model,
+    maxTokens = maxTokens
 ) {
     override val name = "MiniMax"
 }

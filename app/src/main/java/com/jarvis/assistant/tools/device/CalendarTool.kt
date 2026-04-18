@@ -1,15 +1,19 @@
 package com.jarvis.assistant.tools.device
 
 import android.Manifest
+import android.content.ContentValues
 import android.content.Context
 import android.provider.CalendarContract
 import android.util.Log
+import com.jarvis.assistant.reminders.ReminderParser
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
+import java.util.TimeZone
 
 /**
  * CalendarTool — reads events from the Android CalendarContract content provider.
@@ -26,9 +30,24 @@ import java.util.Locale
 class CalendarTool(private val context: Context) : Tool {
 
     override val name = "calendar"
-    override val description = "Read upcoming calendar events from the device calendar"
+    override val description = "Read and write calendar events on the device"
     override val requiresNetwork = false
-    override val requiredPermissions = listOf(Manifest.permission.READ_CALENDAR)
+    override val requiredPermissions = listOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Read or create calendar events. Use action=read for queries, action=create to add events.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "action" to mapOf("type" to "string", "enum" to listOf("read", "create"), "description" to "read = query events, create = add a new event"),
+                "period" to mapOf("type" to "string", "enum" to listOf("today", "tomorrow", "week", "next"), "description" to "Time period for read queries"),
+                "title"  to mapOf("type" to "string", "description" to "Event title for create"),
+                "when"   to mapOf("type" to "string", "description" to "Natural language time expression, e.g. Friday at 3pm")
+            ),
+            "required" to listOf("action")
+        )
+    )
 
     companion object {
         private const val TAG = "CalendarTool"
@@ -51,24 +70,43 @@ class CalendarTool(private val context: Context) : Tool {
             """(?:next (?:appointment|meeting|event|thing)|when(?:'?s| is) (?:my )?next|upcoming (?:appointment|meeting|event))""",
             RegexOption.IGNORE_CASE
         )
+
+        private val CREATE_REGEX = Regex(
+            """(?:add|create|schedule|book|put|set up)\s+(?:a\s+|an\s+|me\s+in\s+for\s+a?\s*)?(.+?)(?:\s+(?:on|for|at|this|next)\s+.+)?$""",
+            RegexOption.IGNORE_CASE
+        )
+        private val CREATE_TRIGGERS = listOf(
+            "add to (?:my )?calendar", "add .+ (?:to|on|in) (?:my )?calendar",
+            "schedule (?:a |an )?(?:meeting|appointment|event|call|lunch|dinner|breakfast)",
+            "create (?:a |an )?(?:meeting|appointment|event|reminder|call)",
+            "book (?:a |an )?(?:meeting|appointment|event|call)",
+            "put .+ in (?:my )?calendar"
+        ).map { Regex(it, RegexOption.IGNORE_CASE) }
     }
 
     override fun matches(transcript: String): ToolInput? {
         val t = transcript.trim()
+        // Check create triggers first
+        if (CREATE_TRIGGERS.any { it.containsMatchIn(t) }) {
+            return ToolInput(transcript, mapOf("action" to "create"))
+        }
         return when {
             TOMORROW_REGEX.containsMatchIn(t) ->
-                ToolInput(transcript, mapOf("period" to "tomorrow"))
+                ToolInput(transcript, mapOf("action" to "read", "period" to "tomorrow"))
             WEEK_REGEX.containsMatchIn(t) ->
-                ToolInput(transcript, mapOf("period" to "week"))
+                ToolInput(transcript, mapOf("action" to "read", "period" to "week"))
             NEXT_REGEX.containsMatchIn(t) ->
-                ToolInput(transcript, mapOf("period" to "next"))
+                ToolInput(transcript, mapOf("action" to "read", "period" to "next"))
             TODAY_REGEX.containsMatchIn(t) ->
-                ToolInput(transcript, mapOf("period" to "today"))
+                ToolInput(transcript, mapOf("action" to "read", "period" to "today"))
             else -> null
         }
     }
 
     override suspend fun execute(input: ToolInput): ToolResult {
+        if (input.param("action") == "create") {
+            return createEvent(input.transcript)
+        }
         val period = input.param("period").ifBlank { "today" }
         val (startMs, endMs) = periodBounds(period)
         val label = periodLabel(period)
@@ -155,6 +193,115 @@ class CalendarTool(private val context: Context) : Tool {
         "week"     -> "this week"
         "next"     -> "coming up"
         else       -> "today"
+    }
+
+    private fun createEvent(transcript: String): ToolResult {
+        // Try ReminderParser for time extraction
+        val parsed = ReminderParser.parse(transcript)
+        val startMs = parsed?.triggerAtMs ?: run {
+            // Fall back: look for day-of-week + optional time in transcript
+            extractEventTime(transcript) ?: return ToolResult.Failure(
+                "I couldn't work out when to add that. Try saying something like " +
+                "\"add dentist appointment Friday at 3pm\"."
+            )
+        }
+        val endMs = startMs + 60 * 60 * 1000L  // default 1-hour duration
+
+        // Extract title: remove leading action words and time expressions
+        val title = extractEventTitle(transcript).ifBlank {
+            return ToolResult.Failure("I didn't catch a title for the event. What should I call it?")
+        }
+
+        // Find primary calendar
+        val calId = primaryCalendarId() ?: return ToolResult.Failure(
+            "No calendar found on this device. Please add a calendar account in Settings."
+        )
+
+        return try {
+            val values = ContentValues().apply {
+                put(CalendarContract.Events.CALENDAR_ID, calId)
+                put(CalendarContract.Events.TITLE, title)
+                put(CalendarContract.Events.DTSTART, startMs)
+                put(CalendarContract.Events.DTEND, endMs)
+                put(CalendarContract.Events.EVENT_TIMEZONE, TimeZone.getDefault().id)
+            }
+            context.contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)
+            val timeFmt = SimpleDateFormat("EEE d MMM 'at' HH:mm", Locale.getDefault())
+            ToolResult.Success("Done. Added \"$title\" on ${timeFmt.format(startMs)}.")
+        } catch (e: SecurityException) {
+            ToolResult.Failure("I don't have permission to write to your calendar.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Calendar insert failed: ${e.message}", e)
+            ToolResult.Failure("I couldn't add that event.")
+        }
+    }
+
+    private fun primaryCalendarId(): Long? {
+        val projection = arrayOf(CalendarContract.Calendars._ID)
+        val selection  = "${CalendarContract.Calendars.VISIBLE} = 1"
+        return context.contentResolver.query(
+            CalendarContract.Calendars.CONTENT_URI, projection, selection, null,
+            "${CalendarContract.Calendars._ID} ASC"
+        )?.use { c -> if (c.moveToFirst()) c.getLong(0) else null }
+    }
+
+    private fun extractEventTitle(transcript: String): String {
+        val lower = transcript.lowercase()
+        // Remove leading action phrases
+        val stripped = lower
+            .replace(Regex("""^(?:add|create|schedule|book|put|set up)\s+(?:a\s+|an\s+|me\s+in\s+for\s+a?\s*)?"""), "")
+            .replace(Regex("""\s+(?:to|on|in|at|this|next|for)\s+(?:my\s+)?calendar.*$"""), "")
+            .replace(Regex("""\s+(?:on|for|at|this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|\d{1,2}).*$"""), "")
+            .replace(Regex("""\s+(?:at|in)\s+\d.*$"""), "")
+            .trim()
+        return stripped.replaceFirstChar { it.uppercaseChar() }
+    }
+
+    private val DAY_NAMES = mapOf(
+        "monday" to Calendar.MONDAY, "tuesday" to Calendar.TUESDAY,
+        "wednesday" to Calendar.WEDNESDAY, "thursday" to Calendar.THURSDAY,
+        "friday" to Calendar.FRIDAY, "saturday" to Calendar.SATURDAY,
+        "sunday" to Calendar.SUNDAY
+    )
+
+    private fun extractEventTime(transcript: String): Long? {
+        val lower = transcript.lowercase()
+        val cal   = Calendar.getInstance()
+
+        // Advance to the named weekday (next occurrence)
+        val matchedDay = DAY_NAMES.entries.firstOrNull { (name, _) -> lower.contains(name) }
+        if (matchedDay != null) {
+            val targetDow = matchedDay.value
+            var diff = targetDow - cal.get(Calendar.DAY_OF_WEEK)
+            if (diff <= 0) diff += 7
+            cal.add(Calendar.DAY_OF_YEAR, diff)
+        } else if (lower.contains("tomorrow")) {
+            cal.add(Calendar.DAY_OF_YEAR, 1)
+        }
+
+        // Set time from hh:mm am/pm or 24h
+        val clockMatch = Regex("""(\d{1,2})(?::(\d{2}))?\s*(am|pm)""", RegexOption.IGNORE_CASE).find(lower)
+        if (clockMatch != null) {
+            var hour = clockMatch.groupValues[1].toInt()
+            val min  = clockMatch.groupValues[2].toIntOrNull() ?: 0
+            val ampm = clockMatch.groupValues[3].lowercase()
+            if (ampm == "pm" && hour < 12) hour += 12
+            if (ampm == "am" && hour == 12) hour = 0
+            cal.set(Calendar.HOUR_OF_DAY, hour)
+            cal.set(Calendar.MINUTE, min)
+            cal.set(Calendar.SECOND, 0)
+            cal.set(Calendar.MILLISECOND, 0)
+            return cal.timeInMillis
+        }
+
+        // Only return if we matched a day — no time = assume 9am
+        return if (matchedDay != null || lower.contains("tomorrow")) {
+            cal.set(Calendar.HOUR_OF_DAY, 9)
+            cal.set(Calendar.MINUTE, 0)
+            cal.set(Calendar.SECOND, 0)
+            cal.set(Calendar.MILLISECOND, 0)
+            cal.timeInMillis
+        } else null
     }
 
     private fun queryEvents(startMs: Long, endMs: Long, limitToOne: Boolean): List<String> {

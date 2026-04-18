@@ -96,9 +96,14 @@ class TtsEngine(context: Context) : TextToSpeech.OnInitListener {
      */
     suspend fun playChime() {
         val chime = buildChime() ?: return
-        chime.play()
-        delay(600L)
-        chime.release()
+        try {
+            chime.play()
+            delay(600L)
+        } finally {
+            // Always release the AudioTrack — delay() throws on coroutine
+            // cancellation, which would otherwise leave the hardware claim open.
+            try { chime.release() } catch (_: Exception) {}
+        }
     }
 
     /**

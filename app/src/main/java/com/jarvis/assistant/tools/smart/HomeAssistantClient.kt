@@ -3,6 +3,8 @@ package com.jarvis.assistant.tools.smart
 import android.util.Log
 import com.jarvis.assistant.llm.NetworkClient
 import com.google.gson.annotations.SerializedName
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Thin REST client for a local Home Assistant instance.
@@ -25,25 +27,44 @@ class HomeAssistantClient(
         "Content-Type"  to "application/json"
     )
 
-    @Volatile private var entityCache: Pair<Long, List<HaEntity>>? = null
+    private val cacheMutex = Mutex()
+    private var entityCacheTs: Long = 0L
+    private var entityCacheData: List<HaEntity> = emptyList()
 
-    suspend fun getStates(): List<HaEntity> {
-        val cached = entityCache
-        if (cached != null && System.currentTimeMillis() - cached.first < CACHE_TTL_MS) {
-            return cached.second
+    suspend fun getStates(): List<HaEntity> = cacheMutex.withLock {
+        if (System.currentTimeMillis() - entityCacheTs < CACHE_TTL_MS) {
+            return@withLock entityCacheData
         }
-        return try {
+        return@withLock try {
             val url  = "${baseUrl.trimEnd('/')}/api/states"
             val body = NetworkClient.get(url, headers)
             val raw  = NetworkClient.gson.fromJson(body, Array<HaStateRaw>::class.java)
             val entities = raw.mapNotNull { it.toEntity() }
-            entityCache = Pair(System.currentTimeMillis(), entities)
+                .filter { it.state != "unavailable" }
+            entityCacheTs = System.currentTimeMillis()
+            entityCacheData = entities
             Log.d(TAG, "Loaded ${entities.size} HA entities")
             entities
         } catch (e: Exception) {
             Log.w(TAG, "Failed to fetch HA states: ${e.message}")
             emptyList()
         }
+    }
+
+    suspend fun getEntityState(entityId: String): HaEntity? = try {
+        val url  = "${baseUrl.trimEnd('/')}/api/states/$entityId"
+        val body = NetworkClient.get(url, headers)
+        NetworkClient.gson.fromJson(body, HaStateRaw::class.java)?.toEntity()
+    } catch (e: Exception) {
+        Log.w(TAG, "Failed to get state for $entityId: ${e.message}")
+        null
+    }
+
+    suspend fun testConnection(): Boolean = try {
+        NetworkClient.get("${baseUrl.trimEnd('/')}/api/", headers)
+        true
+    } catch (e: Exception) {
+        false
     }
 
     suspend fun callService(
@@ -53,8 +74,8 @@ class HomeAssistantClient(
         extras: Map<String, Any> = emptyMap()
     ) {
         try {
-            val url      = "${baseUrl.trimEnd('/')}/api/services/$domain/$service"
-            val payload  = buildMap<String, Any> {
+            val url     = "${baseUrl.trimEnd('/')}/api/services/$domain/$service"
+            val payload = buildMap<String, Any> {
                 put("entity_id", entityId)
                 putAll(extras)
             }

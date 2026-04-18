@@ -70,7 +70,12 @@ class AudioRecordingManager(val context: Context) {
     fun start(): RecordingResult {
         if (state == RecordingState.RECORDING) {
             Log.d(TAG, "Already recording — returning AlreadyRecording")
-            return RecordingResult.AlreadyRecording(activeSession!!)
+            val session = activeSession
+            if (session != null) return RecordingResult.AlreadyRecording(session)
+            // Inconsistent state — RECORDING with no active session.  Reset and
+            // fall through so the caller gets a fresh recording rather than an NPE.
+            Log.w(TAG, "RECORDING state with null activeSession — resetting to IDLE")
+            state = RecordingState.IDLE
         }
 
         val file = RecordingFileStore.createRecordingFile(context)
@@ -90,7 +95,7 @@ class AudioRecordingManager(val context: Context) {
             Log.e(TAG, "Failed to start recording: ${e.message}", e)
             releaseRecorder()
             state = RecordingState.IDLE
-            RecordingResult.Failure(e.message ?: "Recording failed to start")
+            RecordingResult.Failure("Recording failed to start")
         }
     }
 

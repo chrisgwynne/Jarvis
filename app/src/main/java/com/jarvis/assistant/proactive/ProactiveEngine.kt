@@ -56,7 +56,13 @@ class ProactiveEngine(
     private val speechSource: SpeechStateSource,
     private val dispatcher: ProactiveDispatcher,
     private val notificationSource: NotificationContextSource? = null,
-    private val brainPredictionSource: BrainPredictionSource? = null
+    private val brainPredictionSource: BrainPredictionSource? = null,
+    /**
+     * Supplies the current driving state on each tick.  Optional to keep
+     * tests and legacy callers simple — defaults to "not driving" when not
+     * wired up.  JarvisRuntime passes `drivingModeManager::isDriving`.
+     */
+    private val isDrivingProvider: () -> Boolean = { false }
 ) {
 
     companion object {
@@ -222,7 +228,8 @@ class ProactiveEngine(
             lastNotificationApp           = notificationSource?.getLastNotificationApp(),
             topPredictionDescription      = topPrediction?.description,
             topPredictionScore            = topPrediction?.score ?: 0f,
-            predictionKnowledgeContext    = topPrediction?.knowledgeContext
+            predictionKnowledgeContext    = topPrediction?.knowledgeContext,
+            isDriving                     = isDrivingProvider()
         )
     }
 
@@ -237,6 +244,16 @@ class ProactiveEngine(
             is ProactiveAction.SpeakAction   -> action.dedupeKey
             is ProactiveAction.PassiveAction -> action.dedupeKey
             ProactiveAction.NoAction         -> return
+        }
+        // If a prior verdict is still unresolved at dispatch time, the user
+        // didn't engage with it — otherwise the accept branch of
+        // resolvePendingVerdict would have already cleared it.  Count it as
+        // ignored before overwriting so adaptation isn't lost.
+        pendingVerdict?.let { prior ->
+            if (prior.dedupeKey != key) {
+                cooldownStore.markIgnored(prior.dedupeKey)
+                Log.d(TAG, "Displaced verdict ignored: ${prior.dedupeKey}")
+            }
         }
         cooldownStore.markSurfaced(key)
         pendingVerdict = PendingVerdict(key, System.currentTimeMillis())

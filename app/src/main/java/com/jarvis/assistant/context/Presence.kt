@@ -1,7 +1,6 @@
 package com.jarvis.assistant.context
 
 import java.time.Instant
-import java.time.LocalTime
 import java.time.ZoneId
 
 /**
@@ -39,6 +38,7 @@ data class Presence(
      */
     fun allowsSoftSuggestions(): Boolean = when {
         activity == ActivityMode.ACTIVE        -> false
+        activity == ActivityMode.DRIVING       -> false
         activity == ActivityMode.WINDING_DOWN  -> false
         timePhase == TimePhase.NIGHT           -> false
         else                                   -> true
@@ -105,14 +105,6 @@ data class Presence(
             return Presence(phase, activity, minutesIdle)
         }
 
-        /** Convenience using only [LocalTime.now] and no interaction data. */
-        fun nowBasic(): Presence = compute(
-            nowMs              = System.currentTimeMillis(),
-            lastInteractionMs  = null,
-            isJarvisSpeaking   = false,
-            isJarvisListening  = false,
-            isDriving          = false
-        )
     }
 }
 

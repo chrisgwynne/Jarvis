@@ -91,6 +91,30 @@ class ConversationStore(private val context: Context) : CompressibleStore {
     /** Return the last [n] user/assistant messages (no system prompt). */
     fun getRecentMessages(n: Int): List<Message> = history.takeLast(n).toList()
 
+    /**
+     * Replace the most recent assistant message with [content].  No-op if the
+     * last message isn't from the assistant or history is empty.  Used after
+     * an interrupted response to rewrite what the LLM thinks it said so the
+     * next turn doesn't see the unspoken tail as part of history.
+     */
+    fun replaceLastAssistant(content: String) {
+        val last = history.lastOrNull() ?: return
+        if (last.role != "assistant") return
+        history.removeLast()
+        history.addLast(Message(role = "assistant", content = content))
+    }
+
+    /**
+     * Drop the most recent message if it's from the assistant.  Used at the
+     * start of an interrupted-response resume so the LLM can stream a fresh
+     * continuation without a stale assistant turn sitting before it.
+     */
+    fun dropLastAssistant() {
+        val last = history.lastOrNull() ?: return
+        if (last.role != "assistant") return
+        history.removeLast()
+    }
+
     val isEmpty: Boolean get() = history.isEmpty()
     fun clear() { history.clear(); rollingContext = null }
     override val size: Int get() = history.size

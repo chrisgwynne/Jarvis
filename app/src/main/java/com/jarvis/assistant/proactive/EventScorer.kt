@@ -38,6 +38,15 @@ class EventScorer(
 
     companion object {
         private const val TAG = "EventScorer"
+
+        /**
+         * Maximum ignore count that contributes to cooldown escalation.  Past
+         * this point the cooldown stops growing — pattern-ignored suggestions
+         * are already effectively suppressed, and an ever-growing multiplier
+         * would make a one-off accepted suggestion (e.g. during travel)
+         * invisible for weeks.
+         */
+        private const val MAX_IGNORE_ESCALATION_STEPS = 5
     }
 
     // ── Public data class ─────────────────────────────────────────────────────
@@ -83,9 +92,13 @@ class EventScorer(
 
         // Step 2 — cooldown / repetition penalty
         // Cooldown stretches with each past ignore of this dedupeKey so that
-        // suggestions the user doesn't engage with back off over time.
+        // suggestions the user doesn't engage with back off over time.  The
+        // count is capped so the cooldown can't grow unbounded for keys the
+        // user permanently ignores (e.g. night-time charging prompts when
+        // the user is travelling for a week).
         val baseCooldownMs = cooldownMsForType(event.type)
         val ignoreCount    = cooldownStore.ignoreCount(event.dedupeKey)
+            .coerceAtMost(MAX_IGNORE_ESCALATION_STEPS)
         val cooldownMs     = (baseCooldownMs *
             (1f + ignoreCount * config.ignoreEscalationFactor)).toLong()
         val msSinceLast = cooldownStore.msSinceSurfaced(event.dedupeKey)

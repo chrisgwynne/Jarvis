@@ -130,7 +130,7 @@ class EventGenerator(private val config: ProactiveConfig) {
             minutesAway < 10L -> "You've got something in about $minutesAway minutes."
             else              -> "Reminder in about $minutesAway minutes."
         }
-        val titleLabel = if (minutesAway == 1L) "in a minute" else "in $minutesAway min"
+        val titleLabel = if (minutesAway <= 1L) "in a minute" else "in $minutesAway min"
 
         // Bucket to the nearest minute (truncate to whole minutes of epoch)
         val bucketKey = nextMs / 60_000L * 60_000L

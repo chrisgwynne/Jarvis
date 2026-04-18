@@ -367,7 +367,8 @@ class JarvisRuntime(
                 ttsEngine            = ttsEngine,
                 onPassiveAction      = { action -> Log.d(TAG, "Proactive passive: ${action.title}") },
                 voiceResponseEnabled = { settings.voiceResponse }
-            )
+            ),
+            isDrivingProvider    = { drivingModeManager.isDriving }
         )
 
         // Conversational follow-up engine
@@ -1962,15 +1963,20 @@ class JarvisRuntime(
             return
         }
 
+        // Drop the stale full-response assistant turn from history so the
+        // next stream's auto-persist doesn't leave two assistant entries
+        // back-to-back; we'll put back a merged entry once the resume
+        // stream completes.
+        val spoken = resumable.spokenSoFar.trim()
+        llmRouter.conversationStore.dropLastAssistant()
+
         val history = llmRouter.conversationStore.getContextMessages()
             .filter { it.role != "system" }
             .toMutableList()
-        // Drop the stale full-response assistant turn (what the LLM thinks it
-        // said) — we're about to replace it with what the user actually heard.
-        if (history.lastOrNull()?.role == "assistant") {
-            history.removeAt(history.lastIndex)
-        }
-        history.add(Message("assistant", resumable.spokenSoFar.trim()))
+        // Inject what the user actually heard as an assistant turn in the
+        // LLM's view of history, then a brief synthetic user cue.  Only the
+        // LLM sees these — they do not touch ConversationStore.
+        history.add(Message("assistant", spoken))
         history.add(
             Message(
                 "user",
@@ -2018,6 +2024,10 @@ class JarvisRuntime(
                 val formatted = ResponseFormatter.format(responseText)
                 memoryWriter.writeTurn(sessionId, "assistant", formatted)
                 DeviceStateStore.update { copy(lastAssistantResponse = formatted) }
+                // Merge the just-streamed resume with the spoken prefix so
+                // conversation history has one assistant turn, not two.
+                val merged = if (spoken.isBlank()) formatted else "$spoken $formatted"
+                llmRouter.conversationStore.replaceLastAssistant(merged)
             }
         } catch (e: CancellationException) {
             throw e

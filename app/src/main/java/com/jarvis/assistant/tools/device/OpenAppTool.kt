@@ -32,14 +32,22 @@ class OpenAppTool(
     // fall through to the LLM instead of failing.
     private val REGEX   = Regex("""(?:open|launch|start|play)\s+(.+)""", RegexOption.IGNORE_CASE)
     private val PLAY_RE = Regex("""^play\s+""", RegexOption.IGNORE_CASE)
-    private val YES_RE  = Regex("""^\s*(yes|yeah|yep|yup|correct|right|sure|ok(?:ay)?|do it|go ahead|please do|that's it|thats it)\b.*""", RegexOption.IGNORE_CASE)
-    private val NO_RE   = Regex("""^\s*(no|nope|nah|cancel|stop|don't|dont|never mind|nevermind)\b.*""", RegexOption.IGNORE_CASE)
+    // Short-confirmation regexes: deliberately anchored and with no trailing
+    // clause, because words like "right", "sure", "ok" show up at the start
+    // of many commands ("right now, open maps", "sure, set a timer at 5").
+    // Treating those as a yes to a pending "Did you mean …?" would hijack
+    // the real command.  We only claim confirmations when the whole utterance
+    // is one of these short forms.
+    private val YES_RE  = Regex("""^\s*(yes|yeah|yep|yup|correct|sure|ok(?:ay)?|do it|go ahead|please do|that's it|thats it|right one)\s*\.?\s*$""", RegexOption.IGNORE_CASE)
+    private val NO_RE   = Regex("""^\s*(no|nope|nah|cancel|don't|dont|never mind|nevermind|wrong one|not that)\s*\.?\s*$""", RegexOption.IGNORE_CASE)
 
     override fun matches(transcript: String): ToolInput? {
         val trimmed = transcript.trim()
 
         // Confirmation path — only claim if there's a pending "Did you mean …?"
-        if (pendingConfirmation != null) {
+        // and the new utterance is a short yes/no (≤4 words) so we don't
+        // swallow commands that happen to start with "right" or "sure".
+        if (pendingConfirmation != null && trimmed.split(Regex("\\s+")).size <= 4) {
             if (YES_RE.matches(trimmed)) {
                 return ToolInput(transcript, mapOf("confirm" to "yes"))
             }

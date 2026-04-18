@@ -115,7 +115,7 @@ class DecisionEngine(
                 lastInteractionMs = snapshot.lastUserInteractionTimeMillis,
                 isJarvisSpeaking  = snapshot.isJarvisSpeaking,
                 isJarvisListening = snapshot.isJarvisListening,
-                isDriving         = false  // driving snapshot bit lives outside ContextSnapshot; not needed here
+                isDriving         = snapshot.isDriving
             )
             if (!presence.allowsSoftSuggestions()) {
                 Log.d(

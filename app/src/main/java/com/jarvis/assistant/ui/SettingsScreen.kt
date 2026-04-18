@@ -12,6 +12,8 @@ import com.jarvis.assistant.ui.settings.screens.ActionsAppsSettingsScreen
 import com.jarvis.assistant.ui.settings.screens.AdvancedSettingsScreen
 import com.jarvis.assistant.ui.settings.screens.AppearanceSettingsScreen
 import com.jarvis.assistant.ui.settings.screens.ConversationSettingsScreen
+import com.jarvis.assistant.ui.settings.screens.FaqSettingsScreen
+import com.jarvis.assistant.ui.settings.screens.HomeAssistantSettingsScreen
 import com.jarvis.assistant.ui.settings.screens.MemorySettingsScreen
 import com.jarvis.assistant.ui.settings.screens.NotificationsSettingsScreen
 import com.jarvis.assistant.ui.settings.screens.PrivacySettingsScreen
@@ -62,6 +64,9 @@ fun SettingsScreen(
         composable(SettingsCategory.ActionsApps.route) {
             ActionsAppsSettingsScreen(vm = vm, onBack = popToRoot, onClose = onBack)
         }
+        composable(SettingsCategory.HomeAssistant.route) {
+            HomeAssistantSettingsScreen(onBack = popToRoot, onClose = onBack)
+        }
         composable(SettingsCategory.Notifications.route) {
             NotificationsSettingsScreen(onBack = popToRoot, onClose = onBack)
         }
@@ -73,6 +78,9 @@ fun SettingsScreen(
         }
         composable(SettingsCategory.Advanced.route) {
             AdvancedSettingsScreen(vm = vm, onBack = popToRoot, onClose = onBack)
+        }
+        composable(SettingsCategory.Faq.route) {
+            FaqSettingsScreen(onBack = popToRoot, onClose = onBack)
         }
     }
 }

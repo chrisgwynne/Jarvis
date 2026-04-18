@@ -1,8 +1,10 @@
 package com.jarvis.assistant.ui.settings
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.ChatBubbleOutline
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.Palette
@@ -57,6 +59,12 @@ internal enum class SettingsCategory(
         icon        = Icons.Filled.Shield,
         route       = "settings/actions",
     ),
+    HomeAssistant(
+        title       = "Home Assistant",
+        description = "Connect Jarvis to your smart home",
+        icon        = Icons.Filled.Home,
+        route       = "settings/homeassistant",
+    ),
     Notifications(
         title       = "Notifications",
         description = "Alerts and status messages",
@@ -80,6 +88,12 @@ internal enum class SettingsCategory(
         description = "LLM provider, keys and remote backend",
         icon        = Icons.Filled.Tune,
         route       = "settings/advanced",
+    ),
+    Faq(
+        title       = "FAQ & Commands",
+        description = "What Jarvis can do and how to ask",
+        icon        = Icons.AutoMirrored.Filled.HelpOutline,
+        route       = "settings/faq",
     ),
 }
 

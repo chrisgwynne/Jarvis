@@ -1,6 +1,7 @@
 package com.jarvis.assistant.proactive
 
 import android.util.Log
+import com.jarvis.assistant.context.Presence
 import java.time.Instant
 import java.time.ZoneId
 
@@ -91,19 +92,36 @@ class DecisionEngine(
         // Step 3b — quiet hours: suppress everything except critical events.
         // Critical = low battery or a reminder due inside reminderUrgentMs.
         val top = valid.first()
-        if (isInQuietHours(snapshot.currentTimeMillis)) {
-            val critical = when (top.event.type) {
-                ProactiveEventType.LOW_BATTERY -> true
-                ProactiveEventType.UPCOMING_REMINDER -> {
-                    val next = snapshot.nextReminderAtMillis
-                    next != null && (next - snapshot.currentTimeMillis) <= config.reminderUrgentMs
-                }
-                else -> false
-            }
-            if (!critical) {
+        val critical = top.event.type == ProactiveEventType.LOW_BATTERY || run {
+            if (top.event.type != ProactiveEventType.UPCOMING_REMINDER) return@run false
+            val next = snapshot.nextReminderAtMillis
+            next != null && (next - snapshot.currentTimeMillis) <= config.reminderUrgentMs
+        }
+
+        if (isInQuietHours(snapshot.currentTimeMillis) && !critical) {
+            Log.d(
+                TAG,
+                "Quiet hours — suppressing ${top.event.type} / ${top.event.dedupeKey}"
+            )
+            return ProactiveAction.NoAction
+        }
+
+        // Step 3c — presence gate: soft suggestions (PASSIVE level) defer when
+        // the user is mid-conversation or winding down.  Critical events still
+        // go through even if the moment is active.
+        if (top.interruptLevel == InterruptLevel.PASSIVE && !critical) {
+            val presence = Presence.compute(
+                nowMs             = snapshot.currentTimeMillis,
+                lastInteractionMs = snapshot.lastUserInteractionTimeMillis,
+                isJarvisSpeaking  = snapshot.isJarvisSpeaking,
+                isJarvisListening = snapshot.isJarvisListening,
+                isDriving         = false  // driving snapshot bit lives outside ContextSnapshot; not needed here
+            )
+            if (!presence.allowsSoftSuggestions()) {
                 Log.d(
                     TAG,
-                    "Quiet hours — suppressing ${top.event.type} / ${top.event.dedupeKey}"
+                    "Presence ${presence.activity}/${presence.timePhase} — " +
+                    "deferring soft ${top.event.type}"
                 )
                 return ProactiveAction.NoAction
             }

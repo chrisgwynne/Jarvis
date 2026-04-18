@@ -1,6 +1,7 @@
 package com.jarvis.assistant.prompt
 
 import com.jarvis.assistant.context.ContextEngine
+import com.jarvis.assistant.context.Presence
 import com.jarvis.assistant.knowledge.KnowledgeQueryEngine
 import com.jarvis.assistant.llm.Message
 import com.jarvis.assistant.memory.MemoryRetriever
@@ -56,7 +57,8 @@ class PromptAssembler(
         userQuery           : String,
         conversationHistory : List<Message>,
         maxMemories         : Int = 3,
-        speakerContext      : SpeakerSessionContext? = null
+        speakerContext      : SpeakerSessionContext? = null,
+        presence            : Presence? = null
     ): List<Message> {
         val ctx = contextEngine.build()
 
@@ -70,7 +72,7 @@ class PromptAssembler(
         }
 
         val system = buildSystemPrompt(
-            contextFragment   = contextEngine.toPromptFragment(ctx),
+            contextFragment   = contextEngine.toPromptFragment(ctx, presence),
             profileFragment   = profileFrag,
             memories          = memories,
             speakerContext    = speakerContext,
@@ -189,6 +191,14 @@ One short sentence, no alert tone, no system tone.
 
 FAILURE
 When something doesn't work, say so briefly and move on. No "I encountered an error while attempting to…" — just "That didn't work." or the specific short reason.
+
+PRESENCE
+You hold a rolling sense of the current moment (see "Current moment:" line in the context fragment). Use it naturally:
+- Late night → shorter replies, no suggestions, no small talk.
+- Mid-conversation → don't re-introduce yourself, don't reset context.
+- Evening / winding down → quieter, fewer follow-ups.
+- Active exchange → keep threads continuous, no resets between turns.
+Never cite the presence fragment explicitly. Let it shape tone and brevity silently.
 
 TONE
 Casual, but not sloppy. Direct, not robotic. Confident, not over-friendly.

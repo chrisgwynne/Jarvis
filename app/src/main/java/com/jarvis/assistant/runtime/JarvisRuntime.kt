@@ -17,6 +17,7 @@ import com.jarvis.assistant.call.integration.ContactsPhoneLookupResolver
 import com.jarvis.assistant.call.integration.TelecomCallActionExecutor
 import com.jarvis.assistant.call.integration.TelephonyCallMonitor
 import com.jarvis.assistant.context.ContextEngine
+import com.jarvis.assistant.context.Presence
 import com.jarvis.assistant.location.CurrentLocationProvider
 import com.jarvis.assistant.core.state.JarvisState
 import com.jarvis.assistant.core.state.JarvisStateMachine
@@ -1710,7 +1711,11 @@ class JarvisRuntime(
             llmRouter.conversationStore.addMessage("user", transcript)
             val history = llmRouter.conversationStore.getContextMessages()
                 .filter { it.role != "system" }
-            val messages = promptAssembler.assemble(transcript, history, maxMemories = 2, speakerContext = sessionSpeaker)
+            val messages = promptAssembler.assemble(
+                transcript, history, maxMemories = 2,
+                speakerContext = sessionSpeaker,
+                presence       = currentPresence()
+            )
             llmRouter.completeWithMessages(messages)
 
         } catch (e: CancellationException) {
@@ -1762,7 +1767,9 @@ class JarvisRuntime(
             val history  = llmRouter.conversationStore.getContextMessages()
                 .filter { it.role != "system" }
             val messages = promptAssembler.assemble(
-                transcript, history, maxMemories = 4, speakerContext = sessionSpeaker
+                transcript, history, maxMemories = 4,
+                speakerContext = sessionSpeaker,
+                presence       = currentPresence()
             )
 
             // ── Agentic tool chaining (up to MAX_TOOL_HOPS per turn) ──────────────
@@ -1977,7 +1984,8 @@ class JarvisRuntime(
             userQuery           = resumable.userTranscript,
             conversationHistory = history,
             maxMemories         = 2,
-            speakerContext      = sessionSpeaker
+            speakerContext      = sessionSpeaker,
+            presence            = currentPresence()
         )
 
         currentSpokenSoFar    = ""
@@ -2049,6 +2057,24 @@ class JarvisRuntime(
 
         DeviceStateStore.update { copy(ttsPlaying = false) }
         LatencyTracker.mark("PIPELINE_DONE")
+    }
+
+    /**
+     * Compute a fresh [Presence] from the same signals the proactive engine
+     * already observes.  Called before each LLM assembly so the system prompt
+     * carries a current-moment line ("evening, user winding down" etc.) —
+     * this is how continuity across turns is expressed to the model.
+     */
+    private fun currentPresence(): Presence {
+        val speechState = speechStateSource.getSpeechState()
+        val lastUser   = lastSeenTracker.lastUserTurnMs.takeIf { it > 0L }
+        return Presence.compute(
+            nowMs             = System.currentTimeMillis(),
+            lastInteractionMs = lastUser,
+            isJarvisSpeaking  = speechState.isSpeaking,
+            isJarvisListening = speechState.isListening,
+            isDriving         = drivingModeManager.isDriving
+        )
     }
 
     private fun backToWakeWord() {

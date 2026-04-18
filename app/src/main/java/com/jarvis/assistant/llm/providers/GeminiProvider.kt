@@ -24,7 +24,7 @@ import com.jarvis.assistant.llm.NetworkClient
  *   role "user"      → role "user" in contents
  *   role "assistant" → role "model" in contents
  */
-class GeminiProvider(private val apiKey: String) : LlmProvider {
+class GeminiProvider(private val apiKey: String, private val maxTokens: Int = 1200) : LlmProvider {
 
     override val name = "Gemini"
 
@@ -58,7 +58,7 @@ class GeminiProvider(private val apiKey: String) : LlmProvider {
                     GeminiSystemInstruction(parts = listOf(GeminiPart(text = systemText)))
                     else null,
                 contents          = contents,
-                generationConfig  = GeminiGenConfig(maxOutputTokens = 200)
+                generationConfig  = GeminiGenConfig(maxOutputTokens = maxTokens)
             )
         )
 

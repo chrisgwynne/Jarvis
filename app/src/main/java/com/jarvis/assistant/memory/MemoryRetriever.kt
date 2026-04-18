@@ -10,19 +10,16 @@ import kotlinx.coroutines.coroutineScope
 /**
  * MemoryRetriever — finds relevant memories for a given query.
  *
- * SCORING MODEL (no embeddings required — runs fully on-device):
- *   finalScore = keywordScore×0.45 + recencyScore×0.35 + importanceScore×0.15 + accessScore×0.05
- *
- *   keywordScore  — fraction of query keywords found in the entry's keyword list
- *   recencyScore  — exponential decay by age (1.0 within 1h → 0.05 after 30 days)
- *   importanceScore — stored per-entry [0.0–1.0]
- *   accessScore   — capped at 1.0, boosted by repeated access
- *
- * USAGE:
- *   val memories = retriever.retrieveRelevant("what did I ask yesterday")
- *   // Inject memory.content into the system prompt as hidden context.
+ * SCORING MODEL:
+ *   When [embeddingEngine] is loaded (MiniLM TFLite asset present):
+ *     finalScore = semantic×0.50 + recency×0.30 + importance×0.15 + access×0.05
+ *   Fallback (no model):
+ *     finalScore = keyword×0.45 + recency×0.35 + importance×0.15 + access×0.05
  */
-class MemoryRetriever(private val dao: MemoryDao) {
+class MemoryRetriever(
+    private val dao: MemoryDao,
+    private val embeddingEngine: MemoryEmbeddingEngine? = null
+) {
 
     companion object {
         private const val TAG = "MemoryRetriever"
@@ -55,11 +52,20 @@ class MemoryRetriever(private val dao: MemoryDao) {
             }
         }.toList()
 
+        // Optionally embed the query for semantic similarity scoring
+        val queryEmbedding = embeddingEngine?.embed(query)
+
         val scored = candidates.map { entry ->
-            val kw       = scoreKeywords(entry.keywords.split(","), tokens)
-            val recency  = recencyScore(entry.createdAt)
-            val access   = minOf(entry.accessCount / 10f, 1f)
-            val total    = kw * 0.45f + recency * 0.35f + entry.importanceScore * 0.15f + access * 0.05f
+            val recency = recencyScore(entry.createdAt)
+            val access  = minOf(entry.accessCount / 10f, 1f)
+            val total   = if (queryEmbedding != null && entry.embedding != null) {
+                val entryEmb = MemoryEmbeddingEngine.fromByteArray(entry.embedding)
+                val semantic = MemoryEmbeddingEngine.cosineSimilarity(queryEmbedding, entryEmb)
+                semantic * 0.50f + recency * 0.30f + entry.importanceScore * 0.15f + access * 0.05f
+            } else {
+                val kw = scoreKeywords(entry.keywords.split(","), tokens)
+                kw * 0.45f + recency * 0.35f + entry.importanceScore * 0.15f + access * 0.05f
+            }
             Pair(entry, total)
         }
 

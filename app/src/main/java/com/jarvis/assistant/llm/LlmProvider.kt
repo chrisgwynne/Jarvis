@@ -1,5 +1,6 @@
 package com.jarvis.assistant.llm
 
+import com.jarvis.assistant.tools.framework.ToolSchema
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
@@ -12,6 +13,16 @@ data class Message(
     val role: String,
     val content: String
 )
+
+/**
+ * Result from an LLM call that may include a tool call request.
+ */
+sealed class LlmResult {
+    /** Normal text response from the model. */
+    data class Text(val content: String) : LlmResult()
+    /** The model wants to call a tool. */
+    data class ToolCall(val toolName: String, val argsJson: String) : LlmResult()
+}
 
 /**
  * LlmProvider — the common interface every AI backend must implement.

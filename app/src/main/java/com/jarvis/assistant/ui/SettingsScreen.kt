@@ -30,6 +30,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import com.jarvis.assistant.audio.TtsEngine
 import com.jarvis.assistant.remote.openclaw.OpenClawConnectionStatus
 import com.jarvis.assistant.speaker.db.PersonRecord
@@ -54,11 +56,15 @@ fun SettingsScreen(
     vm: SettingsViewModel = viewModel()
 ) {
     val context       = LocalContext.current
-    val provider      by vm.llmProvider.collectAsStateWithLifecycle()
-    val apiKey        by vm.apiKey.collectAsStateWithLifecycle()
-    val ollamaUrl     by vm.ollamaBaseUrl.collectAsStateWithLifecycle()
-    val miniMaxUrl    by vm.miniMaxBaseUrl.collectAsStateWithLifecycle()
-    val miniMaxModel  by vm.miniMaxModel.collectAsStateWithLifecycle()
+    val provider          by vm.llmProvider.collectAsStateWithLifecycle()
+    val apiKey            by vm.apiKey.collectAsStateWithLifecycle()
+    val ollamaUrl         by vm.ollamaBaseUrl.collectAsStateWithLifecycle()
+    val miniMaxUrl        by vm.miniMaxBaseUrl.collectAsStateWithLifecycle()
+    val miniMaxModel      by vm.miniMaxModel.collectAsStateWithLifecycle()
+    val maxTokens         by vm.maxTokens.collectAsStateWithLifecycle()
+    val fallbackProvider  by vm.fallbackProvider.collectAsStateWithLifecycle()
+    val haBaseUrl         by vm.haBaseUrl.collectAsStateWithLifecycle()
+    val haApiToken        by vm.haApiToken.collectAsStateWithLifecycle()
     val wakeWord         by vm.wakeWord.collectAsStateWithLifecycle()
     val voiceResponse    by vm.voiceResponse.collectAsStateWithLifecycle()
     val ttsVoiceName     by vm.ttsVoiceName.collectAsStateWithLifecycle()
@@ -79,10 +85,12 @@ fun SettingsScreen(
     val openClawTimeoutMs  by vm.openClawTimeoutMs.collectAsStateWithLifecycle()
     val openClawStatus     by vm.openClawConnectionStatus.collectAsStateWithLifecycle()
 
-    var apiKeyVisible    by remember { mutableStateOf(false) }
-    var providerExpanded by remember { mutableStateOf(false) }
-    var voiceExpanded    by remember { mutableStateOf(false) }
-    var msgChannelExpanded by remember { mutableStateOf(false) }
+    var apiKeyVisible       by remember { mutableStateOf(false) }
+    var providerExpanded    by remember { mutableStateOf(false) }
+    var fallbackExpanded    by remember { mutableStateOf(false) }
+    var voiceExpanded       by remember { mutableStateOf(false) }
+    var msgChannelExpanded  by remember { mutableStateOf(false) }
+    var haTokenVisible      by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -254,6 +262,63 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
+            }
+
+            // Max tokens slider
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Max Response Tokens", color = TextPrimary, fontSize = 15.sp)
+                    Text("$maxTokens", color = Cyan, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                }
+                Slider(
+                    value = maxTokens.toFloat(),
+                    onValueChange = { vm.setMaxTokens(it.toInt()) },
+                    valueRange = 400f..4000f,
+                    steps = 35,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Cyan,
+                        activeTrackColor = Cyan,
+                        inactiveTrackColor = Surface
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "Controls maximum length of each response. 1200 is a good default.",
+                    color = TextMuted, fontSize = 11.sp
+                )
+            }
+
+            // Fallback provider dropdown
+            val fallbackOptions = listOf("") + vm.providers
+            val fallbackLabels  = mapOf("" to "Disabled") + vm.providers.associateWith { it }
+            ExposedDropdownMenuBox(
+                expanded = fallbackExpanded,
+                onExpandedChange = { fallbackExpanded = it }
+            ) {
+                OutlinedTextField(
+                    value = fallbackLabels[fallbackProvider] ?: "Disabled",
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Fallback Provider", color = TextMuted) },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(fallbackExpanded) },
+                    colors = jarvisTextFieldColors(),
+                    modifier = Modifier.fillMaxWidth().menuAnchor()
+                )
+                ExposedDropdownMenu(
+                    expanded = fallbackExpanded,
+                    onDismissRequest = { fallbackExpanded = false },
+                    modifier = Modifier.background(Surface)
+                ) {
+                    fallbackOptions.forEach { p ->
+                        DropdownMenuItem(
+                            text = { Text(fallbackLabels[p] ?: p, color = TextPrimary) },
+                            onClick = { vm.setFallbackProvider(p); fallbackExpanded = false }
+                        )
+                    }
+                }
             }
 
             HorizontalDivider(color = Surface)
@@ -442,6 +507,27 @@ fun SettingsScreen(
 
             // ── Section: Speaker Profiles ─────────────────────────────────
             SectionHeader("Speaker Profiles")
+
+            // Show whether the TFLite neural speaker model is active
+            val context = LocalContext.current
+            val neuralActive = remember {
+                context.assets.list("")?.contains("speaker_encoder.tflite") == true
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("Recognition engine", color = TextMuted, fontSize = 12.sp)
+                Text(
+                    text  = if (neuralActive) "Neural (ECAPA-TDNN)" else "MFCC fallback",
+                    color = if (neuralActive) Color(0xFF00E676) else Color(0xFFFFD600),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
 
             if (speakerProfiles.isEmpty()) {
                 Column(
@@ -707,6 +793,56 @@ fun SettingsScreen(
                     )
                 }
             }
+
+            HorizontalDivider(color = Surface)
+
+            // ── Section: Smart Home ──────────────────────────────────────
+            SectionHeader("Smart Home (Home Assistant)")
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF0D1B2A), androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    "Connect to a local Home Assistant instance to control lights, switches, locks, and thermostats by voice.",
+                    color = TextMuted, fontSize = 11.sp
+                )
+            }
+
+            OutlinedTextField(
+                value = haBaseUrl,
+                onValueChange = vm::setHaBaseUrl,
+                label = { Text("Base URL", color = TextMuted) },
+                placeholder = { Text("http://homeassistant.local:8123", color = TextMuted) },
+                colors = jarvisTextFieldColors(),
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            OutlinedTextField(
+                value = haApiToken,
+                onValueChange = vm::setHaApiToken,
+                label = { Text("Long-Lived Access Token", color = TextMuted) },
+                placeholder = { Text("your-ha-token", color = TextMuted) },
+                visualTransformation = if (haTokenVisible) VisualTransformation.None
+                                       else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    IconButton(onClick = { haTokenVisible = !haTokenVisible }) {
+                        Icon(
+                            if (haTokenVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = "Toggle token visibility",
+                            tint = TextMuted
+                        )
+                    }
+                },
+                colors = jarvisTextFieldColors(),
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
 
             // ── Memory ────────────────────────────────────────────────────────
             Spacer(Modifier.height(24.dp))

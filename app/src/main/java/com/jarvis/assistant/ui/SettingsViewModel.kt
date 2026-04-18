@@ -287,6 +287,18 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── OpenAI OAuth state ─────────────────────────────────────────────────
 
+    private val _maxTokens = MutableStateFlow(store.maxTokens)
+    val maxTokens: StateFlow<Int> = _maxTokens.asStateFlow()
+
+    private val _fallbackProvider = MutableStateFlow(store.fallbackProvider)
+    val fallbackProvider: StateFlow<String> = _fallbackProvider.asStateFlow()
+
+    private val _haBaseUrl = MutableStateFlow(store.haBaseUrl)
+    val haBaseUrl: StateFlow<String> = _haBaseUrl.asStateFlow()
+
+    private val _haApiToken = MutableStateFlow(store.haApiToken)
+    val haApiToken: StateFlow<String> = _haApiToken.asStateFlow()
+
     private val _openAiClientId = MutableStateFlow(store.openAiClientId)
     val openAiClientId: StateFlow<String> = _openAiClientId.asStateFlow()
 
@@ -318,6 +330,10 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun setBraveSearchApiKey(v: String)  { _braveSearchApiKey.value = v; store.braveSearchApiKey = v }
     fun setDefaultMsgChannel(v: String)  { _defaultMsgChannel.value = v; store.defaultMsgChannel = v }
+    fun setMaxTokens(v: Int)         { _maxTokens.value = v; store.maxTokens = v }
+    fun setFallbackProvider(v: String){ _fallbackProvider.value = v; store.fallbackProvider = v }
+    fun setHaBaseUrl(v: String)      { _haBaseUrl.value = v; store.haBaseUrl = v }
+    fun setHaApiToken(v: String)     { _haApiToken.value = v; store.haApiToken = v }
     fun setOpenAiClientId(v: String){ _openAiClientId.value = v; store.openAiClientId = v }
 
     // ── OpenAI OAuth ───────────────────────────────────────────────────────

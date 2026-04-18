@@ -9,10 +9,11 @@ package com.jarvis.assistant.llm.providers
  * Models: moonshot-v1-8k (default) / moonshot-v1-32k / moonshot-v1-128k
  * The 8k model is sufficient for voice assistant interactions.
  */
-class KimiProvider(apiKey: String) : BaseOpenAiProvider(
-    apiKey  = apiKey,
-    baseUrl = "https://api.moonshot.cn/v1",
-    model   = "moonshot-v1-8k"
+class KimiProvider(apiKey: String, maxTokens: Int = 1200) : BaseOpenAiProvider(
+    apiKey    = apiKey,
+    baseUrl   = "https://api.moonshot.cn/v1",
+    model     = "moonshot-v1-8k",
+    maxTokens = maxTokens
 ) {
     override val name = "Kimi"
 }

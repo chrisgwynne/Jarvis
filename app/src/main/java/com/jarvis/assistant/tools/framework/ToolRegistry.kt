@@ -29,6 +29,8 @@ import com.jarvis.assistant.tools.device.TimerTool
 import com.jarvis.assistant.tools.device.VolumeTool
 import com.jarvis.assistant.tools.device.WhatsAppTool
 import com.jarvis.assistant.tools.web.WebSearchTool
+import com.jarvis.assistant.tools.web.WeatherTool
+import com.jarvis.assistant.location.CurrentLocationProvider
 import com.jarvis.assistant.util.SettingsStore
 import com.jarvis.assistant.audio.recording.AudioRecordingManager
 import com.jarvis.assistant.audio.recording.RecordingState
@@ -39,7 +41,10 @@ import com.jarvis.assistant.tools.device.AnalyzeCameraViewTool
 import com.jarvis.assistant.call.OutgoingCallController
 import com.jarvis.assistant.tools.device.AudioRecordingTool
 import com.jarvis.assistant.tools.device.CameraCaptureTool
+import com.jarvis.assistant.tools.device.EmailTool
 import com.jarvis.assistant.tools.device.EndCallTool
+import com.jarvis.assistant.tools.smart.SmartHomeTool
+import com.jarvis.assistant.tools.web.MusicSearchTool
 
 /**
  * ToolRegistry — ordered list of tools; first match wins.
@@ -85,7 +90,8 @@ class ToolRegistry private constructor(
             settings: SettingsStore,
             memoryRetriever: MemoryRetriever? = null,
             reminderRepository: ReminderRepository? = null,
-            outgoingCallController: OutgoingCallController? = null
+            outgoingCallController: OutgoingCallController? = null,
+            locationProvider: CurrentLocationProvider? = null
         ): ToolRegistry {
             val contacts = ContactLookup(context)
             val search   = WebSearch()
@@ -105,12 +111,18 @@ class ToolRegistry private constructor(
                     add(CallTool(context, contacts))
                     add(SmsTool(context, contacts))
                     add(WhatsAppTool(context, contacts))
+                    add(EmailTool(context))
                     add(VolumeTool(context))
+                    // Music search before MediaControl — "play [track]" must not hit generic play/pause
+                    add(MusicSearchTool(context))
                     add(MediaControlTool(context))
                     add(FlashlightTool(context))
                     add(AlarmTool(context))
                     add(TimerTool(context))
                     add(CalendarTool(context))
+                    add(SmartHomeTool(settings))
+                    // Weather before web search — structured answer, no search cost
+                    locationProvider?.let { add(WeatherTool(it)) }
                     // Memory tools before generic open-app so they aren't misrouted
                     val db = JarvisDatabase.getInstance(context)
                     add(MemoryStatsTool(db.memoryDao(), db.memoryFactDao()))
@@ -241,4 +253,11 @@ class ToolRegistry private constructor(
     /** Tools available given the current network state. */
     fun available(isOnline: Boolean): List<Tool> =
         tools.filter { isOnline || !it.requiresNetwork || it.isLocalFallback }
+
+    /** Find a tool by its machine [name] (for function-call dispatch). */
+    fun findByName(name: String): Tool? = tools.firstOrNull { it.name == name }
+
+    /** Tools that expose a [ToolSchema] for LLM function calling. */
+    fun availableSchemas(isOnline: Boolean): List<ToolSchema> =
+        available(isOnline).mapNotNull { it.schema() }
 }

@@ -9,6 +9,7 @@ import com.jarvis.assistant.tools.ContactLookup
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 class SmsTool(
     private val context: Context,
@@ -18,6 +19,19 @@ class SmsTool(
     override val name = "send_sms"
     override val description = "Send an SMS to a contact"
     override val requiredPermissions = listOf(Manifest.permission.SEND_SMS)
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Send an SMS text message to a contact by name.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "name"    to mapOf("type" to "string", "description" to "Recipient contact name"),
+                "message" to mapOf("type" to "string", "description" to "The message text to send")
+            ),
+            "required" to listOf("name", "message")
+        )
+    )
 
     private val REGEX = Regex(
         """(?:text|message|send (?:a )?(?:text|message)(?: to)?)\s+(.+?)(?:\s+(?:saying|and say|to say|that)\s+(.+))?$""",

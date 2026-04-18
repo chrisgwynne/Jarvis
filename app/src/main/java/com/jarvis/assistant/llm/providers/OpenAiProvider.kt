@@ -5,10 +5,11 @@ package com.jarvis.assistant.llm.providers
  * Endpoint: https://api.openai.com/v1/chat/completions
  * Key: https://platform.openai.com/api-keys
  */
-class OpenAiProvider(apiKey: String) : BaseOpenAiProvider(
-    apiKey  = apiKey,
-    baseUrl = "https://api.openai.com/v1",
-    model   = "gpt-4o-mini"
+class OpenAiProvider(apiKey: String, maxTokens: Int = 1200) : BaseOpenAiProvider(
+    apiKey     = apiKey,
+    baseUrl    = "https://api.openai.com/v1",
+    model      = "gpt-4o-mini",
+    maxTokens  = maxTokens
 ) {
     override val name = "OpenAI"
 }

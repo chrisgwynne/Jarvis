@@ -61,8 +61,10 @@ import com.jarvis.assistant.remote.openclaw.OpenClawExecutionResult
 import com.jarvis.assistant.remote.openclaw.OpenClawRouter
 import com.jarvis.assistant.remote.openclaw.OpenClawSettingsRepository
 import com.jarvis.assistant.security.ActionPolicyGate
-import com.jarvis.assistant.security.PolicyResult
+import com.jarvis.assistant.llm.LlmResult
+import com.jarvis.assistant.llm.NetworkClient
 import com.jarvis.assistant.tools.ContactLookup
+import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolRegistry
 import com.jarvis.assistant.runtime.DrivingModeManager
 import com.jarvis.assistant.util.LatencyTracker
@@ -175,6 +177,7 @@ class JarvisRuntime(
 
     // Tool registry — Phase 3: MemoryRecallTool injected via memoryReader
     private lateinit var toolRegistry : ToolRegistry
+    private lateinit var toolDispatcher  : ToolDispatcher
     private lateinit var memoryHandler     : MemoryActionHandler
     private lateinit var reminderHandler   : ReminderActionHandler
 
@@ -284,8 +287,9 @@ class JarvisRuntime(
 
         // Room — memory layer
         db = JarvisDatabase.getInstance(context)
-        memoryWriter = MemoryWriter(db.memoryDao(), db.conversationDao())
-        memoryReader = MemoryRetriever(db.memoryDao())
+        val embeddingEngine = com.jarvis.assistant.memory.MemoryEmbeddingEngine.getInstance(context)
+        memoryWriter = MemoryWriter(db.memoryDao(), db.conversationDao(), embeddingEngine)
+        memoryReader = MemoryRetriever(db.memoryDao(), embeddingEngine)
         summarizer = MemorySummarizer(db.conversationDao(), llmRouter, memoryWriter)
         profileMemory = ProfileMemoryService(db.memoryFactDao())
 
@@ -311,8 +315,10 @@ class JarvisRuntime(
             settings               = settings,
             memoryRetriever        = memoryReader,
             reminderRepository     = reminderRepo,
-            outgoingCallController = outgoingCallController
+            outgoingCallController = outgoingCallController,
+            locationProvider       = locationProvider
         )
+        toolDispatcher = ToolDispatcher(context, toolRegistry, machine)
         memoryHandler = MemoryActionHandler(profileMemory)
         reminderHandler = ReminderActionHandler(reminderRepo)
 
@@ -1457,94 +1463,72 @@ class JarvisRuntime(
 
                     if (matched != null) {
                         val (tool, input) = matched
-
-                        // ── Speaker permission gate: personal actions require identity ──
-                        val speakerDecision = SpeakerPermissionPolicy.evaluate(sessionSpeaker.result, tool.name)
-                        if (!speakerDecision.allowed) {
-                            speakAndRecord(speakerDecision.denyReason ?: "I can't do that right now.")
-                            machine.transition(JarvisState.Listening)
-                            syncState(JarvisState.Listening)
-                            continue
-                        }
-
-                        // ── Policy gate: validate tool against execution allowlist ──
-                        val policyResult = ActionPolicyGate.evaluate(tool.name, transcript)
-                        LatencyTracker.mark("POLICY_EVALUATED")
-                        if (policyResult !is PolicyResult.ActionApproved) {
-                            val message = when (policyResult) {
-                                is PolicyResult.ActionUnsupported -> policyResult.humanMessage
-                                is PolicyResult.ActionDenied      -> policyResult.humanMessage
-                                is PolicyResult.ActionUnsafe      -> policyResult.humanMessage
-                                is PolicyResult.ActionMalformed   -> policyResult.humanMessage
-                                else -> "I can't do that right now."
-                            }
-                            speakAndRecord(message)
-                            machine.transition(JarvisState.Listening)
-                            syncState(JarvisState.Listening)
-                            continue
-                        }
-
-                        machine.transition(JarvisState.ToolRunning(tool.name))
-                        DeviceStateStore.update { copy(currentToolName = tool.name) }
                         syncState(machine.current)
 
-                        val result = toolRegistry.execute(context, tool, input)
-                        LatencyTracker.mark("TOOL_EXECUTED")
+                        val dispatchResult = toolDispatcher.dispatch(tool, input, sessionSpeaker, transcript)
 
-                        DeviceStateStore.update { copy(currentToolName = null) }
-
-                        // Brain: log tool-triggered events
-                        when (tool.name) {
-                            "media_control" -> {
-                                val action = input.param("action")
-                                if (action == "play" || action == "shuffle" || action == "resume") {
-                                    brainEngine.collector.onMediaPlay()
-                                } else if (action == "pause" || action == "stop") {
-                                    brainEngine.collector.onMediaStop()
+                        // Brain: log tool-triggered events for any dispatch that ran the tool
+                        dispatchResult.let { r ->
+                            val hints = when (r) {
+                                is ToolDispatcher.DispatchResult.Done        -> r.hints
+                                is ToolDispatcher.DispatchResult.LlmFollowUp -> r.hints
+                                is ToolDispatcher.DispatchResult.AugmentedLlm -> r.hints
+                                else                                          -> null
+                            }
+                            hints?.let { h ->
+                                when (h.toolName) {
+                                    "media_control" -> {
+                                        val action = h.input.param("action")
+                                        if (action == "play" || action == "shuffle" || action == "resume")
+                                            brainEngine.collector.onMediaPlay()
+                                        else if (action == "pause" || action == "stop")
+                                            brainEngine.collector.onMediaStop()
+                                    }
+                                    "open_app" -> brainEngine.collector.onAppOpen(
+                                        h.input.param("packageName").ifBlank { h.input.transcript }
+                                    )
+                                    "alarm" -> brainEngine.collector.onAlarmSet()
+                                    "timer" -> brainEngine.collector.onTimerSet()
                                 }
                             }
-                            "open_app"      -> brainEngine.collector.onAppOpen(
-                                input.param("packageName").ifBlank { input.transcript }
-                            )
-                            "alarm"         -> brainEngine.collector.onAlarmSet()
-                            "timer"         -> brainEngine.collector.onTimerSet()
                         }
 
-                        when (result) {
-                            is ToolResult.Success -> {
-                                if (result.silent) {
-                                    // No TTS — don't hold audio focus any longer than needed.
-                                    // Return directly to wake-word mode so media apps (Spotify,
-                                    // etc.) can resume without waiting for a SpeechCapture
-                                    // follow-up loop that the user never wanted.
-                                    closeSessionAsync()
-                                    releaseResources()
-                                    backToWakeWord()
-                                    return@launch
-                                }
-                                val spoken = ResponseFormatter.formatToolFeedback(result.spokenFeedback)
-                                speakAndRecord(spoken)
-                                if (!result.requiresLlmFollowUp) {
-                                    machine.transition(JarvisState.Listening)
-                                    syncState(JarvisState.Listening)
-                                    continue
-                                }
-                                // fall through to LLM for follow-up
+                        when (val r = dispatchResult) {
+                            is ToolDispatcher.DispatchResult.Denied -> {
+                                speakAndRecord(r.message)
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
                             }
-                            is ToolResult.Augmented -> {
-                                val response = callLlm(result.augmentedTranscript, isOnline)
+                            is ToolDispatcher.DispatchResult.SilentExit -> {
+                                closeSessionAsync()
+                                releaseResources()
+                                backToWakeWord()
+                                return@launch
+                            }
+                            is ToolDispatcher.DispatchResult.Done -> {
+                                if (r.spokenFeedback.isNotBlank()) speakAndRecord(r.spokenFeedback)
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                            is ToolDispatcher.DispatchResult.Failed -> {
+                                speakAndRecord(r.message)
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                            is ToolDispatcher.DispatchResult.AugmentedLlm -> {
+                                val response = callLlm(r.augmentedTranscript, isOnline)
                                 speakAndRecord(response)
                                 machine.transition(JarvisState.Listening)
                                 syncState(JarvisState.Listening)
                                 continue
                             }
-                            is ToolResult.Failure -> {
-                                speakAndRecord(result.spokenFeedback)
-                                machine.transition(JarvisState.Listening)
-                                syncState(JarvisState.Listening)
-                                continue
+                            is ToolDispatcher.DispatchResult.LlmFollowUp -> {
+                                if (r.spokenFeedback.isNotBlank()) speakAndRecord(r.spokenFeedback)
+                                // fall through to LLM for follow-up
                             }
-                            else -> { /* NotMatched — fall through to LLM */ }
                         }
                     }
 
@@ -1751,6 +1735,44 @@ class JarvisRuntime(
             val messages = promptAssembler.assemble(
                 transcript, history, maxMemories = 4, speakerContext = sessionSpeaker
             )
+
+            // ── LLM function calling (FC-capable providers: Anthropic, OpenAI, OpenRouter) ──
+            val schemas = toolRegistry.availableSchemas(isOnline)
+            if (schemas.isNotEmpty()) {
+                val fcResult = llmRouter.completeWithFunctionCalling(messages, schemas)
+                when (fcResult) {
+                    is LlmResult.ToolCall -> {
+                        val tool = toolRegistry.findByName(fcResult.toolName)
+                        if (tool != null) {
+                            @Suppress("UNCHECKED_CAST")
+                            val argsMap = try {
+                                (NetworkClient.gson.fromJson(fcResult.argsJson, Map::class.java) as Map<*, *>)
+                                    .entries.associate { (k, v) -> k.toString() to v.toString() }
+                            } catch (e: Exception) { emptyMap() }
+                            val result = toolRegistry.execute(context, tool, ToolInput(transcript, argsMap))
+                            val feedback = when (result) {
+                                is ToolResult.Success -> result.spokenFeedback
+                                is ToolResult.Failure -> result.spokenFeedback
+                                else -> null
+                            }
+                            if (feedback != null) {
+                                llmRouter.conversationStore.addMessage("assistant", feedback)
+                                speakAndRecord(feedback)
+                                return  // skip streaming path
+                            }
+                        }
+                        // Tool not found — fall through to streaming
+                    }
+                    is LlmResult.Text -> {
+                        if (fcResult.content.isNotBlank()) {
+                            llmRouter.conversationStore.addMessage("assistant", fcResult.content)
+                            speakAndRecord(fcResult.content)
+                            return  // skip streaming path
+                        }
+                    }
+                    null -> { /* Provider doesn't support FC — fall through */ }
+                }
+            }
 
             val fullResponse    = StringBuilder()
             var speakingStarted = false

@@ -38,12 +38,17 @@ class ConversationalProactiveEngine(
 
     private var job: Job? = null
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     fun start() {
         if (job?.isActive == true) return
-        job = CoroutineScope(Dispatchers.Default).launch {
+        job = scope.launch {
             while (isActive) {
-                try { tick() } catch (e: Exception) {
-                    if (e is CancellationException) throw e
+                try {
+                    tick()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
                     Log.w(TAG, "Tick error: ${e.message}")
                 }
                 delay(POLL_INTERVAL_MS)
@@ -56,6 +61,12 @@ class ConversationalProactiveEngine(
         job?.cancel()
         job = null
         Log.d(TAG, "Stopped")
+    }
+
+    /** Tear down the engine's scope — call from JarvisRuntime.stop(). */
+    fun release() {
+        stop()
+        scope.cancel()
     }
 
     private suspend fun tick() {

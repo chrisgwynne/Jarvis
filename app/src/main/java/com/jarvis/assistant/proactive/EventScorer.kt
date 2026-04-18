@@ -160,5 +160,6 @@ class EventScorer(
         ProactiveEventType.UPCOMING_REMINDER   -> config.cooldownUpcomingReminderMs
         ProactiveEventType.MISSED_CALL         -> config.cooldownMissedCallMs
         ProactiveEventType.BEHAVIORAL_LEARNING -> config.minGlobalGapMs
+        ProactiveEventType.UNREAD_NOTIFICATION -> config.cooldownUnreadNotificationMs
     }
 }

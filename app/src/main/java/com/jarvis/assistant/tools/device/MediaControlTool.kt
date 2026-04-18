@@ -78,8 +78,8 @@ class MediaControlTool(private val context: Context) : Tool {
             }
             ToolResult.Success(spoken, silent = true)
         } catch (e: Exception) {
-            Log.e("MediaControlTool", "Failed to dispatch media key: ${e.message}", e)
-            ToolResult.Failure("I couldn't control the media. ${e.message}")
+            Log.e("MediaControlTool", "Failed to dispatch media key", e)
+            ToolResult.Failure("I couldn't control the media.")
         }
     }
 

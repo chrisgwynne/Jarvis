@@ -130,8 +130,19 @@ class AppResolver(
 
     /** Resolution outcome returned by [resolve]. */
     sealed class Result {
-        /** Package found; call [packageName] via [PackageManager.getLaunchIntentForPackage]. */
-        data class Launchable(val packageName: String, val displayLabel: String) : Result()
+        /**
+         * Package found; call [packageName] via [PackageManager.getLaunchIntentForPackage].
+         *
+         * [confidence] = HIGH when the match is direct (learned alias, built-in alias,
+         * exact/prefix label, or installed package name). LOW when the match came from
+         * a broad substring match — callers should ask "Did you mean X?" once before
+         * launching and persisting the alias.
+         */
+        data class Launchable(
+            val packageName: String,
+            val displayLabel: String,
+            val confidence: Confidence = Confidence.HIGH
+        ) : Result()
 
         /** No package but a generic intent ([intent]) is ready to start. */
         data class GenericIntent(val intent: Intent, val displayLabel: String) : Result()
@@ -139,6 +150,11 @@ class AppResolver(
         /** Nothing matched. */
         object NotFound : Result()
     }
+
+    enum class Confidence { HIGH, LOW }
+
+    /** Internal label match with the confidence tier it came from. */
+    private data class LabelMatch(val info: ResolveInfo, val confidence: Confidence)
 
     /** Attempt to resolve [spokenName] against the five-tier order. */
     fun resolve(spokenName: String): Result {
@@ -173,16 +189,20 @@ class AppResolver(
         // 3. Installed-app label fuzzy match (substring, case-insensitive)
         val labelHit = findByLabel(lower)
         if (labelHit != null) {
-            val pkg = labelHit.activityInfo.packageName
-            Log.d(TAG, "Resolved '$query' via label match → $pkg")
-            return Result.Launchable(pkg, labelHit.loadLabel(context.packageManager).toString())
+            val pkg = labelHit.info.activityInfo.packageName
+            Log.d(TAG, "Resolved '$query' via label match (${labelHit.confidence}) → $pkg")
+            return Result.Launchable(
+                pkg,
+                labelHit.info.loadLabel(context.packageManager).toString(),
+                labelHit.confidence
+            )
         }
 
-        // 4. Direct package-name substring match
+        // 4. Direct package-name substring match — always LOW confidence
         val pkgHit = findByPackage(lower)
         if (pkgHit != null) {
             Log.d(TAG, "Resolved '$query' via package-name match → $pkgHit")
-            return Result.Launchable(pkgHit, labelFor(pkgHit) ?: query)
+            return Result.Launchable(pkgHit, labelFor(pkgHit) ?: query, Confidence.LOW)
         }
 
         // 5. Category intent fallback
@@ -283,7 +303,7 @@ class AppResolver(
      * false positives for very short app names.  A minimum label length of 4
      * chars guards against single-word collisions ("go", "hi", etc.).
      */
-    private fun findByLabel(needle: String): ResolveInfo? {
+    private fun findByLabel(needle: String): LabelMatch? {
         val pm = context.packageManager
         val activities = pm.queryIntentActivities(
             Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER),
@@ -291,13 +311,22 @@ class AppResolver(
         )
         val lowerNeedle = needle.lowercase()
         val labeled = activities.map { it to it.loadLabel(pm).toString().lowercase() }
-        return labeled.firstOrNull { it.second == lowerNeedle }?.first
-            ?: labeled.firstOrNull { it.second.startsWith(lowerNeedle) }?.first
-            ?: labeled.firstOrNull { it.second.contains(lowerNeedle) }?.first
-            ?: labeled.firstOrNull { label ->
-                // Label must be ≥4 chars to avoid spurious matches on short names
-                label.second.length >= 4 && lowerNeedle.contains(label.second)
-            }?.first
+
+        // HIGH: exact or prefix — unambiguous
+        labeled.firstOrNull { it.second == lowerNeedle }
+            ?.let { return LabelMatch(it.first, Confidence.HIGH) }
+        labeled.firstOrNull { it.second.startsWith(lowerNeedle) }
+            ?.let { return LabelMatch(it.first, Confidence.HIGH) }
+
+        // LOW: broader substring matches — confirm before committing
+        labeled.firstOrNull { it.second.contains(lowerNeedle) }
+            ?.let { return LabelMatch(it.first, Confidence.LOW) }
+        labeled.firstOrNull { label ->
+            // Label must be ≥4 chars to avoid spurious matches on short names
+            label.second.length >= 4 && lowerNeedle.contains(label.second)
+        }?.let { return LabelMatch(it.first, Confidence.LOW) }
+
+        return null
     }
 
     /** First installed package whose name contains [needle] as a dotted segment. */

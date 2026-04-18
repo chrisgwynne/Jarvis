@@ -6,6 +6,29 @@ package com.jarvis.assistant.proactive
  * Centralising configuration here means each decision threshold, cooldown
  * window, and penalty weight can be adjusted without touching any logic.
  *
+ * ## Policy layers
+ *
+ * The engine implements the Jarvis "observe everything → act rarely" policy
+ * through four surfaced layers (a fifth, silent awareness, is the default —
+ * the engine simply doesn't emit an action):
+ *
+ *   L0  Silent awareness        — no surfaced action; ≈80% of events.
+ *   L1  Passive context         — no output, state adjusts (not modelled here;
+ *                                 lives in ContextEngine / PromptAssembler).
+ *   L2  Soft suggestion         — InterruptLevel.PASSIVE (quiet notification).
+ *   L3  Contextual assistance   — InterruptLevel.ACTIVE when relevance is high
+ *                                 and the moment is tied to a user action.
+ *   L4  Active intervention     — InterruptLevel.ACTIVE with critical urgency
+ *                                 (low battery, imminent alarm, urgent reminder).
+ *
+ * Ignore/accept adaptation scales cooldowns per dedupeKey: ignored suggestions
+ * get progressively longer cooldowns ([ignoreEscalationFactor]); accepted ones
+ * reset back to the baseline.
+ *
+ * Quiet hours suppress every event except [ProactiveEventType.LOW_BATTERY] and
+ * imminent reminders (within [reminderUrgentMs]) when the current hour falls
+ * in [quietHoursStartHour, quietHoursEndHour) — wrapping across midnight.
+ *
  * @param pollingIntervalMs       How often the engine polls for new events (ms).
  * @param passiveThreshold        finalScore must exceed this to produce a PassiveAction.
  * @param activeThreshold         finalScore must exceed this to produce a SpeakAction.
@@ -24,6 +47,12 @@ package com.jarvis.assistant.proactive
  * @param recentInteractionPenalty Score penalty applied when the user just interacted.
  * @param recentInteractionWindowMs Window within which the user is considered to have just interacted.
  * @param eventStalenessMs        Events older than this are discarded by DecisionEngine.
+ * @param quietHoursStartHour     Optional start of nightly quiet window (0–23); null disables.
+ * @param quietHoursEndHour       Optional end of nightly quiet window (0–23); wraps past midnight.
+ * @param ignoreEscalationFactor  Each past ignore multiplies the effective cooldown by
+ *                                (1 + factor × ignoreCount).  0 disables adaptation.
+ * @param ignoreCheckDelayMs      After a surfacing, if no user interaction occurs within
+ *                                this window the action is counted as ignored.
  */
 data class ProactiveConfig(
     val pollingIntervalMs: Long           = 10_000L,
@@ -43,5 +72,9 @@ data class ProactiveConfig(
     val speakingPenalty: Float            = 0.20f,
     val recentInteractionPenalty: Float   = 0.25f,
     val recentInteractionWindowMs: Long   = 30_000L,
-    val eventStalenessMs: Long            = 30_000L
+    val eventStalenessMs: Long            = 30_000L,
+    val quietHoursStartHour: Int?         = null,
+    val quietHoursEndHour: Int?           = null,
+    val ignoreEscalationFactor: Float     = 1.0f,
+    val ignoreCheckDelayMs: Long          = 90_000L
 )

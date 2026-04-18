@@ -17,6 +17,7 @@ import com.jarvis.assistant.call.integration.ContactsPhoneLookupResolver
 import com.jarvis.assistant.call.integration.TelecomCallActionExecutor
 import com.jarvis.assistant.call.integration.TelephonyCallMonitor
 import com.jarvis.assistant.context.ContextEngine
+import com.jarvis.assistant.context.Presence
 import com.jarvis.assistant.location.CurrentLocationProvider
 import com.jarvis.assistant.core.state.JarvisState
 import com.jarvis.assistant.core.state.JarvisStateMachine
@@ -344,9 +345,14 @@ class JarvisRuntime(
             settings            = settings
         )
 
-        // Proactive awareness engine
+        // Proactive awareness engine.  Quiet hours enabled in production so
+        // nightly suggestions stay suppressed unless the event is critical
+        // (low battery, imminent reminder); tests construct their own config.
         proactiveEngine = ProactiveEngine(
-            config               = ProactiveConfig(),
+            config               = ProactiveConfig(
+                quietHoursStartHour = 22,
+                quietHoursEndHour   = 7
+            ),
             reminderSource       = AppReminderSource(reminderRepo),
             callSource           = callSource,
             batterySource        = AppBatterySource(context, contextEngine),
@@ -361,7 +367,8 @@ class JarvisRuntime(
                 ttsEngine            = ttsEngine,
                 onPassiveAction      = { action -> Log.d(TAG, "Proactive passive: ${action.title}") },
                 voiceResponseEnabled = { settings.voiceResponse }
-            )
+            ),
+            isDrivingProvider    = { drivingModeManager.isDriving }
         )
 
         // Conversational follow-up engine
@@ -1021,16 +1028,12 @@ class JarvisRuntime(
                             }
                             InterruptionType.CONTINUE -> {
                                 lastInterrupted = null
-                                if (resumable.resumable && resumable.pendingTail.isNotBlank()) {
-                                    // Only replay the tail if it ends cleanly — mid-sentence
-                                    // fragments sound incoherent as a resume point.
-                                    val tail = resumable.pendingTail.trim()
-                                    val cleanTail = tail.takeIf {
-                                        it.last() in ".!?" || it.length > 40
-                                    } ?: resumable.spokenSoFar.takeLast(80)
-                                    speakAndRecord("Right, back to that — $cleanTail")
-                                } else if (resumable.resumable && resumable.spokenSoFar.isNotBlank()) {
-                                    speakAndRecord("Where was I? " + resumable.spokenSoFar.takeLast(80))
+                                if (resumable.resumable && resumable.spokenSoFar.isNotBlank()) {
+                                    // Re-invoke the LLM to continue naturally — never replay
+                                    // words that were already spoken.  The model is told what
+                                    // it said so far and asked to pick up with a short
+                                    // connector ("Right, so…", "Yeah,") and no repetition.
+                                    resumeContinuation(resumable, contextEngine.isOnline())
                                 }
                                 machine.transition(JarvisState.Listening)
                                 syncState(JarvisState.Listening)
@@ -1709,7 +1712,11 @@ class JarvisRuntime(
             llmRouter.conversationStore.addMessage("user", transcript)
             val history = llmRouter.conversationStore.getContextMessages()
                 .filter { it.role != "system" }
-            val messages = promptAssembler.assemble(transcript, history, maxMemories = 2, speakerContext = sessionSpeaker)
+            val messages = promptAssembler.assemble(
+                transcript, history, maxMemories = 2,
+                speakerContext = sessionSpeaker,
+                presence       = currentPresence()
+            )
             llmRouter.completeWithMessages(messages)
 
         } catch (e: CancellationException) {
@@ -1761,7 +1768,9 @@ class JarvisRuntime(
             val history  = llmRouter.conversationStore.getContextMessages()
                 .filter { it.role != "system" }
             val messages = promptAssembler.assemble(
-                transcript, history, maxMemories = 4, speakerContext = sessionSpeaker
+                transcript, history, maxMemories = 4,
+                speakerContext = sessionSpeaker,
+                presence       = currentPresence()
             )
 
             // ── Agentic tool chaining (up to MAX_TOOL_HOPS per turn) ──────────────
@@ -1934,6 +1943,105 @@ class JarvisRuntime(
         }
     }
 
+    /**
+     * Resume an interrupted reply via a fresh LLM call instead of replaying the
+     * original tokens.  The model is shown what was actually spoken before the
+     * interruption and nudged to pick up with a short natural connector
+     * ("Right, so…", "Yeah,") without repeating any of those words.
+     *
+     * The previous assistant message in [ConversationStore] contains the full
+     * pre-interrupt response (spoken + unspoken tail); it's stripped and
+     * replaced with `spokenSoFar` so the LLM's view of history matches what
+     * the user actually heard.
+     */
+    private suspend fun resumeContinuation(
+        resumable: ResumableResponse,
+        isOnline: Boolean
+    ) {
+        if (!isOnline) {
+            speakAndRecord(OfflineManager.offlineLlmFallback(resumable.userTranscript))
+            return
+        }
+
+        // Drop the stale full-response assistant turn from history so the
+        // next stream's auto-persist doesn't leave two assistant entries
+        // back-to-back; we'll put back a merged entry once the resume
+        // stream completes.
+        val spoken = resumable.spokenSoFar.trim()
+        llmRouter.conversationStore.dropLastAssistant()
+
+        val history = llmRouter.conversationStore.getContextMessages()
+            .filter { it.role != "system" }
+            .toMutableList()
+        // Inject what the user actually heard as an assistant turn in the
+        // LLM's view of history, then a brief synthetic user cue.  Only the
+        // LLM sees these — they do not touch ConversationStore.
+        history.add(Message("assistant", spoken))
+        history.add(
+            Message(
+                "user",
+                "[You were cut off. Pick up naturally from where you stopped. " +
+                "Open with a short connector like \"Right, so…\" or \"Yeah,\" " +
+                "and do not repeat anything you already said. One or two sentences.]"
+            )
+        )
+
+        val messages = promptAssembler.assemble(
+            userQuery           = resumable.userTranscript,
+            conversationHistory = history,
+            maxMemories         = 2,
+            speakerContext      = sessionSpeaker,
+            presence            = currentPresence()
+        )
+
+        currentSpokenSoFar    = ""
+        currentPendingTail    = ""
+        currentTurnTranscript = resumable.userTranscript
+
+        val fullResponse    = StringBuilder()
+        var speakingStarted = false
+
+        try {
+            llmRouter.streamWithMessages(messages).collect { sentence ->
+                fullResponse.append(sentence).append(" ")
+                if (!speakingStarted) {
+                    speakingStarted = true
+                    machine.transition(JarvisState.Speaking)
+                    DeviceStateStore.update { copy(ttsPlaying = true) }
+                    syncState(JarvisState.Speaking)
+                    if (settings.voiceResponse) bargeIn.start()
+                }
+                val stillSpeaking = machine.isIn<JarvisState.Speaking>()
+                if (stillSpeaking) currentSpokenSoFar += "$sentence "
+                else currentPendingTail += "$sentence "
+                if (settings.voiceResponse && stillSpeaking) ttsEngine.speak(sentence)
+            }
+            if (settings.voiceResponse && speakingStarted) bargeIn.stop()
+            DeviceStateStore.update { copy(ttsPlaying = false) }
+
+            val responseText = fullResponse.toString().trim()
+            if (responseText.isNotBlank()) {
+                val formatted = ResponseFormatter.format(responseText)
+                memoryWriter.writeTurn(sessionId, "assistant", formatted)
+                DeviceStateStore.update { copy(lastAssistantResponse = formatted) }
+                // Merge the just-streamed resume with the spoken prefix so
+                // conversation history has one assistant turn, not two.
+                val merged = if (spoken.isBlank()) formatted else "$spoken $formatted"
+                llmRouter.conversationStore.replaceLastAssistant(merged)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Resume error: ${e.message}", e)
+            bargeIn.stop()
+            DeviceStateStore.update { copy(ttsPlaying = false) }
+        } finally {
+            currentSpokenSoFar    = ""
+            currentPendingTail    = ""
+            currentTurnTranscript = ""
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private suspend fun speakAndRecord(text: String) {
@@ -1959,6 +2067,24 @@ class JarvisRuntime(
 
         DeviceStateStore.update { copy(ttsPlaying = false) }
         LatencyTracker.mark("PIPELINE_DONE")
+    }
+
+    /**
+     * Compute a fresh [Presence] from the same signals the proactive engine
+     * already observes.  Called before each LLM assembly so the system prompt
+     * carries a current-moment line ("evening, user winding down" etc.) —
+     * this is how continuity across turns is expressed to the model.
+     */
+    private fun currentPresence(): Presence {
+        val speechState = speechStateSource.getSpeechState()
+        val lastUser   = lastSeenTracker.lastUserTurnMs.takeIf { it > 0L }
+        return Presence.compute(
+            nowMs             = System.currentTimeMillis(),
+            lastInteractionMs = lastUser,
+            isJarvisSpeaking  = speechState.isSpeaking,
+            isJarvisListening = speechState.isListening,
+            isDriving         = drivingModeManager.isDriving
+        )
     }
 
     private fun backToWakeWord() {

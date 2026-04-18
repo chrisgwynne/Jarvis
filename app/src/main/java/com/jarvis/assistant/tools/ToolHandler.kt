@@ -157,7 +157,7 @@ class ToolHandler(
 
     private fun handleCall(name: String): Result {
         val contact = contactLookup.find(name)
-            ?: return Result.Executed("I couldn't find $name in your contacts.")
+            ?: return Result.Executed("No $name in your contacts.")
         return try {
             context.startActivity(
                 Intent(Intent.ACTION_CALL, Uri.parse("tel:${contact.number}"))
@@ -166,9 +166,9 @@ class ToolHandler(
             Log.d(TAG, "Calling ${contact.displayName} at ${contact.number}")
             Result.Executed("Calling ${contact.displayName}.")
         } catch (e: SecurityException) {
-            Result.Executed("I don't have permission to make calls. Grant the Call Phone permission in Settings.")
+            Result.Executed("Call permission's off — turn it on in Settings.")
         } catch (e: Exception) {
-            Result.Executed("Failed to place the call: ${e.message}")
+            Result.Executed("Call didn't go through.")
         }
     }
 
@@ -176,7 +176,7 @@ class ToolHandler(
 
     private fun handleSms(name: String, message: String): Result {
         val contact = contactLookup.find(name)
-            ?: return Result.Executed("I couldn't find $name in your contacts.")
+            ?: return Result.Executed("No $name in your contacts.")
 
         if (message.isBlank()) {
             return try {
@@ -186,7 +186,7 @@ class ToolHandler(
                 )
                 Result.Executed("Opening a message to ${contact.displayName}.")
             } catch (e: Exception) {
-                Result.Executed("Couldn't open Messages: ${e.message}")
+                Result.Executed("Messages wouldn't open.")
             }
         }
 
@@ -195,11 +195,11 @@ class ToolHandler(
             val sms = SmsManager.getDefault()
             sms.sendMultipartTextMessage(contact.number, null, sms.divideMessage(message), null, null)
             Log.d(TAG, "SMS sent to ${contact.displayName}")
-            Result.Executed("Message sent to ${contact.displayName}.")
+            Result.Executed("Sent to ${contact.displayName}.")
         } catch (e: SecurityException) {
-            Result.Executed("I don't have permission to send messages. Grant the Send SMS permission in Settings.")
+            Result.Executed("SMS permission's off — turn it on in Settings.")
         } catch (e: Exception) {
-            Result.Executed("Failed to send the message: ${e.message}")
+            Result.Executed("Message didn't send.")
         }
     }
 
@@ -207,7 +207,7 @@ class ToolHandler(
 
     private fun handleWhatsApp(name: String, message: String): Result {
         val contact = contactLookup.find(name)
-            ?: return Result.Executed("I couldn't find $name in your contacts.")
+            ?: return Result.Executed("No $name in your contacts.")
 
         // wa.me uses international format without leading +
         val cleanNumber = contact.number.replace(Regex("[^\\d+]"), "").trimStart('+')
@@ -219,9 +219,9 @@ class ToolHandler(
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
             Log.d(TAG, "WhatsApp to ${contact.displayName}: $message")
-            Result.Executed("Opening WhatsApp to message ${contact.displayName}.")
+            Result.Executed("Opening WhatsApp for ${contact.displayName}.")
         } catch (e: Exception) {
-            Result.Executed("Couldn't open WhatsApp: ${e.message}")
+            Result.Executed("WhatsApp wouldn't open.")
         }
     }
 
@@ -233,16 +233,16 @@ class ToolHandler(
             Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER),
             PackageManager.GET_META_DATA
         ).firstOrNull { it.loadLabel(pm).toString().contains(appName, ignoreCase = true) }
-            ?: return Result.Executed("I couldn't find an app called $appName on your phone.")
+            ?: return Result.Executed("${appName.replaceFirstChar { it.uppercase() }} isn't installed on this phone.")
 
         return try {
             val intent = pm.getLaunchIntentForPackage(match.activityInfo.packageName)
                 ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                ?: return Result.Executed("Couldn't launch ${match.loadLabel(pm)}.")
+                ?: return Result.Executed("${match.loadLabel(pm)} wouldn't launch.")
             context.startActivity(intent)
             Result.Executed("Opening ${match.loadLabel(pm)}.")
         } catch (e: Exception) {
-            Result.Executed("Failed to open the app: ${e.message}")
+            Result.Executed("That didn't work.")
         }
     }
 
@@ -278,7 +278,7 @@ class ToolHandler(
             cm.setTorchMode(cameraId, on)
             Result.Executed(if (on) "Flashlight on." else "Flashlight off.")
         } catch (e: Exception) {
-            Result.Executed("Couldn't toggle flashlight: ${e.message}")
+            Result.Executed("Flashlight didn't respond.")
         }
     }
 
@@ -297,7 +297,7 @@ class ToolHandler(
             context.startActivity(intent)
             Result.Executed(if (timeStr.isBlank()) "Setting an alarm." else "Alarm set for $timeStr.")
         } catch (e: Exception) {
-            Result.Executed("Couldn't set alarm: ${e.message}")
+            Result.Executed("Alarm didn't set.")
         }
     }
 
@@ -314,7 +314,7 @@ class ToolHandler(
             context.startActivity(intent)
             Result.Executed(if (seconds > 0) "Timer set for $desc." else "Opening timer.")
         } catch (e: Exception) {
-            Result.Executed("Couldn't set timer: ${e.message}")
+            Result.Executed("Timer didn't set.")
         }
     }
 

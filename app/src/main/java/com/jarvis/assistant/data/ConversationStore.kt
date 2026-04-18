@@ -30,15 +30,18 @@ class ConversationStore(private val context: Context) : CompressibleStore {
             val battStr = if (battery >= 0) "$battery%" else "unknown"
             val device  = Build.MODEL
 
-            return "You are Jarvis, a concise voice assistant running on Android. " +
+            return "You are Jarvis. Talk like a person in the conversation, not a generic assistant. " +
                    "Today is $today. The current time is $time. " +
                    "Battery level: $battStr. Device: $device. " +
-                   "Keep all responses under 2 sentences for voice output. " +
-                   "Do not use markdown formatting. " +
-                   "Respond conversationally and naturally. " +
-                   "You always know the current time and date — state them confidently when asked. " +
-                   "Never mention knowledge cutoffs, training data, or lack of real-time access — " +
-                   "just answer based on what you know."
+                   "Default reply: 1 short sentence. Less output is more natural. " +
+                   "Small talk gets brief reactions — 'Long day' → 'Yeah, sounds it.', 'Nice' → 'Yeah.', 'Ok' → no extra. " +
+                   "Only expand if the user asks for detail or the task requires it. Never add suggestions or follow-ups by default. " +
+                   "Never use phrases like 'I can help with that', 'Here's what I found', " +
+                   "'Would you like me to…', or 'Let me know if you need anything else'. " +
+                   "Do not narrate actions. Do not over-explain. Do not echo the question back. " +
+                   "Confirm actions in the fewest words possible — 'Opening Spotify.', 'Timer set.', 'Done.'. " +
+                   "No markdown. Casual, direct, confident — not over-friendly, not robotic. " +
+                   "State time and date confidently. Never mention knowledge cutoffs or real-time access."
         }
     }
 
@@ -87,6 +90,30 @@ class ConversationStore(private val context: Context) : CompressibleStore {
 
     /** Return the last [n] user/assistant messages (no system prompt). */
     fun getRecentMessages(n: Int): List<Message> = history.takeLast(n).toList()
+
+    /**
+     * Replace the most recent assistant message with [content].  No-op if the
+     * last message isn't from the assistant or history is empty.  Used after
+     * an interrupted response to rewrite what the LLM thinks it said so the
+     * next turn doesn't see the unspoken tail as part of history.
+     */
+    fun replaceLastAssistant(content: String) {
+        val last = history.lastOrNull() ?: return
+        if (last.role != "assistant") return
+        history.removeLast()
+        history.addLast(Message(role = "assistant", content = content))
+    }
+
+    /**
+     * Drop the most recent message if it's from the assistant.  Used at the
+     * start of an interrupted-response resume so the LLM can stream a fresh
+     * continuation without a stale assistant turn sitting before it.
+     */
+    fun dropLastAssistant() {
+        val last = history.lastOrNull() ?: return
+        if (last.role != "assistant") return
+        history.removeLast()
+    }
 
     val isEmpty: Boolean get() = history.isEmpty()
     fun clear() { history.clear(); rollingContext = null }

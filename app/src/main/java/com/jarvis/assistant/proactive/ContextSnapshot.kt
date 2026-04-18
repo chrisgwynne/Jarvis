@@ -53,5 +53,12 @@ data class ContextSnapshot(
     /** Confidence score [0,1] of the top prediction. */
     val topPredictionScore: Float = 0f,
     /** Related knowledge context to surface alongside the prediction, or null. */
-    val predictionKnowledgeContext: String? = null
+    val predictionKnowledgeContext: String? = null,
+    /**
+     * True when the device is in driving mode (car Bluetooth or dock
+     * connected).  Used by the presence gate to suppress soft notifications
+     * the user can't safely read.  Defaults to false so existing callers and
+     * tests keep working without changes.
+     */
+    val isDriving: Boolean = false
 )

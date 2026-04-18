@@ -79,18 +79,16 @@ class EventGenerator(private val config: ProactiveConfig) {
             else                              -> 0.55f
         }
 
-        val levelLabel = when {
-            battery <= config.batteryCritical -> "critically low at $battery%"
-            battery <= config.batteryVeryLow  -> "very low at $battery%"
-            else                              -> "low at $battery%"
+        val spokenText = when {
+            battery <= config.batteryCritical -> "Battery's nearly dead — $battery%."
+            battery <= config.batteryVeryLow  -> "Battery's getting low — $battery%."
+            else                              -> "Battery's at $battery%."
         }
-
-        val spokenText = "Heads up — battery is $levelLabel. Please plug in soon."
         val bucket     = battery / 5 * 5   // round down to nearest 5
 
         return ProactiveEvent(
             type         = ProactiveEventType.LOW_BATTERY,
-            title        = "Battery $levelLabel",
+            title        = "Battery $battery%",
             spokenText   = spokenText,
             urgency      = urgency,
             relevance    = 0.80f,
@@ -127,15 +125,19 @@ class EventGenerator(private val config: ProactiveConfig) {
         }
 
         val minutesAway = (diffMs / 60_000L).coerceAtLeast(1L)
-        val minutesLabel = if (minutesAway == 1L) "about 1 minute" else "about $minutesAway minutes"
-        val spokenText = "You have a reminder coming up in $minutesLabel."
+        val spokenText = when {
+            minutesAway <= 1L -> "You've got something coming up any minute."
+            minutesAway < 10L -> "You've got something in about $minutesAway minutes."
+            else              -> "Reminder in about $minutesAway minutes."
+        }
+        val titleLabel = if (minutesAway <= 1L) "in a minute" else "in $minutesAway min"
 
         // Bucket to the nearest minute (truncate to whole minutes of epoch)
         val bucketKey = nextMs / 60_000L * 60_000L
 
         return ProactiveEvent(
             type          = ProactiveEventType.UPCOMING_REMINDER,
-            title         = "Reminder in $minutesLabel",
+            title         = "Reminder $titleLabel",
             spokenText    = spokenText,
             urgency       = urgency,
             relevance     = relevance,
@@ -173,20 +175,20 @@ class EventGenerator(private val config: ProactiveConfig) {
             else                  -> 0.35f
         }
 
-        val callerPart = snapshot.lastMissedCallContactName
-            ?.takeIf { it.isNotBlank() }
-            ?.let { " from $it" }
-            ?: ""
+        val caller = snapshot.lastMissedCallContactName?.takeIf { it.isNotBlank() }
+        val count  = snapshot.missedCallsCount
 
-        val countLabel = when (snapshot.missedCallsCount) {
-            1    -> "a missed call$callerPart"
-            else -> "${snapshot.missedCallsCount} missed calls"
+        val spokenText = when {
+            count == 1 && caller != null -> "$caller called."
+            count == 1                   -> "You missed a call."
+            caller != null               -> "$count missed calls — $caller tried you."
+            else                         -> "$count missed calls."
         }
-        val spokenText = "You have $countLabel."
-        val title = if (snapshot.missedCallsCount == 1)
-            "Missed call$callerPart"
-        else
-            "${snapshot.missedCallsCount} missed calls"
+        val title = when {
+            count == 1 && caller != null -> "Missed call — $caller"
+            count == 1                   -> "Missed call"
+            else                         -> "$count missed calls"
+        }
 
         val bucketKey = lastCallAt / 1_000L * 1_000L
 
@@ -222,8 +224,13 @@ class EventGenerator(private val config: ProactiveConfig) {
         if (snapshot.isJarvisSpeaking || snapshot.isJarvisListening) return null
 
         val knowledge = snapshot.predictionKnowledgeContext
+        // Pattern-driven suggestions should sound like an observation, not a
+        // system announcement.  Keep them a single short sentence — the user
+        // gets the pattern from the phrasing alone ("You usually charge around
+        // now") without needing "Based on your habits:" as a preamble.
         val spokenText = buildString {
-            append("Based on your habits: $description.")
+            append(description.trimEnd('.', '!', '?'))
+            append('.')
             if (!knowledge.isNullOrBlank()) append(" ${knowledge.take(120).trimEnd('.')}.")
         }
 
@@ -258,19 +265,20 @@ class EventGenerator(private val config: ProactiveConfig) {
         val text  = snapshot.lastNotificationText
         val app   = snapshot.lastNotificationApp
 
-        val countLabel = if (count == 1) "a notification" else "$count notifications"
         val appLabel   = app?.substringAfterLast('.')?.replaceFirstChar { it.titlecase() }
-        val detail     = when {
-            text != null && appLabel != null -> " from $appLabel: $text"
-            appLabel != null                 -> " from $appLabel"
-            text != null                     -> ": $text"
-            else                             -> ""
+        val spokenText = when {
+            count == 1 && text != null && appLabel != null -> "$appLabel: $text"
+            count == 1 && appLabel != null                 -> "Something from $appLabel."
+            count == 1 && text != null                     -> "New message — $text"
+            count == 1                                     -> "You've got a new notification."
+            appLabel != null                               -> "$count new from $appLabel."
+            else                                           -> "$count new notifications."
         }
-        val spokenText = "You have $countLabel$detail."
+        val titleLabel = if (count == 1) "New notification" else "$count new notifications"
 
         return ProactiveEvent(
             type          = ProactiveEventType.UNREAD_NOTIFICATION,
-            title         = "$countLabel",
+            title         = titleLabel,
             spokenText    = spokenText,
             urgency       = 0.55f,
             relevance     = 0.70f,

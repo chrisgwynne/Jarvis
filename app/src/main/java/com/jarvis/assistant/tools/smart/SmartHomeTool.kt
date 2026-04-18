@@ -117,7 +117,7 @@ class SmartHomeTool(private val settings: SettingsStore) : Tool {
         val haBaseUrl = settings.haBaseUrl
         val haToken   = settings.haApiToken
         if (haBaseUrl.isBlank() || haToken.isBlank()) {
-            return ToolResult.Failure("Home Assistant is not configured. Add the URL and token in Settings.")
+            return ToolResult.Failure("Home Assistant isn't set up yet — add the URL and token in Settings.")
         }
 
         val entityName = input.param("entity_name")
@@ -128,11 +128,11 @@ class SmartHomeTool(private val settings: SettingsStore) : Tool {
         val client = HomeAssistantClient(haBaseUrl, haToken)
         val entities = client.getStates()
         if (entities.isEmpty()) {
-            return ToolResult.Failure("Couldn't reach Home Assistant. Check the URL and token in Settings.")
+            return ToolResult.Failure("Can't reach Home Assistant — check the URL and token.")
         }
 
         val match = findBestEntity(entityName, entities, domainHint)
-            ?: return ToolResult.Failure("I couldn't find '$entityName' in your smart home.")
+            ?: return ToolResult.Failure("No '$entityName' in your setup.")
 
         if (action == "status") {
             val state = client.getEntityState(match.entityId)
@@ -145,7 +145,7 @@ class SmartHomeTool(private val settings: SettingsStore) : Tool {
             ToolResult.Success(buildSuccessMessage(action, match, value))
         } catch (e: Exception) {
             Log.w("SmartHomeTool", "HA service call failed: ${e.message}")
-            ToolResult.Failure("Couldn't control ${match.friendlyName}: ${e.message}")
+            ToolResult.Failure("${match.friendlyName} didn't respond.")
         }
     }
 

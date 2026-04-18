@@ -28,11 +28,11 @@ class ConversationalProactiveEngine(
         private const val POLL_INTERVAL_MS = 15 * 60 * 1_000L  // 15 minutes
 
         private val GAP_CHECK_INS = listOf(
-            "Haven't heard from you in a bit, how's things?",
-            "Hey, how've you been?",
-            "Hope things are going well. Anything on?",
-            "Been a while — how are you getting on?",
-            "Just checking in, how are you doing?"
+            "You good?",
+            "How's things?",
+            "Been quiet — everything alright?",
+            "Still around?",
+            "How's it going?"
         )
     }
 

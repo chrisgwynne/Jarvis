@@ -52,8 +52,15 @@ class ContextEngine(
         )
     }
 
-    /** One-liner fragment injected into every system prompt. */
-    fun toPromptFragment(ctx: DeviceContext): String = buildString {
+    /**
+     * One-liner fragment injected into every system prompt.
+     *
+     * [presence] is optional — callers that don't track it (tests, legacy
+     * flows) can omit it and the fragment stays unchanged.  When supplied it
+     * appends a brief presence note so the LLM has continuity cues across
+     * turns (time phase, whether the user is mid-conversation, etc.).
+     */
+    fun toPromptFragment(ctx: DeviceContext, presence: Presence? = null): String = buildString {
         append("Today is ${ctx.date}. The time is ${ctx.time} (${ctx.timezone}). ")
         append("Battery: ${ctx.batteryPercent}%")
         if (ctx.isCharging) append(" charging")
@@ -61,6 +68,7 @@ class ContextEngine(
         if (ctx.location != null) append("User location: ${ctx.location}. ")
         if (ctx.headsetConnected) append("User is wearing headphones. ")
         if (!ctx.isOnline) append("DEVICE IS OFFLINE — no internet. Only local commands work. ")
+        if (presence != null) append(presence.toPromptFragment()).append(' ')
     }
 
     /** Expose the online state cheaply for the tool router. */

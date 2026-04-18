@@ -1,6 +1,9 @@
 package com.jarvis.assistant.proactive
 
 import android.util.Log
+import com.jarvis.assistant.context.Presence
+import java.time.Instant
+import java.time.ZoneId
 
 /**
  * DecisionEngine — the final gatekeeper that converts a ranked list of
@@ -86,8 +89,45 @@ class DecisionEngine(
             return ProactiveAction.NoAction
         }
 
-        // Step 4 — top candidate (list is already sorted descending by finalScore)
+        // Step 3b — quiet hours: suppress everything except critical events.
+        // Critical = low battery or a reminder due inside reminderUrgentMs.
         val top = valid.first()
+        val critical = top.event.type == ProactiveEventType.LOW_BATTERY || run {
+            if (top.event.type != ProactiveEventType.UPCOMING_REMINDER) return@run false
+            val next = snapshot.nextReminderAtMillis
+            next != null && (next - snapshot.currentTimeMillis) <= config.reminderUrgentMs
+        }
+
+        if (isInQuietHours(snapshot.currentTimeMillis) && !critical) {
+            Log.d(
+                TAG,
+                "Quiet hours — suppressing ${top.event.type} / ${top.event.dedupeKey}"
+            )
+            return ProactiveAction.NoAction
+        }
+
+        // Step 3c — presence gate: soft suggestions (PASSIVE level) defer when
+        // the user is mid-conversation or winding down.  Critical events still
+        // go through even if the moment is active.
+        if (top.interruptLevel == InterruptLevel.PASSIVE && !critical) {
+            val presence = Presence.compute(
+                nowMs             = snapshot.currentTimeMillis,
+                lastInteractionMs = snapshot.lastUserInteractionTimeMillis,
+                isJarvisSpeaking  = snapshot.isJarvisSpeaking,
+                isJarvisListening = snapshot.isJarvisListening,
+                isDriving         = snapshot.isDriving
+            )
+            if (!presence.allowsSoftSuggestions()) {
+                Log.d(
+                    TAG,
+                    "Presence ${presence.activity}/${presence.timePhase} — " +
+                    "deferring soft ${top.event.type}"
+                )
+                return ProactiveAction.NoAction
+            }
+        }
+
+        // Step 4 — top candidate already selected above
         Log.d(
             TAG,
             "Top candidate: ${top.event.type} / ${top.event.dedupeKey} " +
@@ -132,6 +172,24 @@ class DecisionEngine(
                 Log.w(TAG, "Top candidate has NONE level after filter — returning NoAction")
                 ProactiveAction.NoAction
             }
+        }
+    }
+
+    /**
+     * True when [nowMs] falls inside the configured quiet-hours window.
+     * Supports wrap-around (e.g. 22 → 7).  Returns false when either bound
+     * is null (feature disabled).
+     */
+    private fun isInQuietHours(nowMs: Long): Boolean {
+        val start = config.quietHoursStartHour ?: return false
+        val end   = config.quietHoursEndHour   ?: return false
+        if (start == end) return false
+        val hour = Instant.ofEpochMilli(nowMs).atZone(ZoneId.systemDefault()).hour
+        return if (start < end) {
+            hour in start until end
+        } else {
+            // Wrap past midnight: e.g. 22..23 or 0..6 for start=22 end=7
+            hour >= start || hour < end
         }
     }
 }

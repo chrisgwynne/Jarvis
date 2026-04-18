@@ -603,7 +603,8 @@ class FollowUpCoordinator(
         if (resolved is AppResolver.Result.NotFound) {
             flow.markCompleted()
             flowContext.setActiveFlow(null)
-            return FlowResult.Complete("Hmm, I don't see $appName on your phone.")
+            val label = appName.trim().replaceFirstChar { it.uppercase() }
+            return FlowResult.Complete("$label isn't installed on this phone.")
         }
 
         return try {
@@ -636,7 +637,8 @@ class FollowUpCoordinator(
                     // Already handled above — unreachable
                     flow.markCompleted()
                     flowContext.setActiveFlow(null)
-                    FlowResult.Complete("Hmm, I don't see $appName on your phone.")
+                    val label = appName.trim().replaceFirstChar { it.uppercase() }
+                    FlowResult.Complete("$label isn't installed on this phone.")
                 }
             }
         } catch (e: Exception) {

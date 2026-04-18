@@ -92,8 +92,9 @@ class AnalyzeCameraViewTool(
                 // Route through main LLM pipeline — supports Gemini and all other providers
                 val base64 = visionClient.encodeImageForPipeline(file)
                 val systemMsg = Message("system",
-                    "You are Jarvis, a concise voice assistant. " +
-                    "Describe what you see in 1-2 short conversational sentences.")
+                    "You are Jarvis. Talk like a person, not an assistant. " +
+                    "Describe what you see in 1-2 short, natural sentences. " +
+                    "No assistant phrasing, no 'I can see…' preambles — just say it.")
                 val userMsg = Message("user", VISION_PROMPT, imageBase64 = base64)
                 llmRouter.completeSilent(listOf(systemMsg, userMsg))
             } else {

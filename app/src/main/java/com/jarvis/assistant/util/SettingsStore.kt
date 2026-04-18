@@ -66,6 +66,8 @@ class SettingsStore(context: Context) {
         const val KEY_OPENCLAW_SECURE     = "openclaw_secure"
         const val KEY_OPENCLAW_AUTH_TOKEN = "openclaw_auth_token"
         const val KEY_OPENCLAW_TIMEOUT_MS = "openclaw_timeout_ms"
+        const val KEY_OPENCLAW_MODEL      = "openclaw_model"
+        const val KEY_OPENCLAW_KEYWORD    = "openclaw_keyword"
 
         // Defaults
         const val DEFAULT_PROVIDER       = "OpenAI"
@@ -195,6 +197,15 @@ class SettingsStore(context: Context) {
     var openClawTimeoutMs: Long
         get() = prefs.getLong(KEY_OPENCLAW_TIMEOUT_MS, 30_000L)
         set(v) = prefs.edit().putLong(KEY_OPENCLAW_TIMEOUT_MS, v).apply()
+
+    var openClawModel: String
+        get() = prefs.getString(KEY_OPENCLAW_MODEL, "openclaw") ?: "openclaw"
+        set(v) = prefs.edit().putString(KEY_OPENCLAW_MODEL, v).apply()
+
+    /** Trigger keyword that forces routing to OpenClaw (default: "computer"). */
+    var openClawKeyword: String
+        get() = prefs.getString(KEY_OPENCLAW_KEYWORD, "computer") ?: "computer"
+        set(v) = prefs.edit().putString(KEY_OPENCLAW_KEYWORD, v).apply()
 
     /**
      * One-shot trigger: when ≥ 0, JarvisRuntime will auto-start voice enrollment

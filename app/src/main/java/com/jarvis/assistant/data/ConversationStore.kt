@@ -85,6 +85,9 @@ class ConversationStore(private val context: Context) : CompressibleStore {
         }
     }
 
+    /** Return the last [n] user/assistant messages (no system prompt). */
+    fun getRecentMessages(n: Int): List<Message> = history.takeLast(n).toList()
+
     val isEmpty: Boolean get() = history.isEmpty()
     fun clear() { history.clear(); rollingContext = null }
     override val size: Int get() = history.size

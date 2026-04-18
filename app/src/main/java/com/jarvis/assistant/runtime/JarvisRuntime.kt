@@ -1565,7 +1565,11 @@ class JarvisRuntime(
                             ttsEngine.speak("Looking into that.")
                         }
 
-                        val clawResult = openClawRouter.execute(transcript, sessionId)
+                        val clawResult = openClawRouter.execute(
+                            transcript,
+                            sessionId,
+                            llmRouter.conversationStore.getRecentMessages(6)
+                        )
                         LatencyTracker.mark("OPENCLAW_COMPLETE")
 
                         when (clawResult) {

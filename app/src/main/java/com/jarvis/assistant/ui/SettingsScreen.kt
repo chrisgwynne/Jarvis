@@ -83,7 +83,10 @@ fun SettingsScreen(
     val openClawSecure     by vm.openClawSecure.collectAsStateWithLifecycle()
     val openClawAuthToken  by vm.openClawAuthToken.collectAsStateWithLifecycle()
     val openClawTimeoutMs  by vm.openClawTimeoutMs.collectAsStateWithLifecycle()
+    val openClawModel      by vm.openClawModel.collectAsStateWithLifecycle()
+    val openClawKeyword    by vm.openClawKeyword.collectAsStateWithLifecycle()
     val openClawStatus     by vm.openClawConnectionStatus.collectAsStateWithLifecycle()
+    val haConnectionStatus by vm.haConnectionStatus.collectAsStateWithLifecycle()
 
     var apiKeyVisible       by remember { mutableStateOf(false) }
     var providerExpanded    by remember { mutableStateOf(false) }
@@ -752,6 +755,27 @@ fun SettingsScreen(
                     singleLine = true
                 )
 
+                OutlinedTextField(
+                    value = openClawKeyword,
+                    onValueChange = vm::setOpenClawKeyword,
+                    label = { Text("Keyword trigger", color = TextMuted) },
+                    placeholder = { Text("computer", color = TextMuted) },
+                    supportingText = { Text("Say this word first to always invoke OpenClaw (e.g. \"computer, who invented the internet\")", color = TextMuted, fontSize = 11.sp) },
+                    colors = jarvisTextFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                OutlinedTextField(
+                    value = openClawModel,
+                    onValueChange = vm::setOpenClawModel,
+                    label = { Text("Model name", color = TextMuted) },
+                    placeholder = { Text("openclaw", color = TextMuted) },
+                    colors = jarvisTextFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
                 // Test Connection button + status indicator
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -843,6 +867,37 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
             )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    onClick = vm::testHaConnection,
+                    enabled = haConnectionStatus != "Connecting…",
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF0D1B2A),
+                        contentColor = Cyan
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Cyan),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        if (haConnectionStatus == "Connecting…") "Testing…" else "Test Connection",
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                haConnectionStatus?.let { status ->
+                    Text(
+                        text = status,
+                        color = if (status.startsWith("Connected")) Color(0xFF00E676) else if (status == "Connecting…") Cyan else Color(0xFFFF5252),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
 
             // ── Memory ────────────────────────────────────────────────────────
             Spacer(Modifier.height(24.dp))

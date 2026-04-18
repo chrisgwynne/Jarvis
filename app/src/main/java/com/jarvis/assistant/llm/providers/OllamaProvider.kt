@@ -2,8 +2,10 @@ package com.jarvis.assistant.llm.providers
 
 import com.jarvis.assistant.llm.LlmException
 import com.jarvis.assistant.llm.LlmProvider
+import com.jarvis.assistant.llm.LlmResult
 import com.jarvis.assistant.llm.Message
 import com.jarvis.assistant.llm.NetworkClient
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 /**
  * Ollama provider — runs a local LLM on your home server or PC.
@@ -60,6 +62,55 @@ class OllamaProvider(private val baseUrl: String) : LlmProvider {
             ?: throw LlmException("Ollama returned an empty response.")
     }
 
+    /**
+     * Call Ollama with tool declarations — supported on llama3.1+, mistral, and other
+     * models that implement OpenAI-compatible function calling.
+     *
+     * Note: Ollama returns `arguments` as a JSON *object* (not a string like OpenAI),
+     * so we re-serialize it to a string for uniform downstream handling.
+     */
+    suspend fun completeWithTools(messages: List<Message>, tools: List<ToolSchema>): LlmResult {
+        if (baseUrl.isBlank()) throw LlmException("No Ollama base URL configured — go to Settings.")
+        val cleanBase = baseUrl.trimEnd('/')
+
+        val ollamaTools = tools.map { schema ->
+            OllamaTool(
+                type     = "function",
+                function = OllamaToolFunction(
+                    name        = schema.name,
+                    description = schema.description,
+                    parameters  = schema.parameters
+                )
+            )
+        }
+
+        val requestBody = NetworkClient.gson.toJson(
+            OllamaToolRequest(
+                model    = "llama3.2",
+                messages = messages.map { OllamaMessage(role = it.role, content = it.content) },
+                tools    = ollamaTools,
+                stream   = false
+            )
+        )
+
+        val responseBody = NetworkClient.post(
+            url     = "$cleanBase/api/chat",
+            headers = mapOf("Content-Type" to "application/json"),
+            body    = requestBody
+        )
+
+        val parsed   = NetworkClient.gson.fromJson(responseBody, OllamaToolResponse::class.java)
+        val toolCall = parsed.message?.tool_calls?.firstOrNull()
+
+        return if (toolCall != null) {
+            // Re-serialize the object-typed arguments to a JSON string
+            val argsJson = NetworkClient.gson.toJson(toolCall.function.arguments ?: emptyMap<String, Any>())
+            LlmResult.ToolCall(toolName = toolCall.function.name ?: "", argsJson = argsJson)
+        } else {
+            LlmResult.Text(parsed.message?.content?.trim() ?: "")
+        }
+    }
+
     // ── Wire-format data classes ───────────────────────────────────────────────
 
     private data class OllamaMessage(val role: String, val content: String)
@@ -72,5 +123,24 @@ class OllamaProvider(private val baseUrl: String) : LlmProvider {
 
     private data class OllamaResponse(val message: OllamaMsg?) {
         data class OllamaMsg(val content: String?)
+    }
+
+    // Function calling wire-format
+    private data class OllamaToolFunction(
+        val name: String,
+        val description: String,
+        val parameters: Map<String, Any>
+    )
+    private data class OllamaTool(val type: String, val function: OllamaToolFunction)
+    private data class OllamaToolRequest(
+        val model: String,
+        val messages: List<OllamaMessage>,
+        val tools: List<OllamaTool>,
+        val stream: Boolean
+    )
+    private data class OllamaToolResponse(val message: OllamaToolMsg?) {
+        data class OllamaToolMsg(val content: String?, val tool_calls: List<OllamaToolCall>?)
+        data class OllamaToolCall(val function: OllamaToolCallFunction)
+        data class OllamaToolCallFunction(val name: String?, val arguments: Map<String, Any>?)
     }
 }

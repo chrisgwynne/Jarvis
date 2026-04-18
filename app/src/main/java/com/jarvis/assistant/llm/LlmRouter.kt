@@ -294,7 +294,9 @@ class LlmRouter(context: Context) {
                 is OpenRouterProvider -> provider.completeWithTools(messages, tools)
                 is KimiProvider       -> provider.completeWithTools(messages, tools)
                 is MiniMaxProvider    -> provider.completeWithTools(messages, tools)
-                else                  -> null   // non-FC provider — caller falls back to streaming
+                is GeminiProvider     -> provider.completeWithTools(messages, tools)
+                is OllamaProvider     -> provider.completeWithTools(messages, tools)
+                else                  -> null
             }
         } catch (e: CancellationException) {
             throw e

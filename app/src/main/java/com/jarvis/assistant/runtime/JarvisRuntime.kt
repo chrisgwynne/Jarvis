@@ -5,7 +5,9 @@ import android.util.Log
 import com.jarvis.assistant.audio.AudioFocusManager
 import com.jarvis.assistant.audio.BargeInDetector
 import com.jarvis.assistant.audio.BluetoothScoManager
+import com.jarvis.assistant.audio.GoogleWakeWordDetector
 import com.jarvis.assistant.audio.SpeechCapture
+import com.jarvis.assistant.audio.TFLiteWakeWordDetector
 import com.jarvis.assistant.audio.TtsEngine
 import com.jarvis.assistant.audio.WakeWordDetector
 import com.jarvis.assistant.call.CallCoordinator
@@ -62,6 +64,7 @@ import com.jarvis.assistant.remote.openclaw.OpenClawRouter
 import com.jarvis.assistant.remote.openclaw.OpenClawSettingsRepository
 import com.jarvis.assistant.security.ActionPolicyGate
 import com.jarvis.assistant.llm.LlmResult
+import com.jarvis.assistant.llm.Message
 import com.jarvis.assistant.llm.NetworkClient
 import com.jarvis.assistant.tools.ContactLookup
 import com.jarvis.assistant.tools.framework.ToolInput
@@ -127,6 +130,7 @@ class JarvisRuntime(
         private const val TAG                  = "JarvisRuntime"
         private const val FAST_FAIL_THRESHOLD  = 3_000L
         private const val MAX_FAST_FAILS       = 3
+        private const val MAX_TOOL_HOPS        = 3   // agentic chain cap per turn
 
         private val REMEMBER_ME_PATTERN = Regex(
             """remember\s+me|save\s+my\s+(?:voice|profile)|add\s+me""",
@@ -154,6 +158,10 @@ class JarvisRuntime(
     private val locationProvider     = CurrentLocationProvider(context)
     private val contextEngine        = ContextEngine(context, locationProvider)
     private val llmRouter            = LlmRouter(context)
+    private val conversationCompressor = com.jarvis.assistant.data.ConversationCompressor(
+        store     = llmRouter.conversationStore,
+        summarise = llmRouter::completeSilent
+    )
 
     // Room — memory layer
     private lateinit var db              : JarvisDatabase
@@ -205,6 +213,7 @@ class JarvisRuntime(
 
     // Jarvis Brain — behavioural learning system
     private lateinit var brainEngine: com.jarvis.assistant.brain.BrainEngine
+
 
     // Driving mode — detects car Bluetooth + UiMode car dock
     private val drivingModeManager = DrivingModeManager(context).also { mgr ->
@@ -814,7 +823,12 @@ class JarvisRuntime(
             }
             // Bail if the runtime was stopped while we were waiting for SCO.
             if (!scope.isActive) return@launch
-            wakeDetector = WakeWordDetector(
+            // Prefer offline TFLite detector when model asset is present; fall back to Google STT.
+            val tflite = TFLiteWakeWordDetector(context, ::onWakeWordDetected) { err ->
+                Log.w(TAG, "TFLite wake-word: $err — falling back to Google STT")
+            }
+            wakeDetector = if (tflite.isAvailable) tflite
+            else GoogleWakeWordDetector(
                 context    = context,
                 onDetected = ::onWakeWordDetected,
                 onError    = { Log.w(TAG, "WakeWordDetector error — will self-heal") }
@@ -1736,42 +1750,65 @@ class JarvisRuntime(
                 transcript, history, maxMemories = 4, speakerContext = sessionSpeaker
             )
 
-            // ── LLM function calling (FC-capable providers: Anthropic, OpenAI, OpenRouter) ──
+            // ── Agentic tool chaining (up to MAX_TOOL_HOPS per turn) ──────────────
+            // FC-capable providers return LlmResult; non-FC providers return null
+            // and fall through to the streaming path below unchanged.
             val schemas = toolRegistry.availableSchemas(isOnline)
             if (schemas.isNotEmpty()) {
-                val fcResult = llmRouter.completeWithFunctionCalling(messages, schemas)
-                when (fcResult) {
-                    is LlmResult.ToolCall -> {
-                        val tool = toolRegistry.findByName(fcResult.toolName)
-                        if (tool != null) {
+                val chainMessages = messages.toMutableList()
+                var hopsUsed = 0
+                var fcHandled = false
+
+                while (hopsUsed < MAX_TOOL_HOPS) {
+                    val fcResult = llmRouter.completeWithFunctionCalling(chainMessages, schemas)
+                    when {
+                        fcResult == null -> break   // provider has no FC — fall through to streaming
+
+                        fcResult is LlmResult.Text -> {
+                            if (fcResult.content.isNotBlank()) {
+                                llmRouter.conversationStore.addMessage("assistant", fcResult.content)
+                                speakAndRecord(fcResult.content)
+                                fcHandled = true
+                            }
+                            break
+                        }
+
+                        fcResult is LlmResult.ToolCall -> {
+                            hopsUsed++
+                            val tool = toolRegistry.findByName(fcResult.toolName)
+                            if (tool == null) break   // unknown tool name — fall through
+
                             @Suppress("UNCHECKED_CAST")
                             val argsMap = try {
                                 (NetworkClient.gson.fromJson(fcResult.argsJson, Map::class.java) as Map<*, *>)
                                     .entries.associate { (k, v) -> k.toString() to v.toString() }
                             } catch (e: Exception) { emptyMap() }
+
                             val result = toolRegistry.execute(context, tool, ToolInput(transcript, argsMap))
                             val feedback = when (result) {
                                 is ToolResult.Success -> result.spokenFeedback
                                 is ToolResult.Failure -> result.spokenFeedback
                                 else -> null
                             }
-                            if (feedback != null) {
-                                llmRouter.conversationStore.addMessage("assistant", feedback)
-                                speakAndRecord(feedback)
-                                return  // skip streaming path
+
+                            if (feedback == null || result is ToolResult.Failure || hopsUsed >= MAX_TOOL_HOPS) {
+                                // Failure or chain cap — deliver raw feedback and stop
+                                if (feedback != null) {
+                                    llmRouter.conversationStore.addMessage("assistant", feedback)
+                                    speakAndRecord(feedback)
+                                    fcHandled = true
+                                }
+                                break
                             }
+
+                            // Inject tool result so the LLM can decide to chain or wrap up
+                            chainMessages.add(Message("assistant", "[${tool.name}]: $feedback"))
                         }
-                        // Tool not found — fall through to streaming
+
+                        else -> break
                     }
-                    is LlmResult.Text -> {
-                        if (fcResult.content.isNotBlank()) {
-                            llmRouter.conversationStore.addMessage("assistant", fcResult.content)
-                            speakAndRecord(fcResult.content)
-                            return  // skip streaming path
-                        }
-                    }
-                    null -> { /* Provider doesn't support FC — fall through */ }
                 }
+                if (fcHandled) return   // agentic chain complete — skip streaming path
             }
 
             val fullResponse    = StringBuilder()
@@ -1821,6 +1858,11 @@ class JarvisRuntime(
                 else base
                 memoryWriter.writeTurn(sessionId, "assistant", formatted)
                 DeviceStateStore.update { copy(lastAssistantResponse = formatted) }
+            }
+
+            // Compress oldest turn-pairs if history is near the context window ceiling
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                conversationCompressor.maybeCompress()
             }
 
         } catch (e: CancellationException) {

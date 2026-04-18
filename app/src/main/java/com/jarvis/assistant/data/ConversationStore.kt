@@ -14,7 +14,7 @@ import java.time.format.DateTimeFormatter
  * The system prompt is rebuilt on every call so it always reflects the current
  * time, battery level, and device model.  It is never stored in history.
  */
-class ConversationStore(private val context: Context) {
+class ConversationStore(private val context: Context) : CompressibleStore {
 
     companion object {
         const val MAX_HISTORY_PAIRS = 6
@@ -44,6 +44,14 @@ class ConversationStore(private val context: Context) {
 
     private val history = ArrayDeque<Message>()
 
+    /**
+     * Rolling summary of turn-pairs that have been compressed out of [history].
+     * Injected as a pinned context block before the live history on every call.
+     * Null until the first compression occurs.
+     */
+    @Volatile var rollingContext: String? = null
+        private set
+
     fun addMessage(role: String, content: String) {
         history.addLast(Message(role = role, content = content))
         val maxMessages = MAX_HISTORY_PAIRS * 2
@@ -52,10 +60,32 @@ class ConversationStore(private val context: Context) {
 
     fun getContextMessages(): List<Message> = buildList {
         add(Message(role = "system", content = buildSystemPrompt(context)))
+        rollingContext?.let {
+            add(Message(role = "system", content = "Earlier in this conversation: $it"))
+        }
         addAll(history)
     }
 
+    /**
+     * Return the oldest [pairs] turn-pairs as a flat list for summarisation.
+     * Returns an empty list if fewer pairs are available.
+     */
+    override fun oldestPairs(pairs: Int): List<Message> = history.take(pairs * 2).toList()
+
+    /**
+     * Remove the oldest [pairs] turn-pairs from live history and store [summary]
+     * as the new rolling context. Called by [ConversationCompressor] on Dispatchers.IO.
+     */
+    override fun applyRollingContext(summary: String, pairs: Int) {
+        repeat(pairs * 2) { if (history.isNotEmpty()) history.removeFirst() }
+        rollingContext = if (rollingContext != null) {
+            "$rollingContext\n$summary"
+        } else {
+            summary
+        }
+    }
+
     val isEmpty: Boolean get() = history.isEmpty()
-    fun clear() = history.clear()
-    val size: Int get() = history.size
+    fun clear() { history.clear(); rollingContext = null }
+    override val size: Int get() = history.size
 }

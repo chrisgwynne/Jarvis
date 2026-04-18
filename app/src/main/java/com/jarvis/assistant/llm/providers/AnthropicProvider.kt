@@ -133,18 +133,20 @@ class AnthropicProvider(private val apiKey: String, private val maxTokens: Int =
         )
 
         val parsed = NetworkClient.gson.fromJson(responseBody, AnthropicToolResponse::class.java)
-        val toolBlocks = parsed.content?.filter { it.type == "tool_use" } ?: emptyList()
+        val toolBlocks = parsed.content
+            ?.filter { it.type == "tool_use" && !it.name.isNullOrBlank() }
+            ?: emptyList()
         return when {
             toolBlocks.size > 1 -> {
                 LlmResult.MultiToolCall(toolBlocks.map { tb ->
                     val argsJson = NetworkClient.gson.toJson(tb.input ?: emptyMap<String, Any>())
-                    LlmResult.ToolCall(toolName = tb.name ?: "", argsJson = argsJson)
+                    LlmResult.ToolCall(toolName = tb.name!!, argsJson = argsJson)
                 })
             }
             toolBlocks.size == 1 -> {
                 val tb = toolBlocks.first()
                 val argsJson = NetworkClient.gson.toJson(tb.input ?: emptyMap<String, Any>())
-                LlmResult.ToolCall(toolName = tb.name ?: "", argsJson = argsJson)
+                LlmResult.ToolCall(toolName = tb.name!!, argsJson = argsJson)
             }
             else -> {
                 val text = parsed.content?.firstOrNull { it.type == "text" }?.text?.trim() ?: ""

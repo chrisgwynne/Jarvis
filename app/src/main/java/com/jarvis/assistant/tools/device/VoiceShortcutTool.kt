@@ -29,7 +29,7 @@ class VoiceShortcutTool(private val repository: VoiceShortcutRepository) : Tool 
             RegexOption.IGNORE_CASE
         )
         private val RUN_PATTERN = Regex(
-            """(?:run|execute|trigger)\s+(?:shortcut\s+)?(.+)""",
+            """(?:run|execute|trigger)\s+shortcut\s+(.+)""",
             RegexOption.IGNORE_CASE
         )
         private val LIST_PATTERN = Regex(

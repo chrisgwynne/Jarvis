@@ -11,8 +11,8 @@ class VoiceShortcutRepository(private val dao: VoiceShortcutDao) {
             triggerNormalized = name.trim().lowercase(),
             commands          = commands.joinToString("\n")
         )
-        dao.insert(shortcut)
-        return shortcut
+        val insertedId = dao.insert(shortcut)
+        return shortcut.copy(id = insertedId)
     }
 
     suspend fun getAll(): List<VoiceShortcut> = dao.getAll()

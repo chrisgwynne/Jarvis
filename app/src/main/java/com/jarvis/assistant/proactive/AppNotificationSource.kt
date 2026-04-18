@@ -29,13 +29,13 @@ class AppNotificationSource : NotificationContextSource {
 
     override fun getUnreadCount(): Int = unread().size
 
-    override fun getLastNotificationText(): String? =
-        unread().firstOrNull()?.let { n ->
-            listOfNotNull(
-                n.title.takeIf { it.isNotBlank() },
-                n.text.takeIf { it.isNotBlank() }
-            ).joinToString(": ").takeIf { it.isNotBlank() }
-        }
+    override fun getLastNotificationText(): String? {
+        val n = unread().firstOrNull() ?: return null
+        return listOfNotNull(
+            n.title.takeIf { it.isNotBlank() },
+            n.text.takeIf { it.isNotBlank() }
+        ).joinToString(": ").takeIf { it.isNotBlank() }
+    }
 
     override fun getLastNotificationApp(): String? = unread().firstOrNull()?.packageName
 

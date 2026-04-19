@@ -56,4 +56,21 @@ class FlashlightTool(private val context: Context) : Tool {
             ToolResult.Failure(FailurePhrases.FLASHLIGHT_DIDNT_RESPOND)
         }
     }
+
+    // Reversible: undo the toggle by setting the torch to the opposite state.
+    override val isReversible: Boolean = true
+
+    override suspend fun undo(input: ToolInput, journal: String): ToolResult {
+        val wasOn = input.param("on") == "true"
+        val newOn = !wasOn
+        return try {
+            val cm = context.getSystemService(CameraManager::class.java) ?: return ToolResult.Success("")
+            val cameraId = resolveFlashCameraId(cm) ?: return ToolResult.Success("")
+            cm.setTorchMode(cameraId, newOn)
+            ToolResult.Success(spokenFeedback = "")
+        } catch (e: Exception) {
+            Log.w("FlashlightTool", "Undo toggle failed", e)
+            ToolResult.Failure(FailurePhrases.FLASHLIGHT_DIDNT_RESPOND)
+        }
+    }
 }

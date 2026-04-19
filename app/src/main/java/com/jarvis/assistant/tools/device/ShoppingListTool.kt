@@ -1,5 +1,7 @@
 package com.jarvis.assistant.tools.device
 
+import android.util.Log
+import com.jarvis.assistant.runtime.FailurePhrases
 import com.jarvis.assistant.shopping.ShoppingRepository
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
@@ -93,7 +95,33 @@ class ShoppingListTool(private val repository: ShoppingRepository) : Tool {
                 else -> ToolResult.Failure("I didn't understand that shopping list command.")
             }
         } catch (e: Exception) {
-            ToolResult.Failure("Something went wrong with the shopping list: ${e.message}", e)
+            Log.w("ShoppingListTool", "Shopping list op failed", e)
+            ToolResult.Failure(FailurePhrases.GENERIC, e)
+        }
+    }
+
+    /**
+     * Reversible for add / remove only.  clear has no snapshot of the prior
+     * contents and read has no state change, so undo for those is a no-op.
+     */
+    override val isReversible: Boolean = true
+
+    override suspend fun undo(input: ToolInput, journal: String): ToolResult {
+        return try {
+            when (input.param("ACTION")) {
+                "add" -> {
+                    repository.markDone(input.param("ITEM"))
+                    ToolResult.Success("")
+                }
+                "remove" -> {
+                    repository.addItem(input.param("ITEM"))
+                    ToolResult.Success("")
+                }
+                else -> ToolResult.Success("")
+            }
+        } catch (e: Exception) {
+            Log.w("ShoppingListTool", "Shopping list undo failed", e)
+            ToolResult.Failure(FailurePhrases.GENERIC, e)
         }
     }
 }

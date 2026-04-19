@@ -53,7 +53,8 @@ class BluetoothScoManager(private val context: Context) {
         context.getSystemService(BluetoothManager::class.java)?.adapter
     private var headsetProfile: BluetoothHeadset? = null
     private var scoActive = false
-    private var receiverRegistered = false
+    private var scoReceiverRegistered = false
+    private var headsetReceiverRegistered = false
 
     /**
      * Optional callback fired (on the main thread, via BroadcastReceiver) when a
@@ -123,16 +124,19 @@ class BluetoothScoManager(private val context: Context) {
      * Call once when the runtime service starts.
      */
     fun start() {
-        if (!receiverRegistered) {
+        if (!scoReceiverRegistered) {
             context.registerReceiver(
                 scoReceiver,
                 IntentFilter(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED)
             )
+            scoReceiverRegistered = true
+        }
+        if (!headsetReceiverRegistered) {
             context.registerReceiver(
                 headsetConnectionReceiver,
                 IntentFilter(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
             )
-            receiverRegistered = true
+            headsetReceiverRegistered = true
         }
 
         bluetoothAdapter?.getProfileProxy(
@@ -224,10 +228,21 @@ class BluetoothScoManager(private val context: Context) {
     fun release() {
         disconnect()
         onHeadsetConnectionChanged = null
-        if (receiverRegistered) {
-            try { context.unregisterReceiver(scoReceiver) } catch (_: Exception) {}
-            try { context.unregisterReceiver(headsetConnectionReceiver) } catch (_: Exception) {}
-            receiverRegistered = false
+        if (scoReceiverRegistered) {
+            try {
+                context.unregisterReceiver(scoReceiver)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "scoReceiver was already unregistered: ${e.message}")
+            }
+            scoReceiverRegistered = false
+        }
+        if (headsetReceiverRegistered) {
+            try {
+                context.unregisterReceiver(headsetConnectionReceiver)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "headsetConnectionReceiver was already unregistered: ${e.message}")
+            }
+            headsetReceiverRegistered = false
         }
         headsetProfile?.let {
             bluetoothAdapter?.closeProfileProxy(BluetoothProfile.HEADSET, it)

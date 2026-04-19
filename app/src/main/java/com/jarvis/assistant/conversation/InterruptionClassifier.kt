@@ -52,9 +52,19 @@ object InterruptionClassifier {
      * @param utterance    The new user input captured post-interrupt.
      * @param spokenSoFar  What Jarvis had said before being cut off (may be empty).
      */
-    fun classify(utterance: String, spokenSoFar: String): InterruptionType {
+    fun classify(utterance: String, spokenSoFar: String): InterruptionType =
+        classify(utterance, tokensFor(spokenSoFar))
+
+    /** Precomputed-tokens overload — callers that classify against the same
+     *  spoken text repeatedly (rare, but possible) can avoid re-tokenising.
+     */
+    fun classify(utterance: String, spokenTokens: Set<String>): InterruptionType {
         val lower = utterance.lowercase().trim()
-        if (lower.isBlank()) return InterruptionType.CONTINUE
+        // Blank utterance = barge-in fired but nothing was transcribed.  Don't
+        // resume the previous response — we have no idea what the user said,
+        // and resuming on top of an unknown interrupt is more jarring than
+        // simply stopping and waiting for the next turn.
+        if (lower.isBlank()) return InterruptionType.URGENT
 
         // 1. URGENT — exact-match or startsWith on hard-stop phrases
         if (URGENT_PHRASES.any { phrase ->
@@ -74,16 +84,27 @@ object InterruptionClassifier {
         // 4. CLARIFICATION — explicit "what do you mean" OR a short question
         //    that shares a topic word with the unfinished response.
         if (CLARIFY_PHRASES.any { lower.contains(it) }) return InterruptionType.CLARIFICATION
-        if (isQuestion(lower) && sharesTopic(lower, spokenSoFar) &&
+        if (isQuestion(lower) && sharesTopicUsingTokens(lower, spokenTokens) &&
             lower.split(" ").size <= 10) return InterruptionType.CLARIFICATION
 
         // 5. REPLACEMENT — command or first-person statement, same conversation
         //    but doesn't share topic with response → user swapped the question.
         if ((isCommand(lower) || isFirstPerson(lower)) &&
-            !sharesTopic(lower, spokenSoFar)) return InterruptionType.REPLACEMENT
+            !sharesTopicUsingTokens(lower, spokenTokens)) return InterruptionType.REPLACEMENT
 
         // 6. Default: unrelated new topic
         return InterruptionType.UNRELATED
+    }
+
+    /** Tokenise [spoken] once — expose so callers can cache tokens alongside
+     *  their ResumableResponse.
+     */
+    fun tokensFor(spoken: String): Set<String> {
+        if (spoken.isBlank()) return emptySet()
+        return spoken.lowercase()
+            .split(Regex("""\W+"""))
+            .filter { it.length > 3 && it !in STOP_WORDS }
+            .toSet()
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -115,16 +136,7 @@ object InterruptionClassifier {
         lower.startsWith("my ") || lower.startsWith("we ") ||
         lower.startsWith("we'")
 
-    /**
-     * Cheap topic-overlap check: share at least one content word (>3 chars,
-     * not a stop-word) between the utterance and what Jarvis was saying.
-     */
-    private fun sharesTopic(utterance: String, spoken: String): Boolean {
-        if (spoken.isBlank()) return false
-        val spokenWords = spoken.lowercase()
-            .split(Regex("""\W+"""))
-            .filter { it.length > 3 && it !in STOP_WORDS }
-            .toSet()
+    private fun sharesTopicUsingTokens(utterance: String, spokenWords: Set<String>): Boolean {
         if (spokenWords.isEmpty()) return false
         val utteranceWords = utterance.split(Regex("""\W+"""))
             .filter { it.length > 3 && it !in STOP_WORDS }

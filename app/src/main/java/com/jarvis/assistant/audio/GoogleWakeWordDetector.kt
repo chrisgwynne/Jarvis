@@ -141,9 +141,10 @@ class GoogleWakeWordDetector(
 
         handler.post {
             if (!cont.isActive) return@post
-            recognizer = SpeechRecognizer.createSpeechRecognizer(context)
-            recognizer!!.setRecognitionListener(listener)
-            recognizer!!.startListening(
+            val r = SpeechRecognizer.createSpeechRecognizer(context)
+            recognizer = r
+            r.setRecognitionListener(listener)
+            r.startListening(
                 Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                         RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)

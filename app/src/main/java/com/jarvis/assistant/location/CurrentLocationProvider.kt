@@ -54,14 +54,19 @@ class CurrentLocationProvider(private val context: Context) {
      * Fetch a fresh location fix. Suspends until the fix arrives or [FETCH_TIMEOUT_MS]
      * elapses. Falls back to [lastLocation] (cached by Fused) if the active fetch times
      * out. Updates [lastResult] before returning.
+     *
+     * @param highAccuracy When true, requests PRIORITY_HIGH_ACCURACY (GPS + fused)
+     *   rather than the default balanced priority.  Used by the live-location
+     *   intent where the user explicitly asked "where am I?" — battery cost is
+     *   acceptable because the user is actively waiting for an answer.
      */
-    suspend fun refresh() {
+    suspend fun refresh(highAccuracy: Boolean = false) {
         if (!hasLocationPermission()) {
             Log.d(TAG, "Location permission not granted — skipping refresh")
             return
         }
         withContext(Dispatchers.IO) {
-            val location = fetchCurrentLocation() ?: fetchLastLocation()
+            val location = fetchCurrentLocation(highAccuracy) ?: fetchLastLocation()
             if (location == null) {
                 Log.d(TAG, "No location fix available")
                 return@withContext
@@ -74,40 +79,46 @@ class CurrentLocationProvider(private val context: Context) {
             Log.d(TAG, "Fix obtained: ${location.latitude},${location.longitude} " +
                     "acc=${location.accuracy}m age=${elapsedMs / 1000}s")
 
-            val (label, locality) = reverseGeocode(location.latitude, location.longitude)
+            val geo = reverseGeocode(location.latitude, location.longitude)
 
             lastResult = LocationResult(
                 latitude       = location.latitude,
                 longitude      = location.longitude,
                 accuracyMeters = location.accuracy,
                 timestampMs    = location.time,
-                displayLabel   = label,
-                locality       = locality,
+                displayLabel   = geo.label,
+                locality       = geo.locality,
+                street         = geo.street,
+                postcode       = geo.postcode,
+                country        = geo.country,
                 isFresh        = isFresh,
                 isApproximate  = isApprox,
             )
-            Log.d(TAG, "Location updated: $label (fresh=$isFresh)")
+            Log.d(TAG, "Location updated: ${geo.label} (fresh=$isFresh)")
         }
     }
 
     // ── Private helpers ────────────────────────────────────────────────────────
 
     @Suppress("MissingPermission")
-    private suspend fun fetchCurrentLocation(): android.location.Location? =
+    private suspend fun fetchCurrentLocation(highAccuracy: Boolean = false): android.location.Location? =
         withTimeoutOrNull(FETCH_TIMEOUT_MS) {
             suspendCancellableCoroutine { cont ->
                 val cts = CancellationTokenSource()
                 cont.invokeOnCancellation { cts.cancel() }
 
-                fusedClient.getCurrentLocation(
-                    Priority.PRIORITY_BALANCED_POWER_ACCURACY,
-                    cts.token
-                ).addOnSuccessListener { loc ->
-                    cont.resume(loc)
-                }.addOnFailureListener { e ->
-                    Log.w(TAG, "getCurrentLocation failed: ${e.message}")
-                    cont.resume(null)
-                }
+                val priority = if (highAccuracy)
+                    Priority.PRIORITY_HIGH_ACCURACY
+                else
+                    Priority.PRIORITY_BALANCED_POWER_ACCURACY
+
+                fusedClient.getCurrentLocation(priority, cts.token)
+                    .addOnSuccessListener { loc ->
+                        cont.resume(loc)
+                    }.addOnFailureListener { e ->
+                        Log.w(TAG, "getCurrentLocation failed: ${e.message}")
+                        cont.resume(null)
+                    }
             }
         }
 
@@ -122,9 +133,23 @@ class CurrentLocationProvider(private val context: Context) {
                 }
         }
 
-    private fun reverseGeocode(lat: Double, lon: Double): Pair<String?, String?> {
+    /**
+     * Structured geocode result used by [refresh] to populate [LocationResult].
+     * Carries the full [label], the short [locality], plus the individual
+     * [street] and [postcode] fields needed by the live-location intent to
+     * build "You're on X in Y" replies without re-parsing the label.
+     */
+    private data class GeocodeParts(
+        val label: String?,
+        val locality: String?,
+        val street: String?,
+        val postcode: String?,
+        val country: String?
+    )
+
+    private fun reverseGeocode(lat: Double, lon: Double): GeocodeParts {
         return try {
-            if (!Geocoder.isPresent()) return Pair(null, null)
+            if (!Geocoder.isPresent()) return GeocodeParts(null, null, null, null, null)
             val geocoder = Geocoder(context, Locale.getDefault())
 
             val addresses = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
@@ -142,7 +167,7 @@ class CurrentLocationProvider(private val context: Context) {
                 geocoder.getFromLocation(lat, lon, 1)
             }
 
-            val addr = addresses?.firstOrNull() ?: return Pair(null, null)
+            val addr = addresses?.firstOrNull() ?: return GeocodeParts(null, null, null, null, null)
 
             // Build label from most-specific to least-specific, deduplicating adjacent values.
             // subAdminArea (county/district) fills the gap when locality (city) is missing —
@@ -167,10 +192,18 @@ class CurrentLocationProvider(private val context: Context) {
 
             // locality for the short name; fall back to subAdminArea if city unknown
             val locality = addr.locality ?: addr.subAdminArea
-            Pair(label, locality)
+            GeocodeParts(
+                label    = label,
+                locality = locality,
+                // Street — thoroughfare without the house number.  The live-location
+                // intent wants "You're on High Street", not "You're on 14 High Street".
+                street   = addr.thoroughfare,
+                postcode = addr.postalCode,
+                country  = addr.countryName
+            )
         } catch (e: Exception) {
             Log.w(TAG, "Geocoding failed: ${e.message}")
-            Pair(null, null)
+            GeocodeParts(null, null, null, null, null)
         }
     }
 

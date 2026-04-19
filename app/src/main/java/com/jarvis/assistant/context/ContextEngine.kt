@@ -33,9 +33,32 @@ class ContextEngine(
     companion object {
         private val DATE_FMT = DateTimeFormatter.ofPattern("EEEE, MMMM d yyyy")
         private val TIME_FMT = DateTimeFormatter.ofPattern("h:mm a")
+        /**
+         * Context reads (battery intent, connectivity query, audio route) are
+         * cheap individually but add up on bursty paths that call build()
+         * multiple times per turn.  Cache for a short window — the only
+         * time-sensitive field is the minute-granular clock string.
+         */
+        private const val CACHE_TTL_MS = 2_000L
     }
 
+    @Volatile private var cached: DeviceContext? = null
+    @Volatile private var cachedAt: Long = 0L
+
     fun build(): DeviceContext {
+        val now = System.currentTimeMillis()
+        val snapshot = cached
+        if (snapshot != null && now - cachedAt < CACHE_TTL_MS) return snapshot
+        val fresh = buildFresh()
+        cached = fresh
+        cachedAt = now
+        return fresh
+    }
+
+    /** Force a rebuild on the next [build] call. */
+    fun invalidate() { cachedAt = 0L }
+
+    private fun buildFresh(): DeviceContext {
         val now      = LocalDateTime.now()
         val battery  = getBattery()
         return DeviceContext(

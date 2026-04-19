@@ -60,6 +60,30 @@ interface Tool {
      * Null means the tool is only reachable via the regex [matches] path.
      */
     fun schema(): ToolSchema? = null
+
+    /**
+     * True when this tool's effect can be reversed by [undo].  Plans that
+     * include any irreversible step warn the user before executing.
+     *
+     * Default false — opt in by overriding.  A plain "Done." spoken reply is
+     * not reversible; turning on the torch is; sending an SMS is not.
+     */
+    val isReversible: Boolean get() = false
+
+    /**
+     * Reverse the effect of a previously successful [execute] call.
+     *
+     * The [journal] is the post-execute state captured by the [PlanRunner]
+     * (the [ToolResult.Success.rawData] payload, plus the original input).
+     * Implementations parse [journal] to recover whatever they need (e.g.
+     * the inserted reminder id) and undo it.
+     *
+     * Default implementation is a no-op success — appropriate for tools
+     * whose execute() didn't change observable state.  Reversible tools
+     * MUST override to actually revert and MUST also set [isReversible].
+     */
+    suspend fun undo(input: ToolInput, journal: String): ToolResult =
+        ToolResult.Success(spokenFeedback = "")
 }
 
 /** Parsed input for a tool, with typed convenience fields. */

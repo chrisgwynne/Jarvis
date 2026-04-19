@@ -242,7 +242,9 @@ class EventGenerator(private val config: ProactiveConfig) {
             relevance     = snapshot.topPredictionScore,
             confidence    = snapshot.topPredictionScore,
             annoyanceCost = 0.40f,
-            dedupeKey     = "brain_ctx_${description.take(40).lowercase().replace(" ", "_")}",
+            // Hash the full description so two predictions that share the
+            // first 40 chars don't collide on the cooldown key.
+            dedupeKey     = "brain_ctx_${description.hashCode().toUInt().toString(16)}",
             metadata      = buildMap {
                 put("predictionScore", snapshot.topPredictionScore.toString())
                 put("description", description)

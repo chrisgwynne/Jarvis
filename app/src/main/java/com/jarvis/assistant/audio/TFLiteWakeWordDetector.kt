@@ -156,13 +156,21 @@ class TFLiteWakeWordDetector(
     }
 
     private fun loadModel(): Interpreter? = try {
-        val afd        = context.assets.openFd(MODEL_ASSET)
-        val inputStream = FileInputStream(afd.fileDescriptor)
-        val channel     = inputStream.channel
-        val modelBuffer = channel.map(FileChannel.MapMode.READ_ONLY, afd.startOffset, afd.declaredLength)
-        channel.close()
-        inputStream.close()
-        Interpreter(modelBuffer, Interpreter.Options().apply { setNumThreads(1) })
+        context.assets.openFd(MODEL_ASSET).use { afd ->
+            FileInputStream(afd.fileDescriptor).use { input ->
+                input.channel.use { channel ->
+                    val modelBuffer = channel.map(
+                        FileChannel.MapMode.READ_ONLY,
+                        afd.startOffset,
+                        afd.declaredLength
+                    )
+                    Interpreter(
+                        modelBuffer,
+                        Interpreter.Options().apply { setNumThreads(1) }
+                    )
+                }
+            }
+        }
     } catch (e: Exception) {
         Log.e(TAG, "loadModel failed: ${e.message}")
         null

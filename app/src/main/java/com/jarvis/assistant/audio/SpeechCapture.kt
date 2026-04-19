@@ -10,6 +10,8 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
@@ -42,6 +44,10 @@ class SpeechCapture(private val context: Context) {
 
     private var recognizer: SpeechRecognizer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    // Ensures only one listen() is in flight at a time — SpeechRecognizer
+    // keeps a single mic session and parallel calls stomp the 'recognizer'
+    // field mid-run.
+    private val listenLock = Mutex()
 
     /**
      * Listen for one utterance and return the transcript.
@@ -55,12 +61,14 @@ class SpeechCapture(private val context: Context) {
      * Returns "" if nothing was heard, recognition failed, or the 30 s hard
      * timeout fires.  Cancellation-safe.
      */
-    suspend fun listen(onReady: (() -> Unit)? = null): String = withTimeoutOrNull(30_000L) {
-        listenInternal(onReady)
-    } ?: run {
-        Log.w(TAG, "SpeechCapture timed out after 30 s — returning empty")
-        cancel()
-        ""
+    suspend fun listen(onReady: (() -> Unit)? = null): String = listenLock.withLock {
+        withTimeoutOrNull(30_000L) {
+            listenInternal(onReady)
+        } ?: run {
+            Log.w(TAG, "SpeechCapture timed out after 30 s — returning empty")
+            cancel()
+            ""
+        }
     }
 
     private suspend fun listenInternal(onReady: (() -> Unit)? = null): String = suspendCancellableCoroutine { cont ->

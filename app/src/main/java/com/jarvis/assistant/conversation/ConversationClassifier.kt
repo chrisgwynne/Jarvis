@@ -50,12 +50,33 @@ object ConversationClassifier {
         "take a photo", "take a picture", "take a selfie", "take a screenshot",
         "play ", "pause ", "stop ", "skip ", "next track", "previous track",
         "read my notifications", "read notifications",
+        "clear ", "dismiss ", "wipe ",
         "start recording", "stop recording",
         "end call", "hang up", "answer the call"
     )
 
-    private fun isActionRequest(lower: String): Boolean =
-        ACTION_PREFIXES.any { lower.startsWith(it) }
+    private fun isActionRequest(lower: String): Boolean {
+        if (ACTION_PREFIXES.any { lower.startsWith(it) }) return true
+        // Live-location queries ("where am I", "what's my location", "what
+        // street am I on") are ACTION_REQUESTS, not chit-chat.  Without this
+        // line the 3-word "where am I" falls through to FOLLOW_UP_REPLY and
+        // never reaches WhereAmITool.  Pattern is intentionally broader than
+        // the tool's own regex — the classifier only needs to route; the tool
+        // itself does the precise matching.
+        if (LIVE_LOCATION_QUERY_RE.containsMatchIn(lower)) return true
+        return false
+    }
+
+    private val LIVE_LOCATION_QUERY_RE = Regex(
+        """^(?:where\s+(?:am\s+i|exactly\s+am\s+i)""" +
+        """|what(?:'?s|\s+is)\s+my\s+(?:current\s+)?location""" +
+        """|my\s+current\s+location""" +
+        """|current\s+location""" +
+        """|locate\s+me""" +
+        """|what\s+(?:street|road|avenue|lane)\s+am\s+i\s+on""" +
+        """|what\s+(?:town|city|village|area|country|neighbourhood|neighborhood|suburb)\s+am\s+i\s+in)\b""",
+        RegexOption.IGNORE_CASE
+    )
 
     // ── PERSONAL_UPDATE ─────────────────────────────────────────────────────
 

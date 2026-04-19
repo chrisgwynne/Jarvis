@@ -140,7 +140,7 @@ Keep it factual and concise."""
             .joinToString("\n---\n") { it.rawText }
             .take(2000)
 
-        val summaryText = try {
+        val rawSummary = try {
             llm(listOf(
                 Message("system", "Summarise these events from today in 2-3 sentences. Plain text only."),
                 Message("user", combined)
@@ -149,6 +149,20 @@ Keep it factual and concise."""
             Log.w(TAG, "Daily summary LLM call failed: ${e.message}")
             return
         }
+
+        // The LLM router returns error-shaped strings on provider failure rather
+        // than throwing — don't persist those as the day's saved summary.
+        if (rawSummary.isBlank() ||
+            rawSummary == "Something went wrong." ||
+            rawSummary.startsWith("Error:") ||
+            rawSummary.startsWith("No API key") ||
+            rawSummary.startsWith("HTTP ") ||
+            rawSummary.startsWith("Network error:")
+        ) {
+            Log.w(TAG, "Daily summary came back error-shaped — skipping persist")
+            return
+        }
+        val summaryText = rawSummary
 
         val normalized = "daily_summary_$dateLabel"
         val existing   = repo.pages.getByNormalizedTitle(normalized)

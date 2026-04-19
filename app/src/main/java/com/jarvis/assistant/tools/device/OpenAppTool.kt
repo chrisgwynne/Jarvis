@@ -2,6 +2,7 @@ package com.jarvis.assistant.tools.device
 
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
@@ -98,7 +99,8 @@ class OpenAppTool(
                 }
             }
         } catch (e: Exception) {
-            ToolResult.Failure("That didn't work — ${e.message ?: "couldn't launch the app"}.")
+            Log.w("OpenAppTool", "Launch failed", e)
+            ToolResult.Failure("That didn't work.")
         }
     }
 
@@ -119,13 +121,18 @@ class OpenAppTool(
                     "${pending.label} isn't installed on this phone."
                 )
             context.startActivity(intent)
+            // durable=true: the app launch may push us to the background and
+            // the Android killer could reap Jarvis before an apply() commit
+            // reaches disk.  A confirmed alias is worth the sync write.
             resolver.rememberAlias(
                 pending.spokenName,
-                AppResolver.Result.Launchable(pending.packageName, pending.label)
+                AppResolver.Result.Launchable(pending.packageName, pending.label),
+                durable = true
             )
             ToolResult.Success(spokenFeedback = "Opening ${pending.label}.")
         } catch (e: Exception) {
-            ToolResult.Failure("That didn't work — ${e.message ?: "couldn't launch the app"}.")
+            Log.w("OpenAppTool", "Launch failed", e)
+            ToolResult.Failure("That didn't work.")
         }
     }
 
@@ -137,7 +144,14 @@ class OpenAppTool(
                 "Found $label but couldn't open it — it might be suspended or need an update."
             )
         context.startActivity(intent)
-        resolver.rememberAlias(spokenName, AppResolver.Result.Launchable(packageName, label))
+        // startActivity pushes Jarvis to the background and the system may
+        // reap the process before an apply() write flushes. Sync-commit the
+        // alias on every successful launch so it survives that race.
+        resolver.rememberAlias(
+            spokenName,
+            AppResolver.Result.Launchable(packageName, label),
+            durable = true
+        )
         return ToolResult.Success(spokenFeedback = "Opening $label.")
     }
 
@@ -147,14 +161,13 @@ class OpenAppTool(
         val label      : String
     )
 
-    companion object {
-        /**
-         * Cross-turn state for "Did you mean …?" confirmation flow.  Volatile
-         * because match()/execute() may be called from different coroutine
-         * dispatchers.  Scoped to the process — if Jarvis is killed between
-         * turns the pending match is dropped, which is the right behaviour.
-         */
-        @Volatile
-        private var pendingConfirmation: Pending? = null
-    }
+    /**
+     * Cross-turn state for "Did you mean …?" confirmation flow.  Volatile
+     * because match()/execute() may be called from different coroutine
+     * dispatchers.  Scoped to the instance — the runtime holds a single
+     * OpenAppTool so process-lifetime semantics are preserved, while tests
+     * and any future per-session instances no longer share state.
+     */
+    @Volatile
+    private var pendingConfirmation: Pending? = null
 }

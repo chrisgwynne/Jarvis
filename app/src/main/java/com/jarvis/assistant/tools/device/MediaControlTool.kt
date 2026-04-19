@@ -8,6 +8,7 @@ import android.util.Log
 import android.view.KeyEvent
 import androidx.core.content.ContextCompat
 import android.content.pm.PackageManager
+import com.jarvis.assistant.runtime.FailurePhrases
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
@@ -78,8 +79,8 @@ class MediaControlTool(private val context: Context) : Tool {
             }
             ToolResult.Success(spoken, silent = true)
         } catch (e: Exception) {
-            Log.e("MediaControlTool", "Failed to dispatch media key: ${e.message}", e)
-            ToolResult.Failure("I couldn't control the media. ${e.message}")
+            Log.e("MediaControlTool", "Failed to dispatch media key", e)
+            ToolResult.Failure(FailurePhrases.MEDIA_CONTROL_FAILED)
         }
     }
 

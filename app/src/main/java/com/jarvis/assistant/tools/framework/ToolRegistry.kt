@@ -22,6 +22,7 @@ import com.jarvis.assistant.tools.device.ImageGenerationTool
 import com.jarvis.assistant.tools.device.MediaControlTool
 import com.jarvis.assistant.tools.device.MemoryStatsTool
 import com.jarvis.assistant.tools.device.OpenAppTool
+import com.jarvis.assistant.tools.device.ClearNotificationsTool
 import com.jarvis.assistant.tools.device.ReadNotificationsTool
 import com.jarvis.assistant.tools.device.ShoppingListTool
 import com.jarvis.assistant.tools.device.SmsTool
@@ -39,6 +40,16 @@ import com.jarvis.assistant.audio.recording.RecordingTranscriber
 import com.jarvis.assistant.camera.CameraCaptureManager
 import com.jarvis.assistant.camera.VisionClient
 import com.jarvis.assistant.tools.device.AnalyzeCameraViewTool
+import com.jarvis.assistant.tools.device.DirectionsTool
+import com.jarvis.assistant.tools.device.NavigateTool
+import com.jarvis.assistant.tools.device.NearestPlaceTool
+import com.jarvis.assistant.tools.device.ReadScreenTool
+import com.jarvis.assistant.tools.device.TapScreenTool
+import com.jarvis.assistant.tools.device.WhereAmITool
+import com.jarvis.assistant.maps.DirectionsCoordinator
+import com.jarvis.assistant.maps.MapsCommandRouter
+import com.jarvis.assistant.maps.MapsIntentHandler
+import com.jarvis.assistant.maps.PlacesSearchCoordinator
 import com.jarvis.assistant.call.OutgoingCallController
 import com.jarvis.assistant.tools.device.AudioRecordingTool
 import com.jarvis.assistant.tools.device.CameraCaptureTool
@@ -109,6 +120,13 @@ class ToolRegistry private constructor(
 
             return ToolRegistry(
                 tools = buildList {
+                    // LIVE_LOCATION intent MUST land first.  "Where am I?" /
+                    // "what's my location?" are dedicated live-GPS queries; the
+                    // spec explicitly forbids any other tool (memory, saved
+                    // home, web search) from answering them.  Registering the
+                    // tool at index 0 guarantees that.
+                    locationProvider?.let { add(WhereAmITool(context, it)) }
+
                     // End-call MUST precede CallTool so "end call" / "hang up"
                     // is not accidentally routed to the outgoing-call tool.
                     outgoingCallController?.let { add(EndCallTool(it)) }
@@ -128,6 +146,25 @@ class ToolRegistry private constructor(
                     add(SmartHomeTool(settings))
                     // Weather before web search — structured answer, no search cost
                     locationProvider?.let { add(WeatherTool(it)) }
+
+                    // Maps tools — must precede OpenAppTool so "open directions to X"
+                    // and "show me Tesco on the map" aren't routed to the generic
+                    // app launcher.  All three share one MapsCommandRouter so their
+                    // Places + Distance Matrix calls reuse the same HTTP path.
+                    if (locationProvider != null) {
+                        val mapsIntents      = MapsIntentHandler(context)
+                        val placesCoord      = PlacesSearchCoordinator { settings.googleMapsApiKey }
+                        val directionsCoord  = DirectionsCoordinator({ settings.googleMapsApiKey }, mapsIntents)
+                        val mapsRouter       = MapsCommandRouter(
+                            locationProvider = locationProvider,
+                            places           = placesCoord,
+                            directions       = directionsCoord,
+                            intents          = mapsIntents
+                        )
+                        add(NearestPlaceTool(mapsRouter))
+                        add(DirectionsTool(mapsRouter))
+                        add(NavigateTool(mapsRouter))
+                    }
                     // Memory tools before generic open-app so they aren't misrouted
                     val db = JarvisDatabase.getInstance(context)
                     add(MemoryStatsTool(db.memoryDao(), db.memoryFactDao()))
@@ -140,6 +177,13 @@ class ToolRegistry private constructor(
                     add(ConversationExportTool(context))
                     add(VoiceShortcutTool(VoiceShortcutRepository(db.voiceShortcutDao())))
                     add(ReadNotificationsTool(context))
+                    // Clear AFTER Read so "clear my notifications" doesn't get
+                    // shadowed by Read's "read my notifications" pattern (they
+                    // don't overlap, but keep related tools adjacent for sanity).
+                    add(ClearNotificationsTool(context))
+                    // Screen vision + actuation (before generic OpenApp)
+                    llmRouter?.let { add(ReadScreenTool(it)) }
+                    add(TapScreenTool())
                     // Camera + vision tools (before OpenApp to avoid misrouting)
                     add(CameraCaptureTool(context, cameraCapture))
                     add(AnalyzeCameraViewTool(context, cameraCapture, visionClient, llmRouter))
@@ -169,13 +213,16 @@ class ToolRegistry private constructor(
                 add("send SMS and WhatsApp messages")
                 add("take photos and selfies")
                 if (canAnalyseImages) add("analyse what the camera sees")
+                if (com.jarvis.assistant.accessibility.JarvisAccessibilityService.isConnected())
+                    add("read what's on screen and tap buttons by name")
                 add("set reminders, timers, and alarms")
                 add("start and stop audio recordings")
                 if (canTranscribe) add("transcribe and summarise recordings")
                 add("search the web")
+                add("find nearby places and open directions in Google Maps")
                 add("control media playback and volume")
                 add("open apps")
-                add("read your calendar and notifications")
+                add("read and clear your calendar and notifications")
                 add("manage your shopping list")
                 add("generate images")
                 add("give you a daily briefing")

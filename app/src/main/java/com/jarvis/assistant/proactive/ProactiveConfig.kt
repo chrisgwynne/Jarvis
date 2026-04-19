@@ -61,6 +61,8 @@ data class ProactiveConfig(
     val cooldownLowBatteryMs: Long        = 10 * 60 * 1000L,
     val cooldownUpcomingReminderMs: Long  = 5  * 60 * 1000L,
     val cooldownMissedCallMs: Long        = 15 * 60 * 1000L,
+    val cooldownUnreadNotificationMs: Long = 5  * 60 * 1000L,
+    val cooldownBehavioralLearningMs: Long = 10 * 60 * 1000L,
     val minGlobalGapMs: Long              = 60_000L,
     val batteryLow: Int                   = 15,
     val batteryVeryLow: Int               = 10,

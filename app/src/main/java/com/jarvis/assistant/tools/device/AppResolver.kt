@@ -119,10 +119,10 @@ class AppResolver(
          * by name but the spoken alias matches a generic capability.
          */
         private val CATEGORY_INTENTS: Map<String, () -> Intent> = mapOf(
-            "camera"    to { Intent(Intent.ACTION_MAIN).addCategory("android.intent.category.LAUNCHER") },
+            "camera"    to { Intent(android.provider.MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA) },
             "phone"     to { Intent(Intent.ACTION_DIAL) },
             "dialer"    to { Intent(Intent.ACTION_DIAL) },
-            "browser"   to { Intent(Intent.ACTION_WEB_SEARCH) },
+            "browser"   to { Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.google.com")) },
             "messages"  to { Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_MESSAGING) } },
             "contacts"  to { Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_CONTACTS) } }
         )
@@ -224,10 +224,10 @@ class AppResolver(
      * of how the user phrased the original command (e.g. "up Spotify" is stored
      * as "spotify" so "open up Spotify" resolves instantly next time).
      */
-    fun rememberAlias(spokenName: String, result: Result) {
+    fun rememberAlias(spokenName: String, result: Result, durable: Boolean = false) {
         if (result is Result.Launchable) {
             val normalized = normalizeQuery(spokenName.lowercase())
-            aliasStore.put(normalized, result.packageName)
+            aliasStore.put(normalized, result.packageName, durable = durable)
         }
     }
 
@@ -244,17 +244,33 @@ class AppResolver(
      */
     private fun normalizeQuery(raw: String): String {
         var s = raw.trim().trimEnd('?', '.', '!')
-        // Strip leading filler words one pass each
-        s = s.removePrefix("up ").trim()
-        s = s.removePrefix("the ").trim()
-        // Strip trailing noise phrases (ordered: longest first to avoid partial strips)
+
+        // Strip any combination of leading fillers ("open up a spotify",
+        // "open the new spotify") by looping until nothing else matches.
+        val leadingFillers = listOf("up ", "the ", "a ", "an ", "my ", "some ")
+        var changed = true
+        while (changed) {
+            changed = false
+            for (filler in leadingFillers) {
+                if (s.startsWith(filler)) { s = s.removePrefix(filler).trim(); changed = true }
+            }
+        }
+
+        // Strip trailing noise phrases; loop so stacked fillers all peel off
+        // ("spotify please now" → "spotify").  Ordered longest-first to avoid
+        // partial strips ("for me please" before "please").
         val trailingNoise = listOf(
             " for me please", " for me", " right now please", " right now",
             " please", " now", " quickly", " immediately"
         )
-        for (noise in trailingNoise) {
-            if (s.endsWith(noise)) { s = s.removeSuffix(noise).trim(); break }
+        changed = true
+        while (changed) {
+            changed = false
+            for (noise in trailingNoise) {
+                if (s.endsWith(noise)) { s = s.removeSuffix(noise).trim(); changed = true; break }
+            }
         }
+
         // Strip trailing "app" / "application"
         s = s.removeSuffix(" application").removeSuffix(" app").trim()
         return s
@@ -290,6 +306,33 @@ class AppResolver(
         null
     }
 
+    // Cached list of launcher activities.  queryIntentActivities() is a
+    // cross-process binder call and its label lookups decode per-APK resources,
+    // so a single resolve() previously did N label decodes twice (once for
+    // findByLabel, once for findByPackage).  Cache for 30 s — package installs
+    // or uninstalls just mean one stale resolve, which gets corrected on the
+    // next tick or on explicit invalidate().
+    private data class CachedLaunchers(val at: Long, val labeled: List<Pair<ResolveInfo, String>>)
+    @Volatile private var launchersCache: CachedLaunchers? = null
+    private val launchersCacheTtlMs = 30_000L
+
+    /** Force a reload of the cached launcher list — call on PACKAGE_ADDED / REMOVED. */
+    fun invalidateLauncherCache() { launchersCache = null }
+
+    private fun launchers(): List<Pair<ResolveInfo, String>> {
+        val snapshot = launchersCache
+        val now = System.currentTimeMillis()
+        if (snapshot != null && now - snapshot.at < launchersCacheTtlMs) return snapshot.labeled
+        val pm = context.packageManager
+        val activities = pm.queryIntentActivities(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER),
+            PackageManager.GET_META_DATA
+        )
+        val labeled = activities.map { it to it.loadLabel(pm).toString().lowercase() }
+        launchersCache = CachedLaunchers(now, labeled)
+        return labeled
+    }
+
     /**
      * First launcher activity whose label matches [needle] (case-insensitive).
      *
@@ -304,13 +347,8 @@ class AppResolver(
      * chars guards against single-word collisions ("go", "hi", etc.).
      */
     private fun findByLabel(needle: String): LabelMatch? {
-        val pm = context.packageManager
-        val activities = pm.queryIntentActivities(
-            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER),
-            PackageManager.GET_META_DATA
-        )
         val lowerNeedle = needle.lowercase()
-        val labeled = activities.map { it to it.loadLabel(pm).toString().lowercase() }
+        val labeled = launchers()
 
         // HIGH: exact or prefix — unambiguous
         labeled.firstOrNull { it.second == lowerNeedle }
@@ -331,11 +369,7 @@ class AppResolver(
 
     /** First installed package whose name contains [needle] as a dotted segment. */
     private fun findByPackage(needle: String): String? {
-        val pm = context.packageManager
-        val activities = pm.queryIntentActivities(
-            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER),
-            PackageManager.GET_META_DATA
-        )
+        val activities = launchers().map { it.first }
         val lowerNeedle = needle.lowercase().replace(" ", "")
         if (lowerNeedle.length < 3) return null
         return activities

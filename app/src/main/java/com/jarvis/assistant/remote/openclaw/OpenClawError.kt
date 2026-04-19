@@ -11,10 +11,26 @@ sealed class OpenClawError(val spokenMessage: String) {
         "OpenClaw is not configured. Add a host in Settings."
     )
 
-    /** TCP/DNS failure — host not reachable at all. */
-    class Unreachable(cause: String = "") : OpenClawError(
-        "I couldn't reach your computer${if (cause.isNotBlank()) ": $cause" else "."}  Check the host and that it's on the same network."
-    )
+    /**
+     * TCP/DNS failure — host not reachable at all.
+     * [cause] is retained for logging/diagnostics but kept out of the spoken
+     * message to avoid reciting raw socket / exception text to the user.
+     */
+    class Unreachable(val cause: String = "") : OpenClawError(
+        "I couldn't reach your computer. Check the host and that it's on the same network."
+    ) {
+        init {
+            // Structured log so operators can grep for connectivity failures
+            // without us leaking the raw cause into the user-facing message.
+            // Wrapped so that JVM-only tests (where android.util.Log is not
+            // stubbed) can still construct this error.
+            if (cause.isNotBlank()) {
+                try {
+                    android.util.Log.w("OpenClawError", "event=unreachable cause=\"$cause\"")
+                } catch (_: Throwable) { /* tests without Robolectric */ }
+            }
+        }
+    }
 
     /** Server returned auth_failed or HTTP 401/403. */
     object AuthFailed : OpenClawError(

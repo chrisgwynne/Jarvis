@@ -127,7 +127,8 @@ class SpeakerRecognitionCoordinator(
         isOwner        : Boolean = false
     ): PersonRecord = withContext(Dispatchers.IO) {
         val personId = store.createPerson(displayName, isOwner = isOwner)
-        val person   = store.getPersonById(personId)!!
+        val person   = store.getPersonById(personId)
+            ?: error("createPerson($displayName) returned id=$personId but getPersonById came back null")
 
         if (introductionPcm != null) {
             withContext(Dispatchers.Default) { enrollment.maybeEnroll(person, introductionPcm) }

@@ -43,6 +43,8 @@ import com.jarvis.assistant.shortcuts.db.VoiceShortcut
 import com.jarvis.assistant.shortcuts.db.VoiceShortcutDao
 import com.jarvis.assistant.speaker.db.SpeakerEmbedding
 import com.jarvis.assistant.speaker.db.SpeakerEmbeddingDao
+import com.jarvis.assistant.runtime.plan.ActionJournalDao
+import com.jarvis.assistant.runtime.plan.JournalEntry
 
 @Database(
     entities = [
@@ -64,9 +66,10 @@ import com.jarvis.assistant.speaker.db.SpeakerEmbeddingDao
         PendingFollowUp::class,
         BrainEvent::class,
         BrainPattern::class,
-        VoiceShortcut::class
+        VoiceShortcut::class,
+        JournalEntry::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = false
 )
 abstract class JarvisDatabase : RoomDatabase() {
@@ -89,6 +92,7 @@ abstract class JarvisDatabase : RoomDatabase() {
     abstract fun brainEventDao(): BrainEventDao
     abstract fun brainPatternDao(): BrainPatternDao
     abstract fun voiceShortcutDao(): VoiceShortcutDao
+    abstract fun actionJournalDao(): ActionJournalDao
 
     companion object {
         private const val DB_NAME = "jarvis.db"
@@ -348,6 +352,33 @@ abstract class JarvisDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration 10 → 11: add action_journal for agentic plan rollback.
+         */
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS action_journal (
+                        id                    INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        planId                TEXT    NOT NULL,
+                        ordinal               INTEGER NOT NULL,
+                        toolName              TEXT    NOT NULL,
+                        argsJson              TEXT    NOT NULL,
+                        undoPayload           TEXT    NOT NULL,
+                        status                TEXT    NOT NULL,
+                        originatingTranscript TEXT    NOT NULL,
+                        createdAtMs           INTEGER NOT NULL,
+                        completedAtMs         INTEGER
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_action_journal_planId ON action_journal(planId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_action_journal_status ON action_journal(status)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_action_journal_createdAtMs ON action_journal(createdAtMs)")
+            }
+        }
+
+        /**
          * Migration 9 → 10: add voice_shortcuts table for custom trigger sequences.
          */
         private val MIGRATION_9_10 = object : Migration(9, 10) {
@@ -378,7 +409,7 @@ abstract class JarvisDatabase : RoomDatabase() {
                 )
                     .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                                   MIGRATION_9_10)
+                                   MIGRATION_9_10, MIGRATION_10_11)
                     .build()
                     .also { INSTANCE = it }
             }

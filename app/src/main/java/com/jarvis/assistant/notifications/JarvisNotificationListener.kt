@@ -220,9 +220,88 @@ class JarvisNotificationListener : NotificationListenerService() {
         private fun removeEntry(sbnKey: String) = synchronized(lock) {
             buffer.removeAll { it.sbnKey == sbnKey }
         }
+
+        // ── Live-service handle + cancellation helpers ────────────────────────
+        //
+        // cancelAllNotifications / cancelNotification are instance methods on
+        // NotificationListenerService — they can't be called without a live
+        // bound service.  Expose a @Volatile singleton (same pattern as
+        // JarvisAccessibilityService) so ClearNotificationsTool can reach the
+        // running service from outside its process.  Cleared on unbind/destroy
+        // so revoking Notification Access in Settings makes isConnected()
+        // return false and the tool fails cleanly.
+
+        @Volatile private var instance: JarvisNotificationListener? = null
+
+        /** True if the listener is currently bound to the OS. */
+        fun isConnected(): Boolean = instance != null
+
+        /**
+         * Cancel every clearable notification the listener can see.
+         *
+         * Returns the number of notifications buffered by us at the moment of
+         * the call — used only as a UX hint ("5 notifications cleared").
+         * Android filters out non-clearable entries (foreground services,
+         * persistent low-importance) automatically at the framework layer.
+         */
+        fun clearAll(): Int {
+            val svc = instance ?: return -1
+            val count = synchronized(lock) { buffer.size }
+            return try {
+                svc.cancelAllNotifications()
+                synchronized(lock) { buffer.clear() }
+                count
+            } catch (e: Exception) {
+                Log.w(TAG, "cancelAllNotifications threw: ${e.message}")
+                -1
+            }
+        }
+
+        /**
+         * Cancel every buffered notification from [packageName].
+         *
+         * Returns the number of notifications Jarvis actually dispatched
+         * cancels for; -1 when the listener isn't connected.
+         */
+        fun clearFromApp(packageName: String): Int {
+            val svc = instance ?: return -1
+            val keys = synchronized(lock) {
+                buffer.filter { it.packageName == packageName }.map { it.sbnKey }
+            }
+            if (keys.isEmpty()) return 0
+            var cleared = 0
+            for (key in keys) {
+                try {
+                    svc.cancelNotification(key)
+                    cleared++
+                } catch (e: Exception) {
+                    Log.w(TAG, "cancelNotification($key) threw: ${e.message}")
+                }
+            }
+            synchronized(lock) { buffer.removeAll { keys.contains(it.sbnKey) } }
+            return cleared
+        }
     }
 
     // ── NotificationListenerService callbacks ─────────────────────────────────
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        instance = this
+        Log.d(TAG, "Listener connected")
+    }
+
+    override fun onListenerDisconnected() {
+        instance = null
+        Log.d(TAG, "Listener disconnected")
+        super.onListenerDisconnected()
+    }
+
+    override fun onDestroy() {
+        // Belt-and-braces: onListenerDisconnected isn't always called.
+        instance = null
+        super.onDestroy()
+    }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         // Ignore our own notifications to prevent feedback loops

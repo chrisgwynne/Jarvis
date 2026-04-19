@@ -2,6 +2,7 @@ package com.jarvis.assistant.tools.device
 
 import android.content.Context
 import android.media.AudioManager as SysAudioManager
+import com.jarvis.assistant.runtime.FailurePhrases
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
@@ -27,7 +28,8 @@ class VolumeTool(private val context: Context) : Tool {
     }
 
     override suspend fun execute(input: ToolInput): ToolResult {
-        val am = context.getSystemService(SysAudioManager::class.java)!!
+        val am = context.getSystemService(SysAudioManager::class.java)
+            ?: return ToolResult.Failure(FailurePhrases.AUDIO_SERVICE_UNAVAILABLE)
         return when (input.param("direction")) {
             "up" -> {
                 am.adjustStreamVolume(SysAudioManager.STREAM_MUSIC, SysAudioManager.ADJUST_RAISE, SysAudioManager.FLAG_SHOW_UI)

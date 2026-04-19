@@ -107,7 +107,7 @@ class TelecomCallActionExecutor(private val context: Context) : CallActionExecut
             CallActionResult.PermissionDenied
         } catch (e: Exception) {
             Log.e(TAG, "acceptRingingCall failed: ${e.message}", e)
-            CallActionResult.Failure(e.message ?: "Unknown error")
+            CallActionResult.Failure("Unknown error")
         }
     }
 
@@ -148,7 +148,7 @@ class TelecomCallActionExecutor(private val context: Context) : CallActionExecut
             CallActionResult.PermissionDenied
         } catch (e: Exception) {
             Log.e(TAG, "endCall failed: ${e.message}", e)
-            CallActionResult.Failure(e.message ?: "Unknown error")
+            CallActionResult.Failure("Unknown error")
         }
     }
 

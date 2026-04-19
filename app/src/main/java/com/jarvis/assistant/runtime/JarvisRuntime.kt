@@ -194,6 +194,25 @@ class JarvisRuntime(
     private lateinit var memoryHandler     : MemoryActionHandler
     private lateinit var reminderHandler   : ReminderActionHandler
 
+    // Agentic plan runner — confirms multi-step tool calls, journals each step
+    // for reverse-order undo.  Pending plan is stored on the runtime so the
+    // next user turn ("go" / "no") routes to confirm() before reaching the LLM.
+    private lateinit var planRunner   : com.jarvis.assistant.runtime.plan.PlanRunner
+    @Volatile private var pendingPlan : com.jarvis.assistant.runtime.plan.Plan? = null
+
+    private val planConfirmRegex = Regex(
+        """^\s*(yes|yeah|yep|yup|go|do it|sure|ok(?:ay)?|please do|sounds good|right one)\s*\.?\s*$""",
+        RegexOption.IGNORE_CASE
+    )
+    private val planCancelRegex = Regex(
+        """^\s*(no|nope|nah|cancel|don't|dont|stop|abort|never mind|nevermind|scrap (?:that|it)|forget it)\s*\.?\s*$""",
+        RegexOption.IGNORE_CASE
+    )
+    private val planUndoRegex = Regex(
+        """^\s*undo(?:\s+(?:that|the\s+last|last\s+(?:thing|action|plan)))?\s*\.?\s*$""",
+        RegexOption.IGNORE_CASE
+    )
+
     // Phase 8 — Context-aware follow-ups
     private lateinit var followUpCoordinator : FollowUpCoordinator
 
@@ -336,6 +355,11 @@ class JarvisRuntime(
         toolDispatcher = ToolDispatcher(context, toolRegistry, machine)
         memoryHandler = MemoryActionHandler(profileMemory)
         reminderHandler = ReminderActionHandler(reminderRepo)
+        planRunner = com.jarvis.assistant.runtime.plan.PlanRunner(
+            context    = context,
+            registry   = toolRegistry,
+            journalDao = db.actionJournalDao()
+        )
 
         // Phase 8 — Context-aware follow-ups
         followUpCoordinator = FollowUpCoordinator(
@@ -1002,6 +1026,55 @@ class JarvisRuntime(
                     // Resolve any pending follow-ups whose topic comes up naturally
                     scope.launch(Dispatchers.IO) { followUpRepo.maybeResolveFromTranscript(transcript) }
 
+                    // ── Plan confirmation / undo intercept ─────────────────────
+                    // A pending plan is one Jarvis just proposed ("Three things —
+                    // …. Go?").  Short go/cancel utterances dispatch directly to
+                    // the runner without going near the LLM.  "Undo" is also
+                    // intercepted regardless of pending state so the rollback
+                    // path is always available.
+                    val pending = pendingPlan
+                    val trimmed = transcript.trim()
+                    if (pending != null && trimmed.split(Regex("\\s+")).size <= 4) {
+                        when {
+                            planConfirmRegex.matches(trimmed) -> {
+                                pendingPlan = null
+                                val res = planRunner.execute(pending)
+                                val spoken = when (res) {
+                                    is com.jarvis.assistant.runtime.plan.PlanRunner.Resolution.Ran -> res.spoken
+                                    is com.jarvis.assistant.runtime.plan.PlanRunner.Resolution.Halted -> res.spoken
+                                    is com.jarvis.assistant.runtime.plan.PlanRunner.Resolution.Cancelled -> res.spoken
+                                }
+                                speakAndRecord(spoken)
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                            planCancelRegex.matches(trimmed) -> {
+                                val res = planRunner.cancel(pending)
+                                pendingPlan = null
+                                speakAndRecord(res.spoken)
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                        }
+                    }
+                    if (planUndoRegex.matches(trimmed)) {
+                        // Drop any pending unconfirmed plan — undoing while
+                        // still confirming is a clear cancel signal.
+                        pendingPlan = null
+                        val res = planRunner.undoLastPlan()
+                        val spoken = when (res) {
+                            is com.jarvis.assistant.runtime.plan.PlanRunner.UndoResult.Done -> res.spoken
+                            is com.jarvis.assistant.runtime.plan.PlanRunner.UndoResult.Nothing -> "Nothing to undo."
+                            is com.jarvis.assistant.runtime.plan.PlanRunner.UndoResult.TooOld -> "That's too old to undo cleanly."
+                        }
+                        speakAndRecord(spoken)
+                        machine.transition(JarvisState.Listening)
+                        syncState(JarvisState.Listening)
+                        continue
+                    }
+
                     // ── Interruption handling ──────────────────────────────────
                     // If the last turn was cut short by barge-in, classify this new
                     // utterance against what Jarvis had been saying and decide:
@@ -1012,8 +1085,8 @@ class JarvisRuntime(
                         // Don't consume yet — CLARIFICATION keeps it alive for a follow-up
                         // "go on" from the user.  Only clear once we know what to do with it.
                         val interruption = InterruptionClassifier.classify(
-                            utterance   = transcript,
-                            spokenSoFar = resumable.spokenSoFar
+                            utterance    = transcript,
+                            spokenTokens = resumable.spokenTokens
                         )
                         Log.d(TAG, "Interrupt classified as $interruption " +
                                     "(spoken='${resumable.spokenSoFar.take(40)}')")
@@ -1797,8 +1870,32 @@ class JarvisRuntime(
                         }
 
                         fcResult is LlmResult.MultiToolCall -> {
-                            // ── Parallel tool execution ────────────────────────────
+                            // ── Plan path ─────────────────────────────────────────
+                            // Route multi-step calls through PlanRunner so the user
+                            // confirms once, every step is journalled, and undo
+                            // works in reverse on the next turn.  Single-call
+                            // MultiToolCalls fall through to the parallel execution
+                            // below (Proposal.SingleStep).
                             hopsUsed++
+                            val proposal = planRunner.proposeFromMultiCall(fcResult, transcript)
+                            when (proposal) {
+                                is com.jarvis.assistant.runtime.plan.PlanRunner.Proposal.Pending -> {
+                                    pendingPlan = proposal.plan
+                                    llmRouter.conversationStore.addMessage("assistant", proposal.confirmation)
+                                    speakAndRecord(proposal.confirmation)
+                                    fcHandled = true
+                                    break
+                                }
+                                is com.jarvis.assistant.runtime.plan.PlanRunner.Proposal.Empty -> {
+                                    Log.d(TAG, "MultiToolCall didn't resolve to any registered tool")
+                                    break
+                                }
+                                is com.jarvis.assistant.runtime.plan.PlanRunner.Proposal.SingleStep -> {
+                                    // Fall through to the existing parallel path
+                                    // for the genuinely single-call case.
+                                }
+                            }
+
                             val callList = fcResult.calls
                             val feedbacks = callList.map { tc ->
                                 async(Dispatchers.IO) {
@@ -1807,7 +1904,10 @@ class JarvisRuntime(
                                     val argsMap = try {
                                         (NetworkClient.gson.fromJson(tc.argsJson, Map::class.java) as Map<*, *>)
                                             .entries.associate { (k, v) -> k.toString() to v.toString() }
-                                    } catch (e: Exception) { emptyMap() }
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Malformed tool args for ${tc.toolName}: ${e.message}")
+                                        emptyMap()
+                                    }
                                     val result = toolRegistry.execute(context, tool, ToolInput(transcript, argsMap))
                                     val fb = when (result) {
                                         is ToolResult.Success -> result.spokenFeedback
@@ -1839,7 +1939,10 @@ class JarvisRuntime(
                             val argsMap = try {
                                 (NetworkClient.gson.fromJson(fcResult.argsJson, Map::class.java) as Map<*, *>)
                                     .entries.associate { (k, v) -> k.toString() to v.toString() }
-                            } catch (e: Exception) { emptyMap() }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Malformed tool args for ${fcResult.toolName}: ${e.message}")
+                                emptyMap()
+                            }
 
                             val result = toolRegistry.execute(context, tool, ToolInput(transcript, argsMap))
                             val feedback = when (result) {

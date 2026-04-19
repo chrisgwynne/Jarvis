@@ -101,7 +101,13 @@ object SlotExtractor {
         val cal = java.util.Calendar.getInstance()
         cal.timeInMillis = epochMs
         val today = java.util.Calendar.getInstance()
-        if (cal.get(java.util.Calendar.DAY_OF_YEAR) == today.get(java.util.Calendar.DAY_OF_YEAR)) {
+        // Same-day check must include the year: DAY_OF_YEAR alone collides
+        // across years (e.g. Feb 1 2024 and Feb 1 2025 both have DOY=32),
+        // which would wrongly push a parsed time from a prior year forward
+        // by a single day when the user said "tomorrow".
+        val sameDay = cal.get(java.util.Calendar.YEAR) == today.get(java.util.Calendar.YEAR) &&
+                      cal.get(java.util.Calendar.DAY_OF_YEAR) == today.get(java.util.Calendar.DAY_OF_YEAR)
+        if (sameDay) {
             cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
         }
         return cal.timeInMillis

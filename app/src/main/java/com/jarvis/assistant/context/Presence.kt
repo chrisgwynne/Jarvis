@@ -75,20 +75,38 @@ data class Presence(
          * @param isDriving                Car audio / dock connected.
          * @param zone                     Timezone to interpret [nowMs] in.
          */
+        /**
+         * Boundary hours for [TimePhase]. MORNING starts at [morningStart],
+         * DAY at [dayStart], EVENING at [eveningStart], NIGHT at [nightStart].
+         * Values are clock hours 0–23. Callers can override to retune for
+         * shift workers or non-standard schedules.
+         */
+        data class PhaseBoundaries(
+            val morningStart: Int = 5,
+            val dayStart    : Int = 12,
+            val eveningStart: Int = 17,
+            val nightStart  : Int = 21
+        )
+
+        val DEFAULT_BOUNDARIES = PhaseBoundaries()
+
         fun compute(
             nowMs              : Long,
             lastInteractionMs  : Long?,
             isJarvisSpeaking   : Boolean,
             isJarvisListening  : Boolean,
             isDriving          : Boolean,
-            zone               : ZoneId = ZoneId.systemDefault()
+            zone               : ZoneId = ZoneId.systemDefault(),
+            boundaries         : PhaseBoundaries = DEFAULT_BOUNDARIES
         ): Presence {
             val hour = Instant.ofEpochMilli(nowMs).atZone(zone).hour
-            val phase = when (hour) {
-                in 5..11  -> TimePhase.MORNING
-                in 12..16 -> TimePhase.DAY
-                in 17..20 -> TimePhase.EVENING
-                else      -> TimePhase.NIGHT
+            val phase = with(boundaries) {
+                when {
+                    hour >= nightStart || hour < morningStart -> TimePhase.NIGHT
+                    hour < dayStart                           -> TimePhase.MORNING
+                    hour < eveningStart                       -> TimePhase.DAY
+                    else                                      -> TimePhase.EVENING
+                }
             }
             val minutesIdle = lastInteractionMs
                 ?.let { (nowMs - it).coerceAtLeast(0L) / 60_000L }

@@ -84,19 +84,15 @@ class LlmRouter(context: Context) {
             Log.w(TAG, "LLM error (non-retryable): ${e.message}")
             e.message ?: "Something went wrong."
         } catch (e: Exception) {
-            val detail = "${e.javaClass.simpleName}: ${e.message}"
-            Log.e(TAG, "LLM unexpected error: $detail", e)
-            "Error: $detail"
+            Log.e(TAG, "LLM unexpected error", e)
+            "Something went wrong."
         }
 
         // Strip chain-of-thought reasoning blocks that some models emit
         val cleaned = stripReasoningTags(response)
 
         // Only store clean responses in history, not error strings
-        if (!cleaned.startsWith("Error:") &&
-            !cleaned.startsWith("No API key") &&
-            !cleaned.startsWith("HTTP ") &&
-            !cleaned.startsWith("Network error:")) {
+        if (!isErrorResponse(cleaned)) {
             conversationStore.addMessage("assistant", cleaned)
         }
 
@@ -125,17 +121,13 @@ class LlmRouter(context: Context) {
             Log.w(TAG, "LLM error (non-retryable): ${e.message}")
             e.message ?: "Something went wrong."
         } catch (e: Exception) {
-            val detail = "${e.javaClass.simpleName}: ${e.message}"
-            Log.e(TAG, "LLM unexpected error: $detail", e)
-            "Error: $detail"
+            Log.e(TAG, "LLM unexpected error", e)
+            "Something went wrong."
         }
 
         val cleaned = stripReasoningTags(response)
 
-        if (!cleaned.startsWith("Error:") &&
-            !cleaned.startsWith("No API key") &&
-            !cleaned.startsWith("HTTP ") &&
-            !cleaned.startsWith("Network error:")) {
+        if (!isErrorResponse(cleaned)) {
             conversationStore.addMessage("assistant", cleaned)
         }
 
@@ -162,9 +154,8 @@ class LlmRouter(context: Context) {
             Log.w(TAG, "LLM error (silent): ${e.message}")
             e.message ?: "Something went wrong."
         } catch (e: Exception) {
-            val detail = "${e.javaClass.simpleName}: ${e.message}"
-            Log.e(TAG, "LLM unexpected error (silent): $detail", e)
-            "Error: $detail"
+            Log.e(TAG, "LLM unexpected error (silent)", e)
+            "Something went wrong."
         }
         return stripReasoningTags(response)
         // Deliberately does NOT write to conversationStore
@@ -195,8 +186,13 @@ class LlmRouter(context: Context) {
         // TTS never speaks chain-of-thought content on reasoning models
         // (MiniMax, DeepSeek, some Kimi builds).
         val stripper = ReasoningTagStripper()
+        var firstTokenMarked = false
 
         provider.streamComplete(messages).collect { token ->
+            if (!firstTokenMarked) {
+                com.jarvis.assistant.util.LatencyTracker.mark("LLM_FIRST_TOKEN")
+                firstTokenMarked = true
+            }
             fullResponse.append(token)
             val safe = stripper.process(token)
             if (safe.isNotEmpty()) {
@@ -209,6 +205,7 @@ class LlmRouter(context: Context) {
                 }
             }
         }
+        com.jarvis.assistant.util.LatencyTracker.mark("LLM_STREAM_END")
 
         // Flush any held-back pending text (partial opener that never became
         // a tag), then any trailing sentence fragment without punctuation.
@@ -219,14 +216,18 @@ class LlmRouter(context: Context) {
 
         // Persist full response in conversation context
         val cleaned = stripReasoningTags(fullResponse.toString().trim())
-        if (cleaned.isNotBlank() &&
-            !cleaned.startsWith("Error:") &&
-            !cleaned.startsWith("No API key") &&
-            !cleaned.startsWith("HTTP ") &&
-            !cleaned.startsWith("Network error:")) {
+        if (cleaned.isNotBlank() && !isErrorResponse(cleaned)) {
             conversationStore.addMessage("assistant", cleaned)
         }
     }
+
+    /** Centralised check for strings our error paths return, to avoid storing them as assistant turns. */
+    private fun isErrorResponse(s: String): Boolean =
+        s.startsWith("Error:") ||
+        s.startsWith("No API key") ||
+        s.startsWith("HTTP ") ||
+        s.startsWith("Network error:") ||
+        s == "Something went wrong."
 
     /**
      * Pull the next complete sentence from [buffer], mutating it in place.
@@ -317,8 +318,7 @@ class LlmRouter(context: Context) {
      */
     private suspend fun callWithRetry(messages: List<Message>): String {
         return try {
-            withTimeoutOrNull(LLM_TIMEOUT_MS) { activeProvider().complete(messages) }
-                ?: throw LlmException("LLM request timed out after ${LLM_TIMEOUT_MS / 1000}s")
+            callWithTimeout(messages)
         } catch (e: CancellationException) {
             throw e
         } catch (e: LlmException) {
@@ -326,7 +326,7 @@ class LlmRouter(context: Context) {
                 isRateLimit(e) -> {
                     Log.w(TAG, "Rate limited — retrying in ${RATE_LIMIT_RETRY_MS}ms")
                     delay(RATE_LIMIT_RETRY_MS)
-                    activeProvider().complete(messages)
+                    callWithTimeout(messages)
                 }
                 isNonRetryable(e) -> throw e
                 else -> {
@@ -334,52 +334,65 @@ class LlmRouter(context: Context) {
                     Log.w(TAG, "First attempt failed (${e.message}) — retrying in ${delayMs}ms")
                     delay(delayMs)
                     try {
-                        activeProvider().complete(messages)
+                        callWithTimeout(messages)
                     } catch (e2: Exception) {
                         tryFallbackProvider(messages, e2)
                     }
                 }
             }
         } catch (e: IOException) {
-            val detail = "${e.javaClass.simpleName}: ${e.message}"
             val delayMs = retryDelayMs()
-            Log.w(TAG, "Network failure ($detail) — retrying in ${delayMs}ms")
+            Log.w(TAG, "Network failure (${e.javaClass.simpleName}) — retrying in ${delayMs}ms")
             delay(delayMs)
             try {
-                activeProvider().complete(messages)
+                callWithTimeout(messages)
             } catch (e2: Exception) {
                 tryFallbackProvider(messages, e2)
             }
         }
     }
 
+    /** Wrap a single provider call in the per-attempt timeout. */
+    private suspend fun callWithTimeout(messages: List<Message>): String =
+        withTimeoutOrNull(LLM_TIMEOUT_MS) { activeProvider().complete(messages) }
+            ?: throw LlmException("LLM request timed out after ${LLM_TIMEOUT_MS / 1000}s")
+
     private suspend fun tryFallbackProvider(messages: List<Message>, originalError: Exception): String {
         val fallback = settings.fallbackProvider.takeIf { it.isNotBlank() }
             ?: throw if (originalError is LlmException) originalError
-                     else LlmException("Network error: ${originalError.javaClass.simpleName}: ${originalError.message}")
+                     else LlmException("Network error: ${originalError.javaClass.simpleName}")
 
         Log.w(TAG, "Primary provider failed — trying fallback: $fallback")
         return try {
-            providerByName(fallback).complete(messages)
+            withTimeoutOrNull(LLM_TIMEOUT_MS) { providerByName(fallback).complete(messages) }
+                ?: throw LlmException("Fallback ($fallback) timed out")
         } catch (e: Exception) {
-            throw LlmException("Both primary and fallback ($fallback) failed: ${e.message}")
+            throw LlmException("Both primary and fallback ($fallback) failed")
         }
     }
 
-    /** 500 ms base + up to 100 ms jitter, capped at 4 s. */
-    private fun retryDelayMs(): Long = (500L + (0L..100L).random()).coerceAtMost(4_000L)
+    /** 500 ms base + up to 100 ms jitter (≤ 600 ms). */
+    private fun retryDelayMs(): Long = 500L + (0L..100L).random()
 
     /**
      * Strip chain-of-thought blocks that reasoning models emit before their answer.
      * Handles <think>…</think> (MiniMax, DeepSeek) and <thinking>…</thinking>.
      * Also collapses any leading/trailing whitespace left behind.
+     *
+     * Previous behaviour: if the whole response was inside think tags we
+     * returned the raw text — which meant the user's TTS spoke the model's
+     * chain-of-thought verbatim. That's worse than saying nothing, because
+     * the reasoning is often verbose and off-voice. Return a short, safe
+     * fallback string instead and let the caller treat it as an error line
+     * (isErrorResponse already flags this constant).
      */
-    private fun stripReasoningTags(text: String): String =
-        text
+    private fun stripReasoningTags(text: String): String {
+        val stripped = text
             .replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE), "")
             .replace(Regex("<thinking>[\\s\\S]*?</thinking>", RegexOption.IGNORE_CASE), "")
             .trim()
-            .ifBlank { text.trim() }   // if the whole response was inside think tags, keep raw
+        return stripped.ifBlank { "Something went wrong." }
+    }
 
     /** True if the server is rate-limiting us (HTTP 429). 429 is retryable with backoff. */
     private fun isRateLimit(e: LlmException): Boolean =

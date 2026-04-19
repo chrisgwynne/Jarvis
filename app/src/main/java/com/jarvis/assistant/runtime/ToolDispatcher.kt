@@ -2,6 +2,7 @@ package com.jarvis.assistant.runtime
 
 import android.content.Context
 import android.util.Log
+import com.jarvis.assistant.core.decisions.ActionLedger
 import com.jarvis.assistant.core.state.DeviceStateStore
 import com.jarvis.assistant.core.state.JarvisState
 import com.jarvis.assistant.core.state.JarvisStateMachine
@@ -35,7 +36,15 @@ class ToolDispatcher(
      * tool invocation with no runtime restart.  Defaults to "never denied" so
      * tests and legacy callers don't need to plumb SettingsStore through.
      */
-    private val killSwitchProvider: () -> Boolean = { false }
+    private val killSwitchProvider: () -> Boolean = { false },
+    /**
+     * Supplies the shared action ledger at dispatch time. Lambda rather
+     * than direct injection so JarvisRuntime can construct the dispatcher
+     * before ProactiveEngine (which currently owns the ledger). Returns
+     * null until the ledger is wired — dispatcher then records nothing,
+     * which is the safe legacy behaviour.
+     */
+    private val actionLedgerProvider: () -> ActionLedger? = { null },
 ) {
 
     companion object {
@@ -67,6 +76,29 @@ class ToolDispatcher(
         com.jarvis.assistant.llm.NetworkClient.gson.toJson(params)
     } catch (_: Exception) {
         ""
+    }
+
+    /**
+     * Map a tool name to the ledger's action-class label. Must match the
+     * labels the proactive triggers use so a voice action suppresses a
+     * proactive nudge in the same domain. Unknown tools return null.
+     */
+    private fun toolActionClass(toolName: String): String? = when (toolName) {
+        "call_contact", "end_call" -> "CALL"
+        "send_sms", "whatsapp_message", "email_send" -> "MESSAGE"
+        "read_notifications", "clear_notifications" -> "NOTIFICATION"
+        "set_alarm" -> "ALARM"
+        "set_timer" -> "TIMER"
+        "set_reminder", "create_reminder", "location_reminder",
+        "list_reminders", "cancel_reminder" -> "REMINDER"
+        "calendar_read", "calendar_create", "calendar_accept" -> "CALENDAR"
+        "smart_home" -> "SMART_HOME"
+        "volume_control" -> "VOLUME"
+        "flashlight" -> "FLASHLIGHT"
+        "media_control", "music_search" -> "MEDIA"
+        "shopping_list" -> "SHOPPING"
+        "daily_briefing" -> "BRIEFING"
+        else -> null
     }
 
     /**
@@ -130,6 +162,10 @@ class ToolDispatcher(
                 shortLabel            = tool.name.replace('_', ' '),
                 reversible            = tool.isReversible,
                 rawData               = result.rawData
+            )
+            actionLedgerProvider()?.recordToolExecution(
+                toolName = tool.name,
+                actionClass = toolActionClass(tool.name),
             )
         }
 

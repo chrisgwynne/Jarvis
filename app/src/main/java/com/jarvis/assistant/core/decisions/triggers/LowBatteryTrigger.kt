@@ -5,6 +5,7 @@ import com.jarvis.assistant.core.decisions.Candidate
 import com.jarvis.assistant.core.decisions.Trigger
 import com.jarvis.assistant.core.events.Event
 import com.jarvis.assistant.proactive.ProactiveConfig
+import com.jarvis.assistant.proactive.ProactiveEventType
 
 /**
  * LowBatteryTrigger — direct port of EventGenerator.generateBatteryEvent.
@@ -18,8 +19,9 @@ class LowBatteryTrigger(
     override val actionClass: String = "BATTERY"
 
     override fun match(ctx: AgentContext, recentEvents: List<Event>): Candidate? {
-        val battery = ctx.batteryPercent
-        if (battery > config.batteryLow || ctx.isCharging) return null
+        val snapshot = ctx.proactive
+        val battery = snapshot.batteryLevel
+        if (battery > config.batteryLow || snapshot.isCharging) return null
 
         val urgency = when {
             battery <= config.batteryCritical -> 0.95f
@@ -35,6 +37,7 @@ class LowBatteryTrigger(
 
         return Candidate(
             triggerId = id,
+            eventType = ProactiveEventType.LOW_BATTERY,
             title = "Battery $battery%",
             spokenText = spokenText,
             urgency = urgency,

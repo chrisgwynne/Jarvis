@@ -1,19 +1,23 @@
 package com.jarvis.assistant.core.decisions
 
+import com.jarvis.assistant.proactive.ProactiveEvent
+import com.jarvis.assistant.proactive.ProactiveEventType
+
 /**
  * Candidate — a trigger's proposal to the policy engine. Scored and either
  * dispatched or suppressed downstream.
  *
- * Parallel in shape to the legacy [com.jarvis.assistant.proactive.ProactiveEvent]
- * so triggers can be ported one at a time without breaking callers. Once the
- * porting is done, ProactiveEvent collapses into this.
+ * Carries [eventType] during the transitional period so [toProactiveEvent]
+ * can feed the legacy [com.jarvis.assistant.proactive.EventScorer] /
+ * [com.jarvis.assistant.proactive.DecisionEngine] unchanged while the
+ * policy engine is being rebuilt on top of this shape.
  *
  * [dedupeKey] MUST be stable across ticks for the same underlying situation —
- * it's what [com.jarvis.assistant.core.decisions.ActionLedger] keys cooldown
- * and ignore-count state on.
+ * it's what [ActionLedger] keys cooldown and ignore-count state on.
  */
 data class Candidate(
     val triggerId: String,
+    val eventType: ProactiveEventType,
     val title: String,
     val spokenText: String?,
     val urgency: Float,
@@ -24,4 +28,17 @@ data class Candidate(
     val actionClass: String? = null,
     val metadata: Map<String, String> = emptyMap(),
     val createdAtMs: Long = System.currentTimeMillis(),
-)
+) {
+    fun toProactiveEvent(): ProactiveEvent = ProactiveEvent(
+        type = eventType,
+        title = title,
+        spokenText = spokenText,
+        urgency = urgency,
+        relevance = relevance,
+        confidence = confidence,
+        annoyanceCost = annoyanceCost,
+        createdAtMillis = createdAtMs,
+        dedupeKey = dedupeKey,
+        metadata = metadata,
+    )
+}

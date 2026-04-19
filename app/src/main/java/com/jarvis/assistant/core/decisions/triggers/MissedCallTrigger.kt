@@ -4,6 +4,7 @@ import com.jarvis.assistant.core.context.AgentContext
 import com.jarvis.assistant.core.decisions.Candidate
 import com.jarvis.assistant.core.decisions.Trigger
 import com.jarvis.assistant.core.events.Event
+import com.jarvis.assistant.proactive.ProactiveEventType
 
 /**
  * MissedCallTrigger — port of EventGenerator.generateMissedCallEvent.
@@ -43,6 +44,7 @@ class MissedCallTrigger : Trigger {
 
         return Candidate(
             triggerId = id,
+            eventType = ProactiveEventType.MISSED_CALL,
             title = title,
             spokenText = spokenText,
             urgency = 0.65f,

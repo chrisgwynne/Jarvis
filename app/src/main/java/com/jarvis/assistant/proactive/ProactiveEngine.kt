@@ -73,7 +73,20 @@ class ProactiveEngine(
      * restarts.  JarvisRuntime supplies the real DAO; tests leave this null
      * for a pure in-memory store.
      */
-    private val cooldownDao: ProactiveCooldownDao? = null
+    private val cooldownDao: ProactiveCooldownDao? = null,
+    /**
+     * Optional shared action ledger. When provided the engine uses it for
+     * markSurfaced / markIgnored / markAccepted so reactive tool calls and
+     * proactive dispatches share one cooldown view. When null, a fresh
+     * ledger is created around [cooldownStore] with no cross-path sharing.
+     */
+    actionLedger: com.jarvis.assistant.core.decisions.ActionLedger? = null,
+    /**
+     * Optional trace store. When provided every tick appends one row
+     * describing candidates, gate outcome, and dispatched action. Fire-
+     * and-forget: never blocks the tick.
+     */
+    private val traceStore: com.jarvis.assistant.core.telemetry.DecisionTraceStore? = null,
 ) {
 
     companion object {
@@ -83,6 +96,8 @@ class ProactiveEngine(
     // ── Internals ─────────────────────────────────────────────────────────────
 
     private val cooldownStore   = CooldownStore(dao = cooldownDao)
+    val ledger: com.jarvis.assistant.core.decisions.ActionLedger =
+        actionLedger ?: com.jarvis.assistant.core.decisions.ActionLedger(cooldownStore)
     private val eventGenerator  = EventGenerator(config)
     private val eventScorer     = EventScorer(config, cooldownStore)
     private val decisionEngine  = DecisionEngine(config, cooldownStore)
@@ -173,16 +188,54 @@ class ProactiveEngine(
 
         if (events.isEmpty()) {
             Log.v(TAG, "tick: no events generated")
+            traceStore?.record(outcome = "no_events")
             return
         }
 
         val scored    = eventScorer.scoreAll(events, snapshot)
         val action    = decisionEngine.decide(scored, snapshot)
 
+        val outcome = when (action) {
+            is ProactiveAction.SpeakAction -> "speak"
+            is ProactiveAction.PassiveAction -> "passive"
+            ProactiveAction.NoAction -> "suppressed"
+        }
+        val dispatchedKey = when (action) {
+            is ProactiveAction.SpeakAction -> action.dedupeKey
+            is ProactiveAction.PassiveAction -> action.dedupeKey
+            ProactiveAction.NoAction -> null
+        }
+        traceStore?.record(
+            outcome = outcome,
+            dispatchedDedupeKey = dispatchedKey,
+            snapshotJson = snapshotSummary(snapshot),
+            candidatesJson = events.joinToString(prefix = "[", postfix = "]") { candidateSummary(it) },
+        )
+
         if (action !is ProactiveAction.NoAction) {
             ProactiveMetrics.increment(ProactiveMetrics.Counter.ACTIONS_DISPATCHED)
             dispatch(action)
         }
+    }
+
+    private fun snapshotSummary(s: ContextSnapshot): String = buildString {
+        append('{')
+        append("\"battery\":").append(s.batteryLevel).append(',')
+        append("\"charging\":").append(s.isCharging).append(',')
+        append("\"driving\":").append(s.isDriving).append(',')
+        append("\"speaking\":").append(s.isJarvisSpeaking).append(',')
+        append("\"listening\":").append(s.isJarvisListening).append(',')
+        append("\"unread\":").append(s.unreadNotificationCount).append(',')
+        append("\"missed\":").append(s.missedCallsCount).append(',')
+        append("\"meetings_today\":").append(s.meetingsTodayCount)
+        append('}')
+    }
+
+    private fun candidateSummary(e: ProactiveEvent): String = buildString {
+        append("{\"type\":\"").append(e.type.name).append("\",")
+        append("\"urgency\":").append(e.urgency).append(',')
+        append("\"relevance\":").append(e.relevance).append(',')
+        append("\"dedupe\":\"").append(e.dedupeKey).append("\"}")
     }
 
     /**
@@ -194,7 +247,7 @@ class ProactiveEngine(
         val verdict = pendingVerdict ?: return@withLock
         val lastUser = snapshot.lastUserInteractionTimeMillis
         if (lastUser != null && lastUser > verdict.dispatchedAt) {
-            cooldownStore.markAccepted(verdict.dedupeKey)
+            ledger.recordVerdict(verdict.dedupeKey, accepted = true)
             Log.d(TAG, "Accepted verdict for ${verdict.dedupeKey}")
             ProactiveMetrics.increment(ProactiveMetrics.Counter.VERDICT_ACCEPTED)
             pendingVerdict = null
@@ -202,11 +255,11 @@ class ProactiveEngine(
         }
         val age = snapshot.currentTimeMillis - verdict.dispatchedAt
         if (age >= config.ignoreCheckDelayMs) {
-            cooldownStore.markIgnored(verdict.dedupeKey)
+            ledger.recordVerdict(verdict.dedupeKey, accepted = false)
             Log.d(
                 TAG,
                 "Ignored verdict for ${verdict.dedupeKey} " +
-                "(count=${cooldownStore.ignoreCount(verdict.dedupeKey)})"
+                "(count=${ledger.ignoreCount(verdict.dedupeKey)})"
             )
             ProactiveMetrics.increment(ProactiveMetrics.Counter.VERDICT_IGNORED)
             pendingVerdict = null
@@ -279,15 +332,20 @@ class ProactiveEngine(
         // didn't engage with it — otherwise the accept branch of
         // resolvePendingVerdict would have already cleared it.  Count it as
         // ignored before overwriting so adaptation isn't lost.
+        val actionClass = when (action) {
+            is ProactiveAction.SpeakAction -> action.sourceType.actionClassKey()
+            is ProactiveAction.PassiveAction -> action.sourceType.actionClassKey()
+            ProactiveAction.NoAction -> null
+        }
         verdictLock.withLock {
             pendingVerdict?.let { prior ->
                 if (prior.dedupeKey != key) {
-                    cooldownStore.markIgnored(prior.dedupeKey)
+                    ledger.recordVerdict(prior.dedupeKey, accepted = false)
                     Log.d(TAG, "Displaced verdict ignored: ${prior.dedupeKey}")
                     ProactiveMetrics.increment(ProactiveMetrics.Counter.VERDICT_DISPLACED)
                 }
             }
-            cooldownStore.markSurfaced(key)
+            ledger.recordProactiveDispatch(key, actionClass)
             pendingVerdict = PendingVerdict(key, System.currentTimeMillis())
         }
 

@@ -23,6 +23,7 @@ import com.jarvis.assistant.core.events.adapters.BatteryEventAdapter
 import com.jarvis.assistant.core.events.adapters.DrivingModeEventAdapter
 import com.jarvis.assistant.core.events.adapters.TelephonyEventAdapter
 import com.jarvis.assistant.core.safety.Sanitizer
+import com.jarvis.assistant.core.telemetry.DecisionTraceStore
 import com.jarvis.assistant.location.CurrentLocationProvider
 import com.jarvis.assistant.core.state.JarvisState
 import com.jarvis.assistant.core.state.JarvisStateMachine
@@ -376,7 +377,13 @@ class JarvisRuntime(
             toolRegistry,
             machine,
             lastActionStore,
-            killSwitchProvider = { settings.toolExecutionDisabled }
+            killSwitchProvider = { settings.toolExecutionDisabled },
+            // Resolves to the engine's ledger once ProactiveEngine is built
+            // below. Until then the lambda returns null and the dispatcher
+            // records nothing, which matches legacy behaviour.
+            actionLedgerProvider = {
+                if (::proactiveEngine.isInitialized) proactiveEngine.ledger else null
+            }
         )
         memoryHandler = MemoryActionHandler(profileMemory)
         reminderHandler = ReminderActionHandler(reminderRepo)
@@ -438,7 +445,8 @@ class JarvisRuntime(
                 voiceResponseEnabled = { settings.voiceResponse }
             ),
             isDrivingProvider    = { drivingModeManager.isDriving },
-            cooldownDao          = db.proactiveCooldownDao()
+            cooldownDao          = db.proactiveCooldownDao(),
+            traceStore           = DecisionTraceStore(db.decisionTraceDao())
         )
 
         // Conversational follow-up engine

@@ -7,45 +7,38 @@ import com.jarvis.assistant.core.events.Event
 import com.jarvis.assistant.proactive.ProactiveConfig
 import com.jarvis.assistant.proactive.ProactiveEventType
 
-/**
- * UpcomingMeetingTrigger — port of EventGenerator.generateUpcomingMeetingEvent.
- * The "meeting starting soon" imminent-case is a separate trigger kept
- * distinct on purpose: it bypasses quiet-hours and presence gating
- * downstream, and the DecisionEngine inspects the triggerId to do that.
- */
-class UpcomingMeetingTrigger(
+class MeetingStartingSoonTrigger(
     private val config: ProactiveConfig = ProactiveConfig(),
 ) : Trigger {
-    override val id: String = "upcoming_meeting"
+    override val id: String = "meeting_starting_soon"
     override val actionClass: String = "CALENDAR"
 
     override fun match(ctx: AgentContext, recentEvents: List<Event>): Candidate? {
         val snapshot = ctx.proactive
         val startMs = snapshot.nextMeetingAtMillis ?: return null
         val diffMs = startMs - snapshot.currentTimeMillis
-        if (diffMs <= config.meetingUrgentMs || diffMs > config.meetingWindowMs) return null
+        if (diffMs > config.meetingUrgentMs || diffMs < -30_000L) return null
 
-        val minutesAway = (diffMs / 60_000L).coerceAtLeast(1L)
-        val (urgency, relevance) = if (minutesAway <= 5L) 0.80f to 0.85f else 0.55f to 0.70f
         val title = snapshot.nextMeetingTitle?.takeIf { it.isNotBlank() }
         val spokenText = when {
-            title != null -> "$title in $minutesAway minutes."
-            minutesAway <= 5L -> "Meeting in $minutesAway minutes."
-            else -> "A meeting in $minutesAway minutes."
+            title != null && diffMs <= 60_000L -> "$title starting now."
+            title != null -> "$title in a minute."
+            diffMs <= 60_000L -> "Your meeting's starting."
+            else -> "Meeting in a minute."
         }
-        val titleLabel = if (title != null) "$title in $minutesAway min" else "Meeting in $minutesAway min"
+        val titleLabel = if (title != null) "$title starting" else "Meeting starting"
         val bucketKey = startMs / 60_000L * 60_000L
 
         return Candidate(
             triggerId = id,
-            eventType = ProactiveEventType.UPCOMING_MEETING,
+            eventType = ProactiveEventType.MEETING_STARTING_SOON,
             title = titleLabel,
             spokenText = spokenText,
-            urgency = urgency,
-            relevance = relevance,
+            urgency = 0.92f,
+            relevance = 0.95f,
             confidence = 1.0f,
-            annoyanceCost = 0.25f,
-            dedupeKey = "upcoming_meeting_$bucketKey",
+            annoyanceCost = 0.15f,
+            dedupeKey = "meeting_soon_$bucketKey",
             actionClass = actionClass,
             metadata = buildMap {
                 put("nextMeetingAtMillis", startMs.toString())

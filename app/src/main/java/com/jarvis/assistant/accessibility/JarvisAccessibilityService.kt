@@ -46,6 +46,38 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
 
         fun isArmed(): Boolean = armed.get()
+
+        /**
+         * Single-instance handle used by [com.jarvis.assistant.tools.device.ReadScreenTool]
+         * and [com.jarvis.assistant.tools.device.TapScreenTool] to reach the live
+         * AccessibilityService from outside its process.  Set in onServiceConnected,
+         * cleared in onUnbind.
+         *
+         * Volatile because tools read it from arbitrary coroutine dispatchers.
+         */
+        @Volatile
+        private var instance: JarvisAccessibilityService? = null
+
+        /** True when the user has actually granted accessibility access. */
+        fun isConnected(): Boolean = instance != null
+
+        /** Capture a snapshot of the current foreground screen, or null if not connected. */
+        suspend fun snapshot(withScreenshot: Boolean = true): ScreenSnapshot? {
+            val svc = instance ?: return null
+            return ScreenInspector.snapshot(svc, withScreenshot)
+        }
+
+        /** Perform a click on [node] from a previously captured [snapshot]. */
+        fun click(node: ScreenNode): Boolean {
+            val svc = instance ?: return false
+            return ScreenActuator.click(svc, node)
+        }
+
+        /** Set text on the editable node represented by [node]. */
+        fun setText(node: ScreenNode, text: String): Boolean {
+            val svc = instance ?: return false
+            return ScreenActuator.setText(svc, node, text)
+        }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -55,6 +87,19 @@ class JarvisAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         Log.d(TAG, "Service connected")
+        instance = this
+    }
+
+    override fun onUnbind(intent: android.content.Intent?): Boolean {
+        Log.d(TAG, "Service unbinding")
+        instance = null
+        return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        // Belt-and-braces: onUnbind isn't always called on every teardown path.
+        instance = null
+        super.onDestroy()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {

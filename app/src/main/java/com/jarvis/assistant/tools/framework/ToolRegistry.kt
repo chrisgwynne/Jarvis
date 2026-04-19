@@ -39,6 +39,8 @@ import com.jarvis.assistant.audio.recording.RecordingTranscriber
 import com.jarvis.assistant.camera.CameraCaptureManager
 import com.jarvis.assistant.camera.VisionClient
 import com.jarvis.assistant.tools.device.AnalyzeCameraViewTool
+import com.jarvis.assistant.tools.device.ReadScreenTool
+import com.jarvis.assistant.tools.device.TapScreenTool
 import com.jarvis.assistant.call.OutgoingCallController
 import com.jarvis.assistant.tools.device.AudioRecordingTool
 import com.jarvis.assistant.tools.device.CameraCaptureTool
@@ -140,6 +142,9 @@ class ToolRegistry private constructor(
                     add(ConversationExportTool(context))
                     add(VoiceShortcutTool(VoiceShortcutRepository(db.voiceShortcutDao())))
                     add(ReadNotificationsTool(context))
+                    // Screen vision + actuation (before generic OpenApp)
+                    llmRouter?.let { add(ReadScreenTool(it)) }
+                    add(TapScreenTool())
                     // Camera + vision tools (before OpenApp to avoid misrouting)
                     add(CameraCaptureTool(context, cameraCapture))
                     add(AnalyzeCameraViewTool(context, cameraCapture, visionClient, llmRouter))
@@ -169,6 +174,8 @@ class ToolRegistry private constructor(
                 add("send SMS and WhatsApp messages")
                 add("take photos and selfies")
                 if (canAnalyseImages) add("analyse what the camera sees")
+                if (com.jarvis.assistant.accessibility.JarvisAccessibilityService.isConnected())
+                    add("read what's on screen and tap buttons by name")
                 add("set reminders, timers, and alarms")
                 add("start and stop audio recordings")
                 if (canTranscribe) add("transcribe and summarise recordings")

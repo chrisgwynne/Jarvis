@@ -2,22 +2,43 @@
 <!--
     JarvisAccessibilityService configuration.
 
-    Purpose: tap the Send button inside WhatsApp after Jarvis has composed a
-    message via the whatsapp://send intent.  Android does not expose any
-    programmatic way to send a WhatsApp message (by design, to prevent spam);
-    an AccessibilityService that explicitly taps the button is the only route.
+    Two modes share this service:
 
-    Scope is restricted as tightly as possible:
-      - packageNames filters events to WhatsApp only
-      - feedbackType="generic" (no spoken/haptic feedback)
-      - canPerformGestures not declared — we only use performAction(ACTION_CLICK)
+    1. WhatsApp auto-send (legacy) — taps the Send button after the app is
+       opened via whatsapp://send.
+
+    2. Generic on-screen vision and tap (read_screen / tap_screen tools) —
+       reads the foreground window's accessibility tree, optionally captures
+       a PNG of the display via takeScreenshot (API 30+) and dispatches taps
+       through the inspected coordinates.
+
+    SCOPE / PRIVACY
+    ───────────────
+    Mode (2) requires visibility into every foreground app the user has open
+    while Jarvis is engaged, so packageNames is intentionally NOT set here:
+    on Android, omitting that attribute restricts the service to the apps
+    enumerated *plus none* if any are listed, but here we want all foreground
+    windows.  The capability is dangerous; it is mitigated at the Tool layer:
+
+      - ReadScreenTool only fires on explicit "read the screen" / "what's on
+        screen" / "what does it say" utterances.
+      - TapScreenTool requires an explicit description of the target and
+        ActionPolicyGate gating; it never auto-taps unless the user said so.
+      - The service sets the global `instance` only while the user has
+        granted Accessibility access; revoking it in Android settings clears
+        the handle and both tools fall back to a clean failure message.
+
+    canRetrieveWindowContent + flagRetrieveInteractiveWindows are required for
+    the inspector to enumerate views.  canTakeScreenshot is API 30+ and lets
+    us avoid the MediaProjection consent flow on every screenshot.
 -->
 <accessibility-service
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows"
+    android:canPerformGestures="true"
     android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
     android:description="@string/accessibility_service_description"
-    android:notificationTimeout="100"
-    android:packageNames="com.whatsapp,com.whatsapp.w4b" />
+    android:notificationTimeout="100" />

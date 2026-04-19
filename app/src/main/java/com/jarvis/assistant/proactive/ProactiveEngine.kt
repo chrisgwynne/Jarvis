@@ -108,11 +108,16 @@ class ProactiveEngine(
         Log.d(TAG, "Starting proactive polling (interval=${config.pollingIntervalMs}ms)")
         loopJob = scope.launch {
             while (isActive) {
+                val t0 = System.currentTimeMillis()
                 try {
                     tick()
                 } catch (e: Exception) {
                     Log.e(TAG, "Unhandled exception in proactive tick — will retry next interval", e)
                 }
+                // Single-line, tag=Jarvis event so a battery-drain regression shows
+                // up in `adb logcat -s Jarvis | grep event=proactive_tick`.
+                val dur = System.currentTimeMillis() - t0
+                Log.d(TAG, "event=proactive_tick duration_ms=$dur")
                 delay(config.pollingIntervalMs)
             }
         }

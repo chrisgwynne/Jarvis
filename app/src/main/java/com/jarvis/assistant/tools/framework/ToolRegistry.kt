@@ -44,6 +44,7 @@ import com.jarvis.assistant.tools.device.NavigateTool
 import com.jarvis.assistant.tools.device.NearestPlaceTool
 import com.jarvis.assistant.tools.device.ReadScreenTool
 import com.jarvis.assistant.tools.device.TapScreenTool
+import com.jarvis.assistant.tools.device.WhereAmITool
 import com.jarvis.assistant.maps.DirectionsCoordinator
 import com.jarvis.assistant.maps.MapsCommandRouter
 import com.jarvis.assistant.maps.MapsIntentHandler
@@ -118,6 +119,13 @@ class ToolRegistry private constructor(
 
             return ToolRegistry(
                 tools = buildList {
+                    // LIVE_LOCATION intent MUST land first.  "Where am I?" /
+                    // "what's my location?" are dedicated live-GPS queries; the
+                    // spec explicitly forbids any other tool (memory, saved
+                    // home, web search) from answering them.  Registering the
+                    // tool at index 0 guarantees that.
+                    locationProvider?.let { add(WhereAmITool(context, it)) }
+
                     // End-call MUST precede CallTool so "end call" / "hang up"
                     // is not accidentally routed to the outgoing-call tool.
                     outgoingCallController?.let { add(EndCallTool(it)) }

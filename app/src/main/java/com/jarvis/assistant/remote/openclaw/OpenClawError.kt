@@ -22,8 +22,12 @@ sealed class OpenClawError(val spokenMessage: String) {
         init {
             // Structured log so operators can grep for connectivity failures
             // without us leaking the raw cause into the user-facing message.
+            // Wrapped so that JVM-only tests (where android.util.Log is not
+            // stubbed) can still construct this error.
             if (cause.isNotBlank()) {
-                android.util.Log.w("OpenClawError", "event=unreachable cause=\"$cause\"")
+                try {
+                    android.util.Log.w("OpenClawError", "event=unreachable cause=\"$cause\"")
+                } catch (_: Throwable) { /* tests without Robolectric */ }
             }
         }
     }

@@ -25,16 +25,19 @@ object ProactiveMetrics {
         VERDICT_DISPLACED
     }
 
-    private val values: Map<Counter, AtomicLong> =
-        Counter.values().associateWith { AtomicLong(0) }
+    // Named `counters` (not `values`) so `counters.values` when we iterate
+    // the Map's value collection doesn't read like a typo and so there's no
+    // visual collision with Kotlin's Enum.values() / entries.
+    private val counters: Map<Counter, AtomicLong> =
+        Counter.entries.associateWith { AtomicLong(0) }
 
     fun increment(c: Counter, by: Long = 1L) {
-        values.getValue(c).addAndGet(by)
+        counters.getValue(c).addAndGet(by)
     }
 
     fun snapshot(): Map<Counter, Long> =
-        values.mapValues { (_, v) -> v.get() }
+        counters.mapValues { (_, v) -> v.get() }
 
     /** Reset all counters — intended for tests. */
-    fun reset() = values.values.forEach { it.set(0) }
+    fun reset() = counters.values.forEach { it.set(0) }
 }

@@ -144,7 +144,14 @@ class OpenAppTool(
                 "Found $label but couldn't open it — it might be suspended or need an update."
             )
         context.startActivity(intent)
-        resolver.rememberAlias(spokenName, AppResolver.Result.Launchable(packageName, label))
+        // startActivity pushes Jarvis to the background and the system may
+        // reap the process before an apply() write flushes. Sync-commit the
+        // alias on every successful launch so it survives that race.
+        resolver.rememberAlias(
+            spokenName,
+            AppResolver.Result.Launchable(packageName, label),
+            durable = true
+        )
         return ToolResult.Success(spokenFeedback = "Opening $label.")
     }
 

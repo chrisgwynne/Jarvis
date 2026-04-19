@@ -3,6 +3,7 @@ package com.jarvis.assistant.runtime.plan
 import android.content.Context
 import android.util.Log
 import com.jarvis.assistant.llm.LlmResult
+import com.jarvis.assistant.runtime.reference.LastActionStore
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolRegistry
@@ -33,7 +34,8 @@ class PlanRunner(
     private val registry: ToolRegistry,
     private val journalDao: ActionJournalDao,
     /** Window used by [undoLastPlan] to refuse undoing very old plans. */
-    private val undoMaxAgeMs: Long = 5 * 60 * 1000L
+    private val undoMaxAgeMs: Long = 5 * 60 * 1000L,
+    private val lastActionStore: LastActionStore? = null
 ) {
 
     companion object {
@@ -151,6 +153,19 @@ class PlanRunner(
                 else -> { /* Augmented / NotMatched are unexpected here */ }
             }
         }
+        // Record into the referential store so "undo that" can route back
+        // through [undoLastPlan].  Skip when every step failed — there's
+        // nothing reversible to refer to.
+        if (!anyFailed) {
+            lastActionStore?.recordPlanRun(
+                planId                = plan.id,
+                originatingTranscript = plan.originatingTranscript,
+                shortLabel            = plan.steps.firstOrNull()?.shortLabel?.let { "$it plan" }
+                    ?: "plan",
+                reversible            = plan.allReversible
+            )
+        }
+
         return Resolution.Ran(
             spoken    = "Done.",
             planId    = plan.id,

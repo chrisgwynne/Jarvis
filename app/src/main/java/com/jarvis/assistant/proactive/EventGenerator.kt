@@ -25,7 +25,11 @@ class EventGenerator(private val config: ProactiveConfig) {
         generateReminderEvent(snapshot),
         generateMissedCallEvent(snapshot),
         generateNotificationEvent(snapshot),
-        generateBrainContextEvent(snapshot)
+        generateBrainContextEvent(snapshot),
+        generateMeetingStartingSoonEvent(snapshot),
+        generateUpcomingMeetingEvent(snapshot),
+        generateDailyAgendaEvent(snapshot),
+        generateLocationTransitionEvent(snapshot)
     )
 
     /**
@@ -292,6 +296,188 @@ class EventGenerator(private val config: ProactiveConfig) {
                 if (app != null) put("app", app)
                 if (text != null) put("text", text)
             }
+        )
+    }
+
+    /**
+     * Generate an UPCOMING_MEETING event when the next timed meeting starts
+     * within (meetingUrgentMs, meetingWindowMs].  Imminent meetings
+     * (≤ meetingUrgentMs) are handled by [generateMeetingStartingSoonEvent]
+     * so this generator skips that range to avoid duplicate spoken output.
+     */
+    private fun generateUpcomingMeetingEvent(snapshot: ContextSnapshot): ProactiveEvent? {
+        val startMs = snapshot.nextMeetingAtMillis ?: return null
+        val diffMs = startMs - snapshot.currentTimeMillis
+        if (diffMs <= config.meetingUrgentMs || diffMs > config.meetingWindowMs) return null
+
+        val minutesAway = (diffMs / 60_000L).coerceAtLeast(1L)
+        val urgency: Float
+        val relevance: Float
+        if (minutesAway <= 5L) {
+            urgency = 0.80f; relevance = 0.85f
+        } else {
+            urgency = 0.55f; relevance = 0.70f
+        }
+
+        val title = snapshot.nextMeetingTitle?.takeIf { it.isNotBlank() }
+        val spokenText = when {
+            title != null && minutesAway <= 5L -> "$title in $minutesAway minutes."
+            title != null                      -> "$title in $minutesAway minutes."
+            minutesAway <= 5L                  -> "Meeting in $minutesAway minutes."
+            else                               -> "A meeting in $minutesAway minutes."
+        }
+        val titleLabel = if (title != null) "$title in $minutesAway min" else "Meeting in $minutesAway min"
+        val bucketKey = startMs / 60_000L * 60_000L
+
+        return ProactiveEvent(
+            type          = ProactiveEventType.UPCOMING_MEETING,
+            title         = titleLabel,
+            spokenText    = spokenText,
+            urgency       = urgency,
+            relevance     = relevance,
+            confidence    = 1.0f,
+            annoyanceCost = 0.25f,
+            dedupeKey     = "upcoming_meeting_$bucketKey",
+            metadata      = buildMap {
+                put("nextMeetingAtMillis", startMs.toString())
+                if (title != null) put("title", title)
+            }
+        )
+    }
+
+    /**
+     * Generate a MEETING_STARTING_SOON event when the next meeting is
+     * imminent (≤ meetingUrgentMs, and still within a 30s grace if it just
+     * ticked past start).  Lands in ACTIVE tier and bypasses quiet/presence
+     * gating via [DecisionEngine].
+     */
+    private fun generateMeetingStartingSoonEvent(snapshot: ContextSnapshot): ProactiveEvent? {
+        val startMs = snapshot.nextMeetingAtMillis ?: return null
+        val diffMs = startMs - snapshot.currentTimeMillis
+        if (diffMs > config.meetingUrgentMs || diffMs < -30_000L) return null
+
+        val title = snapshot.nextMeetingTitle?.takeIf { it.isNotBlank() }
+        val spokenText = when {
+            title != null && diffMs <= 60_000L -> "$title starting now."
+            title != null                       -> "$title in a minute."
+            diffMs <= 60_000L                   -> "Your meeting's starting."
+            else                                -> "Meeting in a minute."
+        }
+        val titleLabel = if (title != null) "$title starting" else "Meeting starting"
+        val bucketKey = startMs / 60_000L * 60_000L
+
+        return ProactiveEvent(
+            type          = ProactiveEventType.MEETING_STARTING_SOON,
+            title         = titleLabel,
+            spokenText    = spokenText,
+            urgency       = 0.92f,
+            relevance     = 0.95f,
+            confidence    = 1.0f,
+            annoyanceCost = 0.15f,
+            dedupeKey     = "meeting_soon_$bucketKey",
+            metadata      = buildMap {
+                put("nextMeetingAtMillis", startMs.toString())
+                if (title != null) put("title", title)
+            }
+        )
+    }
+
+    /**
+     * Generate a location-transition event when [ContextSnapshot.lastLocationTransition]
+     * carries a fresh unacknowledged transition.  The source clears the slot
+     * after the proactive engine dispatches, so no repeat firing.
+     *
+     * Emits:
+     *   - ARRIVED_HOME    — PASSIVE; requires prior absence ≥ arrivedHomeMinAwayMs
+     *   - LEFT_HOME       — PASSIVE
+     *   - ARRIVED_KNOWN_PLACE — silent (returns null) unless the caller has a
+     *                           reason to know, because surfacing every known-place
+     *                           arrival is chatty noise.
+     */
+    private fun generateLocationTransitionEvent(snapshot: ContextSnapshot): ProactiveEvent? {
+        val t = snapshot.lastLocationTransition ?: return null
+        val place = t.place
+        val dateBucket = snapshot.currentTimeMillis / (60 * 60 * 1000L)
+
+        return when (t.placeKind) {
+            com.jarvis.assistant.location.PlaceKind.HOME -> when (t.kind) {
+                com.jarvis.assistant.location.LocationTransition.Kind.ARRIVED -> {
+                    val awayMs = snapshot.currentTimeMillis - place.lastSeenAt
+                    if (awayMs < config.arrivedHomeMinAwayMs) return null
+                    ProactiveEvent(
+                        type          = ProactiveEventType.ARRIVED_HOME,
+                        title         = "Arrived home",
+                        spokenText    = "Welcome back.",
+                        urgency       = 0.40f,
+                        relevance     = 0.70f,
+                        confidence    = 0.90f,
+                        annoyanceCost = 0.30f,
+                        dedupeKey     = "arrived_home_$dateBucket"
+                    )
+                }
+                com.jarvis.assistant.location.LocationTransition.Kind.LEFT -> ProactiveEvent(
+                    type          = ProactiveEventType.LEFT_HOME,
+                    title         = "Heading out",
+                    spokenText    = "Heading out.",
+                    urgency       = 0.35f,
+                    relevance     = 0.55f,
+                    confidence    = 0.85f,
+                    annoyanceCost = 0.35f,
+                    dedupeKey     = "left_home_$dateBucket"
+                )
+            }
+            com.jarvis.assistant.location.PlaceKind.KNOWN -> when (t.kind) {
+                com.jarvis.assistant.location.LocationTransition.Kind.ARRIVED -> ProactiveEvent(
+                    type          = ProactiveEventType.ARRIVED_KNOWN_PLACE,
+                    title         = "Arrived somewhere familiar",
+                    spokenText    = null,
+                    urgency       = 0.20f,
+                    relevance     = 0.25f,
+                    confidence    = 0.70f,
+                    annoyanceCost = 0.40f,
+                    dedupeKey     = "arrived_known_${place.latitude}_${place.longitude}_$dateBucket"
+                )
+                com.jarvis.assistant.location.LocationTransition.Kind.LEFT -> null
+            }
+            com.jarvis.assistant.location.PlaceKind.UNKNOWN -> null
+        }
+    }
+
+    /**
+     * Generate a DAILY_AGENDA event once per day during the configured
+     * morning window when at least one meeting remains today.  DedupeKey
+     * includes the date so a subsequent app restart on the same day won't
+     * re-fire once the cooldown store has recorded the surfacing.
+     */
+    private fun generateDailyAgendaEvent(snapshot: ContextSnapshot): ProactiveEvent? {
+        if (snapshot.meetingsTodayCount <= 0) return null
+        val cal = java.util.Calendar.getInstance().apply { timeInMillis = snapshot.currentTimeMillis }
+        val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
+        if (hour != config.agendaHourStart) return null
+
+        val yyyymmdd = "%04d%02d%02d".format(
+            cal.get(java.util.Calendar.YEAR),
+            cal.get(java.util.Calendar.MONTH) + 1,
+            cal.get(java.util.Calendar.DAY_OF_MONTH)
+        )
+        val firstTitle = snapshot.nextMeetingTitle?.takeIf { it.isNotBlank() }
+        val count = snapshot.meetingsTodayCount
+        val plural = if (count == 1) "one meeting" else "$count meetings"
+        val spokenText = when {
+            firstTitle != null -> "$plural today. First up, $firstTitle."
+            else               -> "$plural today."
+        }
+
+        return ProactiveEvent(
+            type          = ProactiveEventType.DAILY_AGENDA,
+            title         = "Today's calendar",
+            spokenText    = spokenText,
+            urgency       = 0.45f,
+            relevance     = 0.60f,
+            confidence    = 1.0f,
+            annoyanceCost = 0.25f,
+            dedupeKey     = "daily_agenda_$yyyymmdd",
+            metadata      = mapOf("meetingsTodayCount" to count.toString())
         )
     }
 }

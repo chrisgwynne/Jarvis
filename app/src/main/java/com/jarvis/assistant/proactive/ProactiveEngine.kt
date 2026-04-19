@@ -59,6 +59,8 @@ class ProactiveEngine(
     private val dispatcher: ProactiveDispatcher,
     private val notificationSource: NotificationContextSource? = null,
     private val brainPredictionSource: BrainPredictionSource? = null,
+    private val calendarSource: CalendarContextSource? = null,
+    private val locationSource: LocationContextSource? = null,
     /**
      * Supplies the current driving state on each tick.  Optional to keep
      * tests and legacy callers simple — defaults to "not driving" when not
@@ -215,6 +217,10 @@ class ProactiveEngine(
         val nextReminder  = reminderSource.getNextPendingReminder()
         val reminderCount = reminderSource.getPendingReminderCount()
         val topPrediction = brainPredictionSource?.getTopPrediction()
+        val upcomingMeetings = calendarSource?.getUpcomingMeetings(config.meetingWindowMs).orEmpty()
+        val meetingsToday    = calendarSource?.getMeetingsRemainingToday() ?: 0
+        val nextMeeting      = upcomingMeetings.firstOrNull()
+        val pendingTransition = locationSource?.getPendingTransition()
 
         // Non-suspending calls
         val speechState  = speechSource.getSpeechState()
@@ -241,7 +247,12 @@ class ProactiveEngine(
             topPredictionDescription      = topPrediction?.description,
             topPredictionScore            = topPrediction?.score ?: 0f,
             predictionKnowledgeContext    = topPrediction?.knowledgeContext,
-            isDriving                     = isDrivingProvider()
+            isDriving                     = isDrivingProvider(),
+            nextMeetingAtMillis           = nextMeeting?.startMs,
+            nextMeetingTitle              = nextMeeting?.title,
+            nextMeetingEndMillis          = nextMeeting?.endMs,
+            meetingsTodayCount            = meetingsToday,
+            lastLocationTransition        = pendingTransition
         )
     }
 
@@ -276,12 +287,17 @@ class ProactiveEngine(
         try {
             dispatcher.dispatch(action)
             // Acknowledge notification events so the same batch isn't re-announced
-            val isNotifAction = when (action) {
-                is ProactiveAction.SpeakAction   -> action.sourceType == ProactiveEventType.UNREAD_NOTIFICATION
-                is ProactiveAction.PassiveAction -> action.sourceType == ProactiveEventType.UNREAD_NOTIFICATION
-                ProactiveAction.NoAction         -> false
+            val sourceType = when (action) {
+                is ProactiveAction.SpeakAction   -> action.sourceType
+                is ProactiveAction.PassiveAction -> action.sourceType
+                ProactiveAction.NoAction         -> null
             }
-            if (isNotifAction) notificationSource?.acknowledge()
+            if (sourceType == ProactiveEventType.UNREAD_NOTIFICATION) notificationSource?.acknowledge()
+            if (sourceType == ProactiveEventType.ARRIVED_HOME ||
+                sourceType == ProactiveEventType.LEFT_HOME ||
+                sourceType == ProactiveEventType.ARRIVED_KNOWN_PLACE) {
+                locationSource?.acknowledge()
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Dispatcher threw during dispatch — action dropped", e)
         }

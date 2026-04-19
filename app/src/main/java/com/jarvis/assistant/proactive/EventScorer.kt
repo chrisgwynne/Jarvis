@@ -156,10 +156,16 @@ class EventScorer(
      * Returns the cooldown window in milliseconds for a given [ProactiveEventType].
      */
     private fun cooldownMsForType(type: ProactiveEventType): Long = when (type) {
-        ProactiveEventType.LOW_BATTERY         -> config.cooldownLowBatteryMs
-        ProactiveEventType.UPCOMING_REMINDER   -> config.cooldownUpcomingReminderMs
-        ProactiveEventType.MISSED_CALL         -> config.cooldownMissedCallMs
-        ProactiveEventType.BEHAVIORAL_LEARNING -> config.cooldownBehavioralLearningMs
-        ProactiveEventType.UNREAD_NOTIFICATION -> config.cooldownUnreadNotificationMs
+        ProactiveEventType.LOW_BATTERY           -> config.cooldownLowBatteryMs
+        ProactiveEventType.UPCOMING_REMINDER     -> config.cooldownUpcomingReminderMs
+        ProactiveEventType.MISSED_CALL           -> config.cooldownMissedCallMs
+        ProactiveEventType.BEHAVIORAL_LEARNING   -> config.cooldownBehavioralLearningMs
+        ProactiveEventType.UNREAD_NOTIFICATION   -> config.cooldownUnreadNotificationMs
+        ProactiveEventType.UPCOMING_MEETING      -> config.cooldownUpcomingMeetingMs
+        ProactiveEventType.MEETING_STARTING_SOON -> config.cooldownMeetingStartingSoonMs
+        ProactiveEventType.DAILY_AGENDA          -> config.cooldownDailyAgendaMs
+        ProactiveEventType.ARRIVED_HOME          -> config.cooldownLocationTransitionMs
+        ProactiveEventType.LEFT_HOME             -> config.cooldownLocationTransitionMs
+        ProactiveEventType.ARRIVED_KNOWN_PLACE   -> config.cooldownLocationTransitionMs
     }
 }

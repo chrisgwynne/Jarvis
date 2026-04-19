@@ -7,6 +7,9 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import com.jarvis.assistant.memory.MemoryRetriever
 import com.jarvis.assistant.reminders.ReminderRepository
+import com.jarvis.assistant.runtime.reference.LastActionStore
+import com.jarvis.assistant.tools.reference.RepeatLastActionTool
+import com.jarvis.assistant.tools.reference.UndoLastActionTool
 import com.jarvis.assistant.tools.ContactLookup
 import com.jarvis.assistant.tools.WebSearch
 import com.jarvis.assistant.tools.device.AlarmTool
@@ -107,7 +110,8 @@ class ToolRegistry private constructor(
             reminderRepository: ReminderRepository? = null,
             outgoingCallController: OutgoingCallController? = null,
             locationProvider: CurrentLocationProvider? = null,
-            llmRouter: com.jarvis.assistant.llm.LlmRouter? = null
+            llmRouter: com.jarvis.assistant.llm.LlmRouter? = null,
+            lastActionStore: LastActionStore? = null
         ): ToolRegistry {
             val contacts = ContactLookup(context)
             val search   = WebSearch()
@@ -191,6 +195,13 @@ class ToolRegistry private constructor(
                     add(AudioRecordingTool(context, recordingManager, transcriber))
                     add(OpenAppTool(context))
                     add(WebSearchTool(search, settings))
+                    // Referential tools — "undo that" / "do the same".  Only
+                    // included when a LastActionStore is provided so unit
+                    // tests that don't need these can stay lean.
+                    lastActionStore?.let {
+                        add(UndoLastActionTool(it))
+                        add(RepeatLastActionTool(it))
+                    }
                     add(HelpTool { buildCapabilitySummary(settings) })
                 },
                 recordingManager = recordingManager

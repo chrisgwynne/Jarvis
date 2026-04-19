@@ -45,6 +45,7 @@ import com.jarvis.assistant.reminders.ReminderRepository
 import com.jarvis.assistant.reminders.ReminderScheduler
 import com.jarvis.assistant.proactive.AppBatterySource
 import com.jarvis.assistant.proactive.AppBrainPredictionSource
+import com.jarvis.assistant.proactive.AppCalendarContextSource
 import com.jarvis.assistant.proactive.AppCallContextSource
 import com.jarvis.assistant.proactive.AppNotificationSource
 import com.jarvis.assistant.proactive.AppReminderSource
@@ -198,6 +199,7 @@ class JarvisRuntime(
     // for reverse-order undo.  Pending plan is stored on the runtime so the
     // next user turn ("go" / "no") routes to confirm() before reaching the LLM.
     private lateinit var planRunner   : com.jarvis.assistant.runtime.plan.PlanRunner
+    private lateinit var lastActionStore : com.jarvis.assistant.runtime.reference.LastActionStore
     @Volatile private var pendingPlan : com.jarvis.assistant.runtime.plan.Plan? = null
 
     private val planConfirmRegex = Regex(
@@ -342,6 +344,10 @@ class JarvisRuntime(
         // Phase 7 — Orchestration
         reminderRepo = ReminderRepository(db.scheduledItemDao(), ReminderScheduler(context))
 
+        // Referential-action store — powers "undo that" / "do the same for X".
+        // In-memory only; lifetime matches the runtime.
+        lastActionStore = com.jarvis.assistant.runtime.reference.LastActionStore()
+
         // Tool registry
         toolRegistry = ToolRegistry.buildDefault(
             context                = context,
@@ -350,16 +356,32 @@ class JarvisRuntime(
             reminderRepository     = reminderRepo,
             outgoingCallController = outgoingCallController,
             locationProvider       = locationProvider,
-            llmRouter              = llmRouter
+            llmRouter              = llmRouter,
+            lastActionStore        = lastActionStore
         )
-        toolDispatcher = ToolDispatcher(context, toolRegistry, machine)
+        toolDispatcher = ToolDispatcher(context, toolRegistry, machine, lastActionStore)
         memoryHandler = MemoryActionHandler(profileMemory)
         reminderHandler = ReminderActionHandler(reminderRepo)
         planRunner = com.jarvis.assistant.runtime.plan.PlanRunner(
-            context    = context,
-            registry   = toolRegistry,
-            journalDao = db.actionJournalDao()
+            context        = context,
+            registry       = toolRegistry,
+            journalDao     = db.actionJournalDao(),
+            lastActionStore = lastActionStore
         )
+        // Wire referential tools back to the runtime collaborators now that
+        // both sides exist.  Safe to do post-construction because the tools
+        // won't be invoked until the LLM decides to call them.
+        toolRegistry.registeredNames.let {
+            (toolRegistry.findByName("undo_last_action")
+                as? com.jarvis.assistant.tools.reference.UndoLastActionTool)?.apply {
+                registry = toolRegistry
+                planRunner = this@JarvisRuntime.planRunner
+            }
+            (toolRegistry.findByName("repeat_last_action")
+                as? com.jarvis.assistant.tools.reference.RepeatLastActionTool)?.apply {
+                registry = toolRegistry
+            }
+        }
 
         // Phase 8 — Context-aware follow-ups
         followUpCoordinator = FollowUpCoordinator(
@@ -385,6 +407,11 @@ class JarvisRuntime(
             brainPredictionSource = AppBrainPredictionSource(
                 brainEngineProvider  = { if (::brainEngine.isInitialized) brainEngine else null },
                 knowledgeQueryEngine = knowledgeQuery
+            ),
+            calendarSource       = AppCalendarContextSource(context),
+            locationSource       = com.jarvis.assistant.proactive.AppLocationContextSource(
+                locationProvider = locationProvider,
+                placeLearner     = com.jarvis.assistant.location.PlaceLearner(context)
             ),
             dispatcher           = TtsProactiveDispatcher(
                 context              = context,

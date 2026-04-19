@@ -25,6 +25,11 @@ class JarvisApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        // Install the GitHub issue reporter FIRST so it wraps the thread
+        // default uncaught-exception handler before any other subsystem has a
+        // chance to misbehave.  Install is cheap (no network, no disk scan);
+        // the background drain of pending reports runs on its own IO scope.
+        com.jarvis.assistant.reporting.github.IssueReporter.install(this)
     }
 
     private fun createNotificationChannel() {

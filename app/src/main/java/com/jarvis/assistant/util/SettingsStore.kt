@@ -39,6 +39,15 @@ class SettingsStore(context: Context) {
         const val KEY_GOOGLE_MAPS_KEY        = "google_maps_key"
         const val KEY_DEFAULT_MSG_CHANNEL    = "default_msg_channel"
 
+        // GitHub issue reporting (owner/dev mode).  All off-by-default; see
+        // reporting/github/IssueReporter.kt for the full behaviour contract.
+        const val KEY_GH_REPORTING_ENABLED = "gh_reporting_enabled"
+        const val KEY_GH_REPO_OWNER        = "gh_repo_owner"
+        const val KEY_GH_REPO_NAME         = "gh_repo_name"
+        const val KEY_GH_TOKEN             = "gh_token"
+        const val DEFAULT_GH_REPO_OWNER    = "chrisgwynne"
+        const val DEFAULT_GH_REPO_NAME     = "Jarvis"
+
         // OpenAI OAuth keys
         const val KEY_OPENAI_CLIENT_ID     = "openai_client_id"
         const val KEY_OPENAI_ACCESS_TOKEN  = "openai_access_token"
@@ -148,6 +157,40 @@ class SettingsStore(context: Context) {
     var googleMapsApiKey: String
         get() = prefs.getString(KEY_GOOGLE_MAPS_KEY, "") ?: ""
         set(v) = prefs.edit().putString(KEY_GOOGLE_MAPS_KEY, v).apply()
+
+    // ── GitHub auto-issue reporting (owner/dev mode) ──────────────────────────
+    //
+    // All four live in EncryptedSharedPreferences alongside the rest of the
+    // settings, so the token never lands on disk in plaintext and is wiped
+    // with the app's data directory.  The master key is held in the Android
+    // Keystore and doesn't survive device transfer — if you restore Jarvis on
+    // a new phone, re-enter the token; nothing will silently attempt to use
+    // an old one.
+    //
+    // githubReportingEnabled defaults to false.  In a shared/public build the
+    // recommendation is to leave it false and either disable the feature
+    // branch entirely, or route the reports elsewhere (see IssueReporter).
+
+    var githubReportingEnabled: Boolean
+        get() = prefs.getBoolean(KEY_GH_REPORTING_ENABLED, false)
+        set(v) = prefs.edit().putBoolean(KEY_GH_REPORTING_ENABLED, v).apply()
+
+    var githubRepoOwner: String
+        get() = prefs.getString(KEY_GH_REPO_OWNER, DEFAULT_GH_REPO_OWNER) ?: DEFAULT_GH_REPO_OWNER
+        set(v) = prefs.edit().putString(KEY_GH_REPO_OWNER, v).apply()
+
+    var githubRepoName: String
+        get() = prefs.getString(KEY_GH_REPO_NAME, DEFAULT_GH_REPO_NAME) ?: DEFAULT_GH_REPO_NAME
+        set(v) = prefs.edit().putString(KEY_GH_REPO_NAME, v).apply()
+
+    /**
+     * GitHub personal-access token used to create issues in [githubRepoOwner]/
+     * [githubRepoName].  Stored under EncryptedSharedPreferences.  Never log
+     * this value; never include it in crash reports or metadata.
+     */
+    var githubToken: String
+        get() = prefs.getString(KEY_GH_TOKEN, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_GH_TOKEN, v).apply()
 
     /** Name of the TTS voice to use. Defaults to the local Piper ONNX voice. */
     var ttsVoiceName: String

@@ -222,6 +222,23 @@
             android:enabled="true"
             android:exported="true" />
 
+        <!-- ─── Issue reporter debug test trigger ─── -->
+        <!--
+             Owner/dev-only manual trigger for the auto-GitHub-issue pipeline.
+             Non-exported so only `adb shell am broadcast -n <explicit>` can
+             reach it; the receiver itself additionally rejects the intent at
+             runtime unless the APK is debuggable.  Release builds therefore
+             treat this as a permanent no-op even if the feature flag is on.
+        -->
+        <receiver
+            android:name=".reporting.github.IssueReporterDebugReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.jarvis.assistant.DEBUG_TEST_ISSUE" />
+            </intent-filter>
+        </receiver>
+
         <!-- ─── Notification listener service ─── -->
         <!-- User must grant access via Settings → Notification Access -->
         <service

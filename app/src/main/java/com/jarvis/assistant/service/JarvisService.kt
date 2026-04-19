@@ -208,6 +208,16 @@ class JarvisService : Service() {
                 runtimeDeferred.complete(r)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initialize JarvisRuntime", e)
+                // Service-startup failure is a blocker for every feature in
+                // the app.  Escalate to a GitHub issue (deduped per
+                // fingerprint + rate-limited globally).  The reporter is a
+                // no-op when the feature flag is off or no token is set.
+                com.jarvis.assistant.reporting.github.IssueReporter.get()?.reportFatal(
+                    subsystem = "service_startup",
+                    category  = "RUNTIME_INIT_FAILED",
+                    message   = "JarvisRuntime failed to initialize — service stopping.",
+                    throwable = e
+                )
                 stopSelf()
             }
         }

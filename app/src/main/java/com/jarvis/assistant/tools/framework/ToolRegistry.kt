@@ -22,6 +22,7 @@ import com.jarvis.assistant.tools.device.ImageGenerationTool
 import com.jarvis.assistant.tools.device.MediaControlTool
 import com.jarvis.assistant.tools.device.MemoryStatsTool
 import com.jarvis.assistant.tools.device.OpenAppTool
+import com.jarvis.assistant.tools.device.ClearNotificationsTool
 import com.jarvis.assistant.tools.device.ReadNotificationsTool
 import com.jarvis.assistant.tools.device.ShoppingListTool
 import com.jarvis.assistant.tools.device.SmsTool
@@ -176,6 +177,10 @@ class ToolRegistry private constructor(
                     add(ConversationExportTool(context))
                     add(VoiceShortcutTool(VoiceShortcutRepository(db.voiceShortcutDao())))
                     add(ReadNotificationsTool(context))
+                    // Clear AFTER Read so "clear my notifications" doesn't get
+                    // shadowed by Read's "read my notifications" pattern (they
+                    // don't overlap, but keep related tools adjacent for sanity).
+                    add(ClearNotificationsTool(context))
                     // Screen vision + actuation (before generic OpenApp)
                     llmRouter?.let { add(ReadScreenTool(it)) }
                     add(TapScreenTool())
@@ -217,7 +222,7 @@ class ToolRegistry private constructor(
                 add("find nearby places and open directions in Google Maps")
                 add("control media playback and volume")
                 add("open apps")
-                add("read your calendar and notifications")
+                add("read and clear your calendar and notifications")
                 add("manage your shopping list")
                 add("generate images")
                 add("give you a daily briefing")

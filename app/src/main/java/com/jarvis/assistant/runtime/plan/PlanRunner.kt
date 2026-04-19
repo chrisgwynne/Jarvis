@@ -126,9 +126,12 @@ class PlanRunner(
             val now = System.currentTimeMillis()
             when (result) {
                 is ToolResult.Success -> {
-                    journalDao.setStatus(journalId, JournalEntry.STATUS_SUCCEEDED, now)
-                    // Update the undoPayload with the rawData the tool produced;
-                    // re-insert is cheaper than an UPDATE column for now.
+                    // The tool's rawData would ideally be persisted as the
+                    // undoPayload here, but the current ActionJournalDao only
+                    // exposes status updates — the row already carries the
+                    // empty payload from journal().  When tools that need
+                    // payload-driven undo land, add an updatePayload() query
+                    // and write result.rawData back here.
                     journalDao.setStatus(journalId, JournalEntry.STATUS_SUCCEEDED, now)
                 }
                 is ToolResult.Failure -> {

@@ -37,6 +37,19 @@ object ScreenInspector {
     private const val MAX_NODES = 250
 
     /**
+     * Single-thread executor reused across screenshot calls.  takeScreenshot
+     * needs an Executor to deliver its callback on; allocating a fresh one
+     * per call would leak a thread on every tap-or-read flow because
+     * newSingleThreadExecutor() never auto-shuts-down without explicit
+     * shutdown(). One shared instance is enough — screenshots are serialised
+     * by the SCREENSHOT_TIMEOUT_MS gate above.
+     */
+    private val screenshotExecutor: java.util.concurrent.Executor =
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "JarvisA11yScreenshot").apply { isDaemon = true }
+        }
+
+    /**
      * Build a [ScreenSnapshot] for the foreground window of [service].
      *
      * @param withScreenshot when true and API ≥ 30, attaches a PNG of the
@@ -111,7 +124,7 @@ object ScreenInspector {
                 try {
                     service.takeScreenshot(
                         Display.DEFAULT_DISPLAY,
-                        java.util.concurrent.Executors.newSingleThreadExecutor()
+                        screenshotExecutor
                     ) { result ->
                         try {
                             val hardware = result.hardwareBuffer

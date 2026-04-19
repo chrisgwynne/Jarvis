@@ -86,7 +86,7 @@ class TapScreenTool : Tool {
             ?: return ToolResult.Failure("I can't find $target on screen.")
 
         if (match.matchLabel.lowercase() in SENSITIVE_LABELS && match.matchLabel.lowercase() != target) {
-            return ToolResult.Failure("I won't tap $match.matchLabel — say it exactly.")
+            return ToolResult.Failure("I won't tap ${match.matchLabel} — say it exactly.")
         }
 
         val ok = JarvisAccessibilityService.click(match)

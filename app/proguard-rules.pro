@@ -67,6 +67,15 @@
 -keep class com.jarvis.assistant.shopping.ShoppingItem { *; }
 
 # ============================================================
+# 7b. Reporting — GitHub issue payload + client response are serialised
+#     via Gson by field name (no @SerializedName annotations), so R8
+#     must not rename those fields or the JSON wire format breaks.
+# ============================================================
+-keep class com.jarvis.assistant.reporting.github.GitHubIssuePayload { *; }
+-keep class com.jarvis.assistant.reporting.github.PendingReportStore$Persisted { *; }
+-keep class com.jarvis.assistant.reporting.github.GitHubIssueClient$CreateResponse { *; }
+
+# ============================================================
 # 8. CameraX — keep lifecycle and capture classes
 # ============================================================
 -keep class androidx.camera.** { *; }

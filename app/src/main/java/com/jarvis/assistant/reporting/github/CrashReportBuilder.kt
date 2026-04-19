@@ -33,7 +33,7 @@ object CrashReportBuilder {
     /** One-line title; truncated and prefixed with the subsystem tag for easy grep. */
     fun buildTitle(report: IssueReport): String {
         val tag  = "[${report.subsystem}]"
-        val base = report.message.ifBlank { report.category }
+        val base = scrubSecrets(report.message).ifBlank { report.category }
             .lineSequence().firstOrNull()?.trim()
             ?: report.category
         val composed = "$tag $base"
@@ -68,7 +68,7 @@ object CrashReportBuilder {
         val (versionName, versionCode) = appVersion(context)
 
         appendLine("## Summary")
-        appendLine(report.message.ifBlank { "(no message — see stack trace)" })
+        appendLine(scrubSecrets(report.message).ifBlank { "(no message — see stack trace)" })
         appendLine()
 
         appendLine("## Context")
@@ -94,7 +94,7 @@ object CrashReportBuilder {
             report.metadata.entries
                 .filterNot { it.key.lowercase() in SECRET_KEY_HINTS }
                 .forEach { (k, v) ->
-                    appendLine("| $k | ${truncate(v, 200)} |")
+                    appendLine("| $k | ${truncate(scrubSecrets(v), 200)} |")
                 }
             appendLine()
         }
@@ -103,7 +103,7 @@ object CrashReportBuilder {
         if (trace.isNotBlank()) {
             appendLine("## Stack trace")
             appendLine("```")
-            appendLine(trace)
+            appendLine(scrubSecrets(trace))
             appendLine("```")
             appendLine()
         }
@@ -144,4 +144,39 @@ object CrashReportBuilder {
         "token", "api_key", "apikey", "password", "secret", "bearer",
         "authorization", "access_token", "refresh_token", "github_token"
     )
+
+    /**
+     * Defence-in-depth scrubber run over every string that ends up in the
+     * issue body: report message, metadata values, and the stack trace.
+     *
+     * Why a second layer when metadata keys are already filtered?  Because a
+     * subsystem can catch an exception whose message was built from a
+     * formatted network log line like "Failed POST … with Bearer ghp_…".
+     * That message then flows through [IssueReport.throwable] → stack trace
+     * and through [IssueReport.message] — neither is a metadata key, so key-
+     * based scrubbing can't save us.  Pattern-match the most common secret
+     * shapes instead and redact them to `<redacted>`.
+     *
+     * Patterns (ordered — first match wins):
+     *   * `Bearer <token>`                  → `Bearer <redacted>`
+     *   * GitHub personal-access tokens     (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`)
+     *   * OpenAI / generic `sk-` tokens
+     *   * `Authorization: <scheme> <token>` header dumps
+     *   * base64-looking blobs ≥ 32 chars next to key-sounding words
+     *
+     * False positives here are far cheaper than a leaked token.  A legitimate
+     * body that happens to match one of these gets "<redacted>" and a human
+     * can always provide the real value in a follow-up comment.
+     */
+    internal fun scrubSecrets(input: String): String {
+        if (input.isEmpty()) return input
+        var s = input
+        s = s.replace(Regex("""(?i)\bBearer\s+[A-Za-z0-9\-._~+/]{8,}=*"""),       "Bearer <redacted>")
+        s = s.replace(Regex("""\bgh[pousr]_[A-Za-z0-9]{20,}"""),                 "<redacted-gh-token>")
+        s = s.replace(Regex("""\bsk-[A-Za-z0-9\-_]{20,}"""),                     "<redacted-sk-token>")
+        s = s.replace(Regex("""(?i)authorization\s*[:=]\s*[^\s,;]+"""),          "Authorization: <redacted>")
+        s = s.replace(Regex("""(?i)\b((?:api[_-]?key|access[_-]?token|secret)\s*[:=]\s*)[^\s,;]+"""),
+                                                                                  "$1<redacted>")
+        return s
+    }
 }

@@ -50,9 +50,21 @@ class DirectionsCoordinator(
         originLng: Double?,
         mode: TravelMode = TravelMode.DRIVING
     ): RouteSummary {
-        val destName = destinationPlace?.name ?: destinationText
-            ?.takeIf { it.isNotBlank() }
-            ?: error("DirectionsCoordinator.summarise: no destination supplied")
+        // Soft-fail when neither input is usable.  The previous error() throw
+        // would crash the runner if a future tool path forgot to extract the
+        // destination; speak a clear failure instead.  Caller checks for the
+        // sentinel destinationName == "unknown destination" indirectly via the
+        // null URIs / null distance/duration triple.
+        val destName = destinationPlace?.name
+            ?: destinationText?.takeIf { it.isNotBlank() }
+            ?: return RouteSummary(
+                destinationName     = "unknown destination",
+                distanceText        = null,
+                durationText        = null,
+                mode                = mode,
+                mapsIntentUri       = intentHandler.searchUri(""),
+                navigationIntentUri = null
+            )
 
         // Build the universal URIs first so we always have something to hand
         // off — even if the Distance Matrix call fails or no key is set.
@@ -111,7 +123,7 @@ class DirectionsCoordinator(
             append("&destinations=").append(URLEncoder.encode(destination, "UTF-8"))
             append("&mode=").append(mode.mapsValue)
             append("&units=metric")
-            append("&key=").append(key)
+            append("&key=").append(URLEncoder.encode(key, "UTF-8"))
         }
 
         val response = try {

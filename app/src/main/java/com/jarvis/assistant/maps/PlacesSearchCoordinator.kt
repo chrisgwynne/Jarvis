@@ -120,7 +120,7 @@ class PlacesSearchCoordinator(
             if (type != null) append("&type=$type")
             else append("&keyword=").append(java.net.URLEncoder.encode(category, "UTF-8"))
             if (openNow) append("&opennow=true")
-            append("&key=").append(key)
+            append("&key=").append(java.net.URLEncoder.encode(key, "UTF-8"))
         }
 
         val response = safeGet(url) ?: return@withContext null
@@ -152,7 +152,7 @@ class PlacesSearchCoordinator(
                 append("&location=$lat,$lng")
                 append("&radius=$DEFAULT_RADIUS_M")
             }
-            append("&key=").append(key)
+            append("&key=").append(java.net.URLEncoder.encode(key, "UTF-8"))
         }
 
         val response = safeGet(url) ?: return@withContext null

@@ -9,6 +9,7 @@ import com.jarvis.assistant.reminders.LocationReminderManager
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
@@ -33,6 +34,25 @@ class LocationReminderTool(private val context: Context) : Tool {
     override val requiresNetwork = false
     override val requiredPermissions = listOf(
         Manifest.permission.ACCESS_FINE_LOCATION
+    )
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Create, list, or remove geofenced reminders that fire when the user arrives at a named place.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "action" to mapOf(
+                    "type" to "string",
+                    "enum" to listOf("add", "list", "remove"),
+                    "description" to "What to do"
+                ),
+                "place"  to mapOf("type" to "string", "description" to "Place name for add (e.g. \"Tesco\", \"home\")"),
+                "task"   to mapOf("type" to "string", "description" to "What to be reminded to do on arrival"),
+                "query"  to mapOf("type" to "string", "description" to "Substring to match when removing an existing reminder")
+            ),
+            "required" to listOf("action")
+        )
     )
 
     companion object {
@@ -64,7 +84,7 @@ class LocationReminderTool(private val context: Context) : Tool {
     }
 
     override suspend fun execute(input: ToolInput): ToolResult {
-        val t       = input.rawTranscript.trim()
+        val t       = input.transcript.trim()
         val manager = LocationReminderManager(context)
 
         ADD_PATTERN.find(t)?.let { m ->

@@ -6,11 +6,24 @@ import android.provider.AlarmClock
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 class AlarmTool(private val context: Context) : Tool {
 
     override val name = "set_alarm"
     override val description = "Set an alarm at a specified time"
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Set a device alarm clock. Pass a natural-language time like \"7am\" or \"18:30\"; omit for a blank alarm the user will fill in.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "time" to mapOf("type" to "string", "description" to "Time for the alarm, e.g. \"7:30am\" or \"18:00\"")
+            ),
+            "required" to emptyList<String>()
+        )
+    )
 
     private val REGEX = Regex(
         """(?:set|create|add)\s+(?:an?\s+)?alarm(?:\s+(?:for|at)\s+(.+))?""",

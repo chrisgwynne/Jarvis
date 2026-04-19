@@ -8,11 +8,28 @@ import com.jarvis.assistant.runtime.FailurePhrases
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 class FlashlightTool(private val context: Context) : Tool {
 
     override val name = "flashlight"
     override val description = "Turn the flashlight/torch on or off"
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Toggle the device torch/flashlight on or off.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "on" to mapOf(
+                    "type" to "string",
+                    "enum" to listOf("true", "false"),
+                    "description" to "\"true\" to switch the torch on, \"false\" to switch it off"
+                )
+            ),
+            "required" to listOf("on")
+        )
+    )
 
     private val ON_RE  = Regex("""(?:turn|switch|put)\s+on\s+(?:the\s+)?(?:flashlight|torch)|(?:flashlight|torch)\s+on""", RegexOption.IGNORE_CASE)
     private val OFF_RE = Regex("""(?:turn|switch|put)\s+off\s+(?:the\s+)?(?:flashlight|torch)|(?:flashlight|torch)\s+off""", RegexOption.IGNORE_CASE)

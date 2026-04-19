@@ -10,6 +10,7 @@ import com.jarvis.assistant.camera.CaptureResult
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 /**
  * CameraCaptureTool — handles "take a photo" and "take a selfie".
@@ -39,6 +40,22 @@ class CameraCaptureTool(
 
     override val name        = "camera_capture"
     override val description = "Takes a still photo using the device camera and saves it"
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Take a photo with the device camera and save it. Use facing=front for selfies, facing=rear for normal photos.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "facing" to mapOf(
+                    "type" to "string",
+                    "enum" to listOf("front", "rear"),
+                    "description" to "Which camera to use"
+                )
+            ),
+            "required" to listOf("facing")
+        )
+    )
     override val requiredPermissions = buildList {
         add(Manifest.permission.CAMERA)
         // Gallery publishing on Android 8/9 needs WRITE_EXTERNAL_STORAGE.

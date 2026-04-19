@@ -6,6 +6,7 @@ import com.jarvis.assistant.reminders.ReminderRepository
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -41,6 +42,16 @@ class DailyBriefingTool(
     override val name        = "daily_briefing"
     override val description = "Deliver a daily morning briefing including date and upcoming reminders"
     override val requiresNetwork = false
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Deliver a morning briefing: today's date plus the next pending reminder. The LLM synthesises the final spoken output from the returned context.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to emptyMap<String, Any>(),
+            "required" to emptyList<String>()
+        )
+    )
 
     companion object {
         private const val TAG             = "DailyBriefingTool"

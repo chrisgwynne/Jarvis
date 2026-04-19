@@ -6,6 +6,7 @@ import com.jarvis.assistant.memory.db.entity.MemoryType
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 /**
  * MemoryStatsTool — answers "how many memories do you have?" and lists recent ones.
@@ -20,6 +21,16 @@ class MemoryStatsTool(
 
     override val name        = "memory_stats"
     override val description = "Reports how many memories Jarvis has stored and lists them"
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Report how many memories Jarvis has stored and list the most useful recent ones.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to emptyMap<String, Any>(),
+            "required" to emptyList<String>()
+        )
+    )
 
     private val PATTERNS = listOf(
         Regex("""how many memories""",                              RegexOption.IGNORE_CASE),

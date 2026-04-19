@@ -4,6 +4,7 @@ import com.jarvis.assistant.memory.MemoryRetriever
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 /**
  * MemoryRecallTool — answers questions about past conversations.
@@ -20,6 +21,18 @@ class MemoryRecallTool(private val memoryRetriever: MemoryRetriever) : Tool {
 
     override val name        = "memory_recall"
     override val description = "Retrieves past conversation summaries and facts to answer recall questions"
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Search past conversations and stored memories for context relevant to what the user just said. Use when they ask about something previously discussed.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "query" to mapOf("type" to "string", "description" to "What to search memory for; usually the user's question verbatim")
+            ),
+            "required" to emptyList<String>()
+        )
+    )
 
     private val PATTERNS = listOf(
         Regex("what did (i|we) (ask|say|talk(ed)? about|discuss(ed)?)", RegexOption.IGNORE_CASE),

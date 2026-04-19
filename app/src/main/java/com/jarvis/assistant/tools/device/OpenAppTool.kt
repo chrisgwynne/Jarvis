@@ -6,6 +6,7 @@ import android.util.Log
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 /**
  * OpenAppTool — launches an installed app from a spoken name.
@@ -27,6 +28,18 @@ class OpenAppTool(
 
     override val name = "open_app"
     override val description = "Open an installed app by name"
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Launch an installed Android app by its user-facing name (e.g. \"Spotify\", \"Maps\").",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "app" to mapOf("type" to "string", "description" to "App label or common name, e.g. \"Spotify\"")
+            ),
+            "required" to listOf("app")
+        )
+    )
 
     // "play X" is included so "play spotify" works, but we only claim the
     // command if the named app actually resolves — this lets "play some jazz"

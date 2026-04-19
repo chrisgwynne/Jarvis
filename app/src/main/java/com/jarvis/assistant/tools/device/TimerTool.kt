@@ -6,11 +6,24 @@ import android.provider.AlarmClock
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 class TimerTool(private val context: Context) : Tool {
 
     override val name = "set_timer"
     override val description = "Start a countdown timer"
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Start a countdown timer for a given duration (e.g. \"5 minutes\", \"1 hour 30 min\").",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "duration" to mapOf("type" to "string", "description" to "Duration, e.g. \"5 minutes\", \"90 seconds\", \"1h 30m\"")
+            ),
+            "required" to listOf("duration")
+        )
+    )
 
     private val REGEX = Regex(
         """(?:set|start|create)\s+(?:a\s+)?timer\s+(?:for\s+)?(.+)""",

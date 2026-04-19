@@ -18,7 +18,15 @@ sealed class OpenClawError(val spokenMessage: String) {
      */
     class Unreachable(val cause: String = "") : OpenClawError(
         "I couldn't reach your computer. Check the host and that it's on the same network."
-    )
+    ) {
+        init {
+            // Structured log so operators can grep for connectivity failures
+            // without us leaking the raw cause into the user-facing message.
+            if (cause.isNotBlank()) {
+                android.util.Log.w("OpenClawError", "event=unreachable cause=\"$cause\"")
+            }
+        }
+    }
 
     /** Server returned auth_failed or HTTP 401/403. */
     object AuthFailed : OpenClawError(

@@ -186,8 +186,13 @@ class LlmRouter(context: Context) {
         // TTS never speaks chain-of-thought content on reasoning models
         // (MiniMax, DeepSeek, some Kimi builds).
         val stripper = ReasoningTagStripper()
+        var firstTokenMarked = false
 
         provider.streamComplete(messages).collect { token ->
+            if (!firstTokenMarked) {
+                com.jarvis.assistant.util.LatencyTracker.mark("LLM_FIRST_TOKEN")
+                firstTokenMarked = true
+            }
             fullResponse.append(token)
             val safe = stripper.process(token)
             if (safe.isNotEmpty()) {
@@ -200,6 +205,7 @@ class LlmRouter(context: Context) {
                 }
             }
         }
+        com.jarvis.assistant.util.LatencyTracker.mark("LLM_STREAM_END")
 
         // Flush any held-back pending text (partial opener that never became
         // a tag), then any trailing sentence fragment without punctuation.

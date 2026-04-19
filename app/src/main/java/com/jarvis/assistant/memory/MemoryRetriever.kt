@@ -23,12 +23,35 @@ class MemoryRetriever(
 
     companion object {
         private const val TAG = "MemoryRetriever"
+        private const val EMBEDDING_CACHE_SIZE = 8
         private val STOP_WORDS = setOf(
             "the", "a", "an", "is", "was", "did", "what", "how", "when", "where",
             "who", "i", "me", "my", "we", "you", "it", "that", "this", "to", "of",
             "and", "or", "in", "on", "at", "for", "with", "about", "by", "from",
             "do", "does", "can", "could", "would", "should", "have", "had", "been"
         )
+    }
+
+    /**
+     * Tiny LRU of the last N query → embedding pairs.  Follow-up turns repeat
+     * phrasings ("what's next", "and then", "tell me more about that"), so
+     * caching the embedding per normalised-query text saves a TFLite forward
+     * pass that isn't free on lower-end devices.
+     */
+    private val embeddingCache = object : LinkedHashMap<String, FloatArray>(
+        EMBEDDING_CACHE_SIZE, 0.75f, true
+    ) {
+        override fun removeEldestEntry(eldest: Map.Entry<String, FloatArray>): Boolean =
+            size > EMBEDDING_CACHE_SIZE
+    }
+
+    private fun cachedEmbed(query: String): FloatArray? {
+        val engine = embeddingEngine ?: return null
+        val key = query.trim().lowercase()
+        synchronized(embeddingCache) { embeddingCache[key]?.let { return it } }
+        val fresh = engine.embed(query)
+        if (fresh != null) synchronized(embeddingCache) { embeddingCache[key] = fresh }
+        return fresh
     }
 
     /**
@@ -53,7 +76,7 @@ class MemoryRetriever(
         }.toList()
 
         // Optionally embed the query for semantic similarity scoring
-        val queryEmbedding = embeddingEngine?.embed(query)
+        val queryEmbedding = cachedEmbed(query)
 
         val scored = candidates.map { entry ->
             val recency = recencyScore(entry.createdAt)

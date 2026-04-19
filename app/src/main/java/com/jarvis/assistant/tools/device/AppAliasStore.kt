@@ -34,11 +34,16 @@ class AppAliasStore(context: Context) {
      * Persist that [spokenAlias] resolves to [packageName].  Callers should only
      * do this after a successful launch (alias confirmed by actually starting
      * the app) so misheard words don't pollute the store.
+     *
+     * [durable] — when true, uses commit() instead of apply().  Use on the
+     * post-confirmation path where a quick process death (OS restart after
+     * app launch, task kill) could otherwise lose the write.
      */
-    fun put(spokenAlias: String, packageName: String) {
+    fun put(spokenAlias: String, packageName: String, durable: Boolean = false) {
         val key = normalize(spokenAlias)
         if (key.isEmpty() || packageName.isBlank()) return
-        prefs.edit().putString(key, packageName).apply()
+        val editor = prefs.edit().putString(key, packageName)
+        if (durable) editor.commit() else editor.apply()
     }
 
     /** Remove an alias (used when an app is uninstalled or the user corrects it). */

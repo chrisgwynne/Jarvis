@@ -224,10 +224,10 @@ class AppResolver(
      * of how the user phrased the original command (e.g. "up Spotify" is stored
      * as "spotify" so "open up Spotify" resolves instantly next time).
      */
-    fun rememberAlias(spokenName: String, result: Result) {
+    fun rememberAlias(spokenName: String, result: Result, durable: Boolean = false) {
         if (result is Result.Launchable) {
             val normalized = normalizeQuery(spokenName.lowercase())
-            aliasStore.put(normalized, result.packageName)
+            aliasStore.put(normalized, result.packageName, durable = durable)
         }
     }
 

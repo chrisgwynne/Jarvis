@@ -121,9 +121,13 @@ class OpenAppTool(
                     "${pending.label} isn't installed on this phone."
                 )
             context.startActivity(intent)
+            // durable=true: the app launch may push us to the background and
+            // the Android killer could reap Jarvis before an apply() commit
+            // reaches disk.  A confirmed alias is worth the sync write.
             resolver.rememberAlias(
                 pending.spokenName,
-                AppResolver.Result.Launchable(pending.packageName, pending.label)
+                AppResolver.Result.Launchable(pending.packageName, pending.label),
+                durable = true
             )
             ToolResult.Success(spokenFeedback = "Opening ${pending.label}.")
         } catch (e: Exception) {

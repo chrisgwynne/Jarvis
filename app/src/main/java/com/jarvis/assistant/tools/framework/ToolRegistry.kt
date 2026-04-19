@@ -39,8 +39,15 @@ import com.jarvis.assistant.audio.recording.RecordingTranscriber
 import com.jarvis.assistant.camera.CameraCaptureManager
 import com.jarvis.assistant.camera.VisionClient
 import com.jarvis.assistant.tools.device.AnalyzeCameraViewTool
+import com.jarvis.assistant.tools.device.DirectionsTool
+import com.jarvis.assistant.tools.device.NavigateTool
+import com.jarvis.assistant.tools.device.NearestPlaceTool
 import com.jarvis.assistant.tools.device.ReadScreenTool
 import com.jarvis.assistant.tools.device.TapScreenTool
+import com.jarvis.assistant.maps.DirectionsCoordinator
+import com.jarvis.assistant.maps.MapsCommandRouter
+import com.jarvis.assistant.maps.MapsIntentHandler
+import com.jarvis.assistant.maps.PlacesSearchCoordinator
 import com.jarvis.assistant.call.OutgoingCallController
 import com.jarvis.assistant.tools.device.AudioRecordingTool
 import com.jarvis.assistant.tools.device.CameraCaptureTool
@@ -130,6 +137,25 @@ class ToolRegistry private constructor(
                     add(SmartHomeTool(settings))
                     // Weather before web search — structured answer, no search cost
                     locationProvider?.let { add(WeatherTool(it)) }
+
+                    // Maps tools — must precede OpenAppTool so "open directions to X"
+                    // and "show me Tesco on the map" aren't routed to the generic
+                    // app launcher.  All three share one MapsCommandRouter so their
+                    // Places + Distance Matrix calls reuse the same HTTP path.
+                    if (locationProvider != null) {
+                        val mapsIntents      = MapsIntentHandler(context)
+                        val placesCoord      = PlacesSearchCoordinator { settings.googleMapsApiKey }
+                        val directionsCoord  = DirectionsCoordinator({ settings.googleMapsApiKey }, mapsIntents)
+                        val mapsRouter       = MapsCommandRouter(
+                            locationProvider = locationProvider,
+                            places           = placesCoord,
+                            directions       = directionsCoord,
+                            intents          = mapsIntents
+                        )
+                        add(NearestPlaceTool(mapsRouter))
+                        add(DirectionsTool(mapsRouter))
+                        add(NavigateTool(mapsRouter))
+                    }
                     // Memory tools before generic open-app so they aren't misrouted
                     val db = JarvisDatabase.getInstance(context)
                     add(MemoryStatsTool(db.memoryDao(), db.memoryFactDao()))
@@ -180,6 +206,7 @@ class ToolRegistry private constructor(
                 add("start and stop audio recordings")
                 if (canTranscribe) add("transcribe and summarise recordings")
                 add("search the web")
+                add("find nearby places and open directions in Google Maps")
                 add("control media playback and volume")
                 add("open apps")
                 add("read your calendar and notifications")

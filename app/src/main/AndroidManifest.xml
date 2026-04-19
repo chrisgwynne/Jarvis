@@ -26,6 +26,18 @@
         <package android:name="com.whatsapp" />
         <package android:name="com.whatsapp.w4b" />
         <package android:name="com.spotify.music" />
+        <!-- Google Maps — needed so MapsIntentHandler can detect installation
+             and apply setPackage(..) to direct geo:/google.navigation: intents
+             specifically at Maps when present. -->
+        <package android:name="com.google.android.apps.maps" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="geo" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="google.navigation" />
+        </intent>
     </queries>
 
     <!-- ═══════════════════════════════════════════

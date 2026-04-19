@@ -36,6 +36,7 @@ class SettingsStore(context: Context) {
         const val KEY_VOICE_RESPONSE     = "voice_response"
         const val KEY_TTS_VOICE_NAME     = "tts_voice_name"
         const val KEY_BRAVE_SEARCH_KEY       = "brave_search_key"
+        const val KEY_GOOGLE_MAPS_KEY        = "google_maps_key"
         const val KEY_DEFAULT_MSG_CHANNEL    = "default_msg_channel"
 
         // OpenAI OAuth keys
@@ -133,6 +134,20 @@ class SettingsStore(context: Context) {
     var braveSearchApiKey: String
         get() = prefs.getString(KEY_BRAVE_SEARCH_KEY, "") ?: ""
         set(v) = prefs.edit().putString(KEY_BRAVE_SEARCH_KEY, v).apply()
+
+    /**
+     * Google Maps Platform API key — enables Places Nearby/Text Search and
+     * Distance Matrix routing inside the maps tools.  When blank, the maps
+     * tools still work as a thin handoff layer (open Google Maps for the
+     * destination) but skip the spoken summary that a key would unlock.
+     *
+     * Key needs Places API + Distance Matrix API enabled in the Google
+     * Cloud console.  Restrict by Android package + SHA-1 fingerprint in
+     * production.
+     */
+    var googleMapsApiKey: String
+        get() = prefs.getString(KEY_GOOGLE_MAPS_KEY, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_GOOGLE_MAPS_KEY, v).apply()
 
     /** Name of the TTS voice to use. Defaults to the local Piper ONNX voice. */
     var ttsVoiceName: String

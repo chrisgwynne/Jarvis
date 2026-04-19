@@ -1013,12 +1013,18 @@ class JarvisRuntime(
                     // system's recognition service has fully stabilized its 
                     // own AudioRecord before we open ours.
                     val listenStart = System.currentTimeMillis()
-                    val transcript  = speechCapture.listen(onReady = {
-                        scope.launch {
-                            delay(100)
-                            activeCapture?.start()
-                        }
-                    })
+                    // When offline, force the on-device recognizer (API 31+) so STT
+                    // keeps working without network. On older APIs this flag is a
+                    // no-op — the default intent already sets EXTRA_PREFER_OFFLINE.
+                    val transcript  = speechCapture.listen(
+                        onReady = {
+                            scope.launch {
+                                delay(100)
+                                activeCapture?.start()
+                            }
+                        },
+                        forceOffline = !contextEngine.isOnline()
+                    )
                     // Stop capture immediately — PCM is for this utterance only.
                     val utterancePcm = activeCapture?.stop()
                     val elapsed     = System.currentTimeMillis() - listenStart

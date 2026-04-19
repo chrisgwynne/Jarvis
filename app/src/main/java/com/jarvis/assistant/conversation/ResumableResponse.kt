@@ -24,6 +24,15 @@ data class ResumableResponse(
     val interruptedAt  : Long = System.currentTimeMillis(),
     val resumable      : Boolean = true
 ) {
+    /**
+     * Precomputed topic tokens from [spokenSoFar] — immutable for the life of
+     * this response, so tokenise once and share across every classify() call
+     * that hits this interrupt.
+     */
+    val spokenTokens: Set<String> by lazy {
+        InterruptionClassifier.tokensFor(spokenSoFar)
+    }
+
     /** True if this interrupt is older than [maxAgeMs] and should be forgotten. */
     fun isStale(maxAgeMs: Long = 30_000L): Boolean =
         System.currentTimeMillis() - interruptedAt > maxAgeMs

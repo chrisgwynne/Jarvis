@@ -1012,8 +1012,8 @@ class JarvisRuntime(
                         // Don't consume yet — CLARIFICATION keeps it alive for a follow-up
                         // "go on" from the user.  Only clear once we know what to do with it.
                         val interruption = InterruptionClassifier.classify(
-                            utterance   = transcript,
-                            spokenSoFar = resumable.spokenSoFar
+                            utterance    = transcript,
+                            spokenTokens = resumable.spokenTokens
                         )
                         Log.d(TAG, "Interrupt classified as $interruption " +
                                     "(spoken='${resumable.spokenSoFar.take(40)}')")

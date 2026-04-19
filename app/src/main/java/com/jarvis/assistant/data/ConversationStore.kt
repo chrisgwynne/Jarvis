@@ -1,12 +1,8 @@
 package com.jarvis.assistant.data
 
 import android.content.Context
-import android.os.BatteryManager
-import android.os.Build
 import com.jarvis.assistant.llm.Message
-import java.time.LocalDate
-import java.time.LocalTime
-import java.time.format.DateTimeFormatter
+import com.jarvis.assistant.prompt.DefaultSystemPrompt
 
 /**
  * ConversationStore — in-memory conversation history with automatic system prompt injection.
@@ -23,30 +19,8 @@ class ConversationStore(private val context: Context) : CompressibleStore {
         // pairs are repeatedly compressed and appended across a long session.
         private const val ROLLING_CONTEXT_MAX_CHARS = 4_000
 
-        private val DATE_FORMAT = DateTimeFormatter.ofPattern("EEEE, MMMM d yyyy")
-        private val TIME_FORMAT = DateTimeFormatter.ofPattern("h:mm a")
-
-        fun buildSystemPrompt(context: Context): String {
-            val today   = LocalDate.now().format(DATE_FORMAT)
-            val time    = LocalTime.now().format(TIME_FORMAT)
-            val bm      = context.getSystemService(BatteryManager::class.java)
-            val battery = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
-            val battStr = if (battery >= 0) "$battery%" else "unknown"
-            val device  = Build.MODEL
-
-            return "You are Jarvis. Talk like a person in the conversation, not a generic assistant. " +
-                   "Today is $today. The current time is $time. " +
-                   "Battery level: $battStr. Device: $device. " +
-                   "Default reply: 1 short sentence. Less output is more natural. " +
-                   "Small talk gets brief reactions — 'Long day' → 'Yeah, sounds it.', 'Nice' → 'Yeah.', 'Ok' → no extra. " +
-                   "Only expand if the user asks for detail or the task requires it. Never add suggestions or follow-ups by default. " +
-                   "Never use phrases like 'I can help with that', 'Here's what I found', " +
-                   "'Would you like me to…', or 'Let me know if you need anything else'. " +
-                   "Do not narrate actions. Do not over-explain. Do not echo the question back. " +
-                   "Confirm actions in the fewest words possible — 'Opening Spotify.', 'Timer set.', 'Done.'. " +
-                   "No markdown. Casual, direct, confident — not over-friendly, not robotic. " +
-                   "State time and date confidently. Never mention knowledge cutoffs or real-time access."
-        }
+        /** Delegates to [DefaultSystemPrompt.build] — retained for backwards compat. */
+        fun buildSystemPrompt(context: Context): String = DefaultSystemPrompt.build(context)
     }
 
     private val history = ArrayDeque<Message>()

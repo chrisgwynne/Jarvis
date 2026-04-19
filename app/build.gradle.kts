@@ -82,11 +82,12 @@ dependencies {
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
 
-    // Networking (for LLM API calls)
+    // Networking (for LLM API calls).  OkHttp + Gson only — Retrofit and the
+    // OkHttp logging interceptor were declared historically but never wired in
+    // (NetworkClient builds requests against OkHttp directly).  Dropping them
+    // shrinks the release APK by ~1.2 MB and avoids logging-interceptor
+    // accidentally leaking bodies into logcat.
     implementation(libs.okhttp)
-    implementation(libs.okhttp.logging)
-    implementation(libs.retrofit)
-    implementation(libs.retrofit.gson)
     implementation(libs.gson)
 
     // Runtime permission handling in Compose

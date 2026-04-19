@@ -8,10 +8,8 @@
 -keep class com.jarvis.assistant.service.** { *; }
 -keep class com.jarvis.assistant.llm.** { *; }
 
-# Retrofit / OkHttp (pre-existing)
+# OkHttp — Retrofit is no longer a dependency; keep-rule removed.
 -dontwarn okhttp3.**
--dontwarn retrofit2.**
--keep class retrofit2.** { *; }
 
 # ============================================================
 # 1. Room — keep @Entity, @Dao, @Database annotated classes

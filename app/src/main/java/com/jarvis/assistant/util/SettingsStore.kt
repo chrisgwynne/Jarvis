@@ -75,6 +75,16 @@ class SettingsStore(context: Context) {
         /** When false, BootReceiver skips auto-starting JarvisService on boot. */
         const val KEY_AUTO_START_ON_BOOT      = "auto_start_on_boot"
 
+        // ── App lock (Phase 4b) ───────────────────────────────────────────────
+        const val KEY_APP_LOCK_ENABLED    = "app_lock_enabled"
+        const val KEY_APP_LOCK_BIOMETRIC  = "app_lock_biometric_enabled"
+        const val KEY_APP_LOCK_PIN_HASH   = "app_lock_pin_hash"
+        const val KEY_APP_LOCK_PIN_SALT   = "app_lock_pin_salt"
+        /** Timestamp (ms) of the last successful unlock; session expires after [APP_LOCK_SESSION_MS]. */
+        const val KEY_APP_LOCK_LAST_UNLOCK = "app_lock_last_unlock_ms"
+        /** Window during which a successful unlock suppresses further prompts. */
+        const val APP_LOCK_SESSION_MS     = 5L * 60_000L   // 5 minutes
+
         // OpenClaw remote routing keys
         const val KEY_OPENCLAW_ENABLED    = "openclaw_enabled"
         const val KEY_OPENCLAW_HOST       = "openclaw_host"
@@ -320,6 +330,41 @@ class SettingsStore(context: Context) {
     var autoStartOnBoot: Boolean
         get() = prefs.getBoolean(KEY_AUTO_START_ON_BOOT, true)
         set(v) = prefs.edit().putBoolean(KEY_AUTO_START_ON_BOOT, v).apply()
+
+    // ── App lock (Phase 4b) ──────────────────────────────────────────────────
+
+    var appLockEnabled: Boolean
+        get() = prefs.getBoolean(KEY_APP_LOCK_ENABLED, false)
+        set(v) = prefs.edit().putBoolean(KEY_APP_LOCK_ENABLED, v).apply()
+
+    var appLockBiometricEnabled: Boolean
+        get() = prefs.getBoolean(KEY_APP_LOCK_BIOMETRIC, false)
+        set(v) = prefs.edit().putBoolean(KEY_APP_LOCK_BIOMETRIC, v).apply()
+
+    /** PBKDF2-HmacSHA256 PIN hash, Base64-encoded. Empty until the user sets a PIN. */
+    var appLockPinHash: String
+        get() = prefs.getString(KEY_APP_LOCK_PIN_HASH, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_APP_LOCK_PIN_HASH, v).apply()
+
+    /** Base64-encoded random salt paired with [appLockPinHash]. */
+    var appLockPinSalt: String
+        get() = prefs.getString(KEY_APP_LOCK_PIN_SALT, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_APP_LOCK_PIN_SALT, v).apply()
+
+    var appLockLastUnlockMs: Long
+        get() = prefs.getLong(KEY_APP_LOCK_LAST_UNLOCK, 0L)
+        set(v) = prefs.edit().putLong(KEY_APP_LOCK_LAST_UNLOCK, v).apply()
+
+    /** Forget PIN + biometric opt-in — called by AppLockManager.disableLock(). */
+    fun clearAppLock() {
+        prefs.edit()
+            .remove(KEY_APP_LOCK_ENABLED)
+            .remove(KEY_APP_LOCK_BIOMETRIC)
+            .remove(KEY_APP_LOCK_PIN_HASH)
+            .remove(KEY_APP_LOCK_PIN_SALT)
+            .remove(KEY_APP_LOCK_LAST_UNLOCK)
+            .apply()
+    }
 
     fun clearOpenAiOAuth() {
         prefs.edit()

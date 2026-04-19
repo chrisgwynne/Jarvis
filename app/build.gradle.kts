@@ -79,6 +79,9 @@ dependencies {
     // Encrypted storage
     implementation(libs.security.crypto)
 
+    // Biometric + device-credential prompt for the app-level lock (Phase 4b)
+    implementation(libs.androidx.biometric)
+
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
 

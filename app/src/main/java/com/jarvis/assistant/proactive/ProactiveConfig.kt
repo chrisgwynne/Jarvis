@@ -83,5 +83,22 @@ data class ProactiveConfig(
     val quietHoursStartHour: Int?         = null,
     val quietHoursEndHour: Int?           = null,
     val ignoreEscalationFactor: Float     = 1.0f,
-    val ignoreCheckDelayMs: Long          = 90_000L
+    val ignoreCheckDelayMs: Long          = 90_000L,
+    /** Look-ahead window for upcoming calendar meetings (ms). */
+    val meetingWindowMs: Long             = 15 * 60 * 1000L,
+    /** Window for imminent meeting scoring — bypasses quiet/presence gates (ms). */
+    val meetingUrgentMs: Long             = 2 * 60 * 1000L,
+    val cooldownUpcomingMeetingMs: Long   = 5 * 60 * 1000L,
+    val cooldownMeetingStartingSoonMs: Long = 90_000L,
+    val cooldownDailyAgendaMs: Long       = 12 * 60 * 60 * 1000L,
+    /** Hour of day (0–23) in which the daily agenda may fire, once per day. */
+    val agendaHourStart: Int              = 8,
+    /** Cooldown between consecutive location transition surfacings (ms). */
+    val cooldownLocationTransitionMs: Long = 2 * 60 * 60 * 1000L,
+    /**
+     * Minimum ms the user must have been away from HOME for an ARRIVED_HOME
+     * event to fire — stops every quick-walk-to-the-bin from triggering
+     * "Welcome back.".
+     */
+    val arrivedHomeMinAwayMs: Long        = 2 * 60 * 60 * 1000L
 )

@@ -60,5 +60,18 @@ data class ContextSnapshot(
      * the user can't safely read.  Defaults to false so existing callers and
      * tests keep working without changes.
      */
-    val isDriving: Boolean = false
+    val isDriving: Boolean = false,
+    /** Epoch ms of the next calendar meeting, or null if none in look-ahead. */
+    val nextMeetingAtMillis: Long? = null,
+    /** Sanitised title of the next meeting, or null. */
+    val nextMeetingTitle: String? = null,
+    /** Epoch ms when the next meeting ends (may be null even when start is set). */
+    val nextMeetingEndMillis: Long? = null,
+    /** Count of meetings on today's calendar (all-day and timed, after now). */
+    val meetingsTodayCount: Int = 0,
+    /**
+     * Most recent unacknowledged location transition detected by
+     * [com.jarvis.assistant.location.PlaceLearner], or null.
+     */
+    val lastLocationTransition: com.jarvis.assistant.location.LocationTransition? = null
 )

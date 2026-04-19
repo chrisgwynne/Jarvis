@@ -125,6 +125,38 @@ data class BrainPrediction(
 )
 
 /**
+ * CalendarMeeting — a minimal upcoming-meeting record returned by [CalendarContextSource].
+ *
+ * Title is expected to be sanitised by the source (no Zoom URLs, phone numbers, etc.)
+ * before being returned; it may still be null if the source chose to redact it.
+ */
+data class CalendarMeeting(
+    val startMs: Long,
+    val endMs: Long,
+    val title: String?,
+    val isAllDay: Boolean
+)
+
+/**
+ * CalendarContextSource — provides upcoming calendar data to the proactive engine.
+ *
+ * Implementations should cache short-term (~60s) to avoid hammering the
+ * CalendarContract content provider on every polling tick, and must return
+ * an empty list silently when READ_CALENDAR is not granted.
+ */
+interface CalendarContextSource {
+    /**
+     * Returns timed meetings starting within the next [lookAheadMs], ordered
+     * by start time.  Returns an empty list when permission is denied or the
+     * calendar provider is unavailable.
+     */
+    suspend fun getUpcomingMeetings(lookAheadMs: Long): List<CalendarMeeting>
+
+    /** Count of meetings remaining today (after now), including all-day events. */
+    suspend fun getMeetingsRemainingToday(): Int
+}
+
+/**
  * NotificationContextSource — provides recent unread notification data to
  * the proactive engine so Jarvis can proactively announce important alerts.
  */
@@ -139,6 +171,19 @@ interface NotificationContextSource {
     fun getLastNotificationApp(): String?
 
     /** Called by the engine after surfacing a notification event — resets unread count. */
+    fun acknowledge()
+}
+
+/**
+ * LocationContextSource — provides learned-place transition events to the
+ * proactive engine.  A "pending" transition is one detected since the last
+ * [acknowledge] call; the engine consumes and acks at dispatch time.
+ */
+interface LocationContextSource {
+    /** The most recent unacknowledged transition, or null. */
+    suspend fun getPendingTransition(): com.jarvis.assistant.location.LocationTransition?
+
+    /** Clear the pending-transition slot after the engine has surfaced it. */
     fun acknowledge()
 }
 

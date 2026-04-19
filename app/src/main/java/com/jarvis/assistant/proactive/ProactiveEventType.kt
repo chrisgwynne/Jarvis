@@ -25,7 +25,25 @@ enum class ProactiveEventType {
     BEHAVIORAL_LEARNING,
 
     /** One or more important notifications arrived while Jarvis was idle. */
-    UNREAD_NOTIFICATION;
+    UNREAD_NOTIFICATION,
+
+    /** A calendar meeting is coming up within the look-ahead window. */
+    UPCOMING_MEETING,
+
+    /** A calendar meeting is starting imminently (≤ meetingUrgentMs). */
+    MEETING_STARTING_SOON,
+
+    /** Morning-window one-shot summary of today's calendar. */
+    DAILY_AGENDA,
+
+    /** User arrived at their learned HOME place. */
+    ARRIVED_HOME,
+
+    /** User left their learned HOME place. */
+    LEFT_HOME,
+
+    /** User arrived at a recurring known (but non-home) place. */
+    ARRIVED_KNOWN_PLACE;
 
     /**
      * Stable, lowercase key used to namespace this type inside [CooldownStore].

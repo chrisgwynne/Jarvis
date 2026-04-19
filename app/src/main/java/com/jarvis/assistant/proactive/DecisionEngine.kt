@@ -92,13 +92,20 @@ class DecisionEngine(
         }
 
         // Step 3b — quiet hours: suppress everything except critical events.
-        // Critical = low battery or a reminder due inside reminderUrgentMs.
+        // Critical = low battery, an imminent reminder, or an imminent meeting.
         val top = valid.first()
-        val critical = top.event.type == ProactiveEventType.LOW_BATTERY || run {
-            if (top.event.type != ProactiveEventType.UPCOMING_REMINDER) return@run false
-            val next = snapshot.nextReminderAtMillis
-            next != null && (next - snapshot.currentTimeMillis) <= config.reminderUrgentMs
-        }
+        val critical = top.event.type == ProactiveEventType.LOW_BATTERY ||
+            top.event.type == ProactiveEventType.MEETING_STARTING_SOON ||
+            run {
+                if (top.event.type != ProactiveEventType.UPCOMING_REMINDER) return@run false
+                val next = snapshot.nextReminderAtMillis
+                next != null && (next - snapshot.currentTimeMillis) <= config.reminderUrgentMs
+            } ||
+            run {
+                if (top.event.type != ProactiveEventType.UPCOMING_MEETING) return@run false
+                val next = snapshot.nextMeetingAtMillis
+                next != null && (next - snapshot.currentTimeMillis) <= config.meetingUrgentMs
+            }
 
         if (isInQuietHours(snapshot.currentTimeMillis) && !critical) {
             Log.d(

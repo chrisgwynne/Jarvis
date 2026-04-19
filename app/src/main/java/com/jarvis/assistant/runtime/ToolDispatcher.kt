@@ -9,6 +9,7 @@ import com.jarvis.assistant.security.ActionPolicyGate
 import com.jarvis.assistant.security.PolicyResult
 import com.jarvis.assistant.speaker.SpeakerPermissionPolicy
 import com.jarvis.assistant.speaker.SpeakerSessionContext
+import com.jarvis.assistant.runtime.reference.LastActionStore
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolRegistry
 import com.jarvis.assistant.tools.framework.ToolResult
@@ -26,7 +27,8 @@ import com.jarvis.assistant.util.ResponseFormatter
 class ToolDispatcher(
     private val context: Context,
     private val toolRegistry: ToolRegistry,
-    private val machine: JarvisStateMachine
+    private val machine: JarvisStateMachine,
+    private val lastActionStore: LastActionStore? = null
 ) {
 
     companion object {
@@ -53,6 +55,12 @@ class ToolDispatcher(
 
     /** Carries tool name + input so JarvisRuntime can log brain events. */
     data class BrainHints(val toolName: String, val input: ToolInput)
+
+    private fun argsToJson(params: Map<String, String>): String = try {
+        com.jarvis.assistant.llm.NetworkClient.gson.toJson(params)
+    } catch (_: Exception) {
+        ""
+    }
 
     /**
      * Run the full dispatch pipeline for [tool] / [input] given [sessionSpeaker].
@@ -95,6 +103,24 @@ class ToolDispatcher(
         DeviceStateStore.update { copy(currentToolName = null) }
 
         Log.d(TAG, "Tool '${tool.name}' result: ${result::class.simpleName}")
+
+        // Record referential entry so the user can say "undo that" / "do the
+        // same for X".  Only record on Success — failures don't represent a
+        // reversible side-effect worth remembering.  Referential tools
+        // (undo/repeat) are excluded to avoid self-referential loops.
+        if (result is ToolResult.Success &&
+            tool.name != "undo_last_action" &&
+            tool.name != "repeat_last_action"
+        ) {
+            lastActionStore?.recordToolCall(
+                toolName              = tool.name,
+                argsJson              = argsToJson(input.params),
+                originatingTranscript = transcript,
+                shortLabel            = tool.name.replace('_', ' '),
+                reversible            = tool.isReversible,
+                rawData               = result.rawData
+            )
+        }
 
         return when (result) {
             is ToolResult.Success -> when {

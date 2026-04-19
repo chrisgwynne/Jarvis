@@ -27,6 +27,7 @@ data class LocationResult(
     val locality      : String?,
     val street        : String? = null,
     val postcode      : String? = null,
+    val country       : String? = null,
     val isFresh       : Boolean,
     val isApproximate : Boolean,
 )

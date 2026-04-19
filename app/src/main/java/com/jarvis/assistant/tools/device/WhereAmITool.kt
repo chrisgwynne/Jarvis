@@ -43,7 +43,12 @@ class WhereAmITool(
     override val description = "Report the device's current GPS location as a spoken place name"
     override val requiresNetwork = false      // geocoder is on-device when available
     override val isLocalFallback  = true      // always available — the user is asking for raw sensor state
-    override val requiredPermissions = listOf(Manifest.permission.ACCESS_COARSE_LOCATION)
+    // FINE (not COARSE) because the spec requires GPS-grade accuracy.  The
+    // fused client silently degrades PRIORITY_HIGH_ACCURACY to balanced when
+    // only COARSE is granted, which would let this tool answer with a
+    // network-cell fix and pretend it's GPS.  Fail cleanly at the registry
+    // permission gate instead.
+    override val requiredPermissions = listOf(Manifest.permission.ACCESS_FINE_LOCATION)
 
     companion object {
         private const val TAG = "WhereAmITool"
@@ -80,7 +85,7 @@ class WhereAmITool(
               | what\s+country\s+am\s+i\s+in
               | tell\s+me\s+(?:my\s+(?:location|current\s+location)|where\s+i\s+am)
             )
-            \s*\.?\s*\??\s*$
+            [\s.?!]*$
             """
         )
     }
@@ -207,11 +212,16 @@ class WhereAmITool(
                 else          -> null
             }
             Granularity.COUNTRY_ONLY -> {
-                // countryName isn't stored on LocationResult; fall back to the
-                // tail of displayLabel which the geocoder builds in
-                // increasing-generality order.
-                val country = label?.split(',')?.lastOrNull()?.trim()?.takeIf { it.isNotBlank() }
-                country?.let { "You're in $it." } ?: label?.let { "You're near $it." }
+                // Prefer the structured country field from the geocoder so a
+                // single-segment displayLabel (e.g. just "Llandudno") can't
+                // be silently misreported as a country.
+                val country = fix.country?.takeIf { it.isNotBlank() }
+                when {
+                    country != null -> "You're in $country."
+                    town    != null -> "I can't pin the country down, but you're in $town."
+                    label   != null -> "You're near $label."
+                    else            -> null
+                }
             }
             Granularity.FULL -> when {
                 street != null && town != null && postcode != null ->

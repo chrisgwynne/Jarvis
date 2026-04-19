@@ -90,6 +90,7 @@ class CurrentLocationProvider(private val context: Context) {
                 locality       = geo.locality,
                 street         = geo.street,
                 postcode       = geo.postcode,
+                country        = geo.country,
                 isFresh        = isFresh,
                 isApproximate  = isApprox,
             )
@@ -142,12 +143,13 @@ class CurrentLocationProvider(private val context: Context) {
         val label: String?,
         val locality: String?,
         val street: String?,
-        val postcode: String?
+        val postcode: String?,
+        val country: String?
     )
 
     private fun reverseGeocode(lat: Double, lon: Double): GeocodeParts {
         return try {
-            if (!Geocoder.isPresent()) return GeocodeParts(null, null, null, null)
+            if (!Geocoder.isPresent()) return GeocodeParts(null, null, null, null, null)
             val geocoder = Geocoder(context, Locale.getDefault())
 
             val addresses = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
@@ -165,7 +167,7 @@ class CurrentLocationProvider(private val context: Context) {
                 geocoder.getFromLocation(lat, lon, 1)
             }
 
-            val addr = addresses?.firstOrNull() ?: return GeocodeParts(null, null, null, null)
+            val addr = addresses?.firstOrNull() ?: return GeocodeParts(null, null, null, null, null)
 
             // Build label from most-specific to least-specific, deduplicating adjacent values.
             // subAdminArea (county/district) fills the gap when locality (city) is missing —
@@ -196,11 +198,12 @@ class CurrentLocationProvider(private val context: Context) {
                 // Street — thoroughfare without the house number.  The live-location
                 // intent wants "You're on High Street", not "You're on 14 High Street".
                 street   = addr.thoroughfare,
-                postcode = addr.postalCode
+                postcode = addr.postalCode,
+                country  = addr.countryName
             )
         } catch (e: Exception) {
             Log.w(TAG, "Geocoding failed: ${e.message}")
-            GeocodeParts(null, null, null, null)
+            GeocodeParts(null, null, null, null, null)
         }
     }
 

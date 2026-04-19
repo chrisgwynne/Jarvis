@@ -155,6 +155,7 @@ class ProactiveEngine(
         resolvePendingVerdict(snapshot)
 
         val events    = eventGenerator.generate(snapshot)
+        ProactiveMetrics.increment(ProactiveMetrics.Counter.EVENTS_GENERATED, events.size.toLong())
 
         if (events.isEmpty()) {
             Log.v(TAG, "tick: no events generated")
@@ -165,6 +166,7 @@ class ProactiveEngine(
         val action    = decisionEngine.decide(scored, snapshot)
 
         if (action !is ProactiveAction.NoAction) {
+            ProactiveMetrics.increment(ProactiveMetrics.Counter.ACTIONS_DISPATCHED)
             dispatch(action)
         }
     }
@@ -180,6 +182,7 @@ class ProactiveEngine(
         if (lastUser != null && lastUser > verdict.dispatchedAt) {
             cooldownStore.markAccepted(verdict.dedupeKey)
             Log.d(TAG, "Accepted verdict for ${verdict.dedupeKey}")
+            ProactiveMetrics.increment(ProactiveMetrics.Counter.VERDICT_ACCEPTED)
             pendingVerdict = null
             return@withLock
         }
@@ -191,6 +194,7 @@ class ProactiveEngine(
                 "Ignored verdict for ${verdict.dedupeKey} " +
                 "(count=${cooldownStore.ignoreCount(verdict.dedupeKey)})"
             )
+            ProactiveMetrics.increment(ProactiveMetrics.Counter.VERDICT_IGNORED)
             pendingVerdict = null
         }
     }
@@ -257,6 +261,7 @@ class ProactiveEngine(
                 if (prior.dedupeKey != key) {
                     cooldownStore.markIgnored(prior.dedupeKey)
                     Log.d(TAG, "Displaced verdict ignored: ${prior.dedupeKey}")
+                    ProactiveMetrics.increment(ProactiveMetrics.Counter.VERDICT_DISPLACED)
                 }
             }
             cooldownStore.markSurfaced(key)

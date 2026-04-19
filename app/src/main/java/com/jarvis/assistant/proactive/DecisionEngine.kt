@@ -76,6 +76,7 @@ class DecisionEngine(
         // Step 2 — empty guard
         if (valid.isEmpty()) {
             Log.d(TAG, "No actionable candidates this tick")
+            ProactiveMetrics.increment(ProactiveMetrics.Counter.SUPPRESSED_EMPTY)
             return ProactiveAction.NoAction
         }
 
@@ -86,6 +87,7 @@ class DecisionEngine(
                 TAG,
                 "Global gap not satisfied: ${msSinceGlobal}ms < ${config.minGlobalGapMs}ms — suppressing"
             )
+            ProactiveMetrics.increment(ProactiveMetrics.Counter.SUPPRESSED_GLOBAL_GAP)
             return ProactiveAction.NoAction
         }
 
@@ -103,6 +105,7 @@ class DecisionEngine(
                 TAG,
                 "Quiet hours — suppressing ${top.event.type} / ${top.event.dedupeKey}"
             )
+            ProactiveMetrics.increment(ProactiveMetrics.Counter.SUPPRESSED_QUIET_HOURS)
             return ProactiveAction.NoAction
         }
 
@@ -123,6 +126,7 @@ class DecisionEngine(
                     "Presence ${presence.activity}/${presence.timePhase} — " +
                     "deferring soft ${top.event.type}"
                 )
+                ProactiveMetrics.increment(ProactiveMetrics.Counter.SUPPRESSED_PRESENCE)
                 return ProactiveAction.NoAction
             }
         }

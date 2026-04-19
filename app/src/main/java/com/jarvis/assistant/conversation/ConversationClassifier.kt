@@ -50,6 +50,7 @@ object ConversationClassifier {
         "take a photo", "take a picture", "take a selfie", "take a screenshot",
         "play ", "pause ", "stop ", "skip ", "next track", "previous track",
         "read my notifications", "read notifications",
+        "clear ", "dismiss ", "wipe ",
         "start recording", "stop recording",
         "end call", "hang up", "answer the call"
     )

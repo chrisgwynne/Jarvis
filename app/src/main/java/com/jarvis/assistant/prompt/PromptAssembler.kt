@@ -2,6 +2,7 @@ package com.jarvis.assistant.prompt
 
 import com.jarvis.assistant.context.ContextEngine
 import com.jarvis.assistant.context.Presence
+import com.jarvis.assistant.core.safety.Sanitizer
 import com.jarvis.assistant.knowledge.KnowledgeQueryEngine
 import com.jarvis.assistant.llm.Message
 import com.jarvis.assistant.memory.MemoryRetriever
@@ -35,7 +36,8 @@ class PromptAssembler(
     private val contextEngine: ContextEngine,
     private val memoryRetriever: MemoryRetriever,
     private val profileMemory: ProfileMemoryService? = null,
-    private val knowledgeEngine: KnowledgeQueryEngine? = null
+    private val knowledgeEngine: KnowledgeQueryEngine? = null,
+    private val sanitizer: Sanitizer? = null
 ) {
     // Profile facts change rarely — cache for 30 s to avoid a DB round-trip
     // on every LLM call. Invalidated automatically by TTL.
@@ -76,7 +78,7 @@ class PromptAssembler(
             profileFragment   = profileFrag,
             memories          = memories,
             speakerContext    = speakerContext,
-            knowledgeFragment = knowledgeFrag
+            knowledgeFragment = sanitizer?.redactString(knowledgeFrag) ?: knowledgeFrag
         )
 
         return buildList {
@@ -243,7 +245,10 @@ State time and date confidently. Never disclaim real-time access or knowledge cu
         // Hidden episodic memory injection
         if (memories.isNotEmpty()) {
             append("\n\n[Personal context — let this shape your response silently. Never cite these facts explicitly, never repeat them back, never say \"I know that\" or \"I remember that\". Use them the way a person uses background knowledge — invisibly.]\n")
-            memories.forEach { append("• ${it.content}\n") }
+            memories.forEach { entry ->
+                val content = sanitizer?.redactString(entry.content) ?: entry.content
+                append("• ").append(content).append('\n')
+            }
         }
     }
 

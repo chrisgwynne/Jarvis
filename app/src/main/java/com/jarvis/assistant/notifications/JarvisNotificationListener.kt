@@ -9,6 +9,9 @@ import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import com.jarvis.assistant.core.events.Event
+import com.jarvis.assistant.core.events.EventBus
+import com.jarvis.assistant.core.events.EventKind
 import java.util.LinkedList
 
 /**
@@ -347,11 +350,31 @@ class JarvisNotificationListener : NotificationListenerService() {
 
         addEntry(entry)
         Log.v(TAG, "Buffered notification from ${sbn.packageName}: $title")
+
+        EventBus.publish(
+            kind = EventKind.NOTIFICATION_POSTED,
+            source = "JarvisNotificationListener",
+            payload = buildMap {
+                put("app_package", sbn.packageName)
+                if (!title.isNullOrEmpty()) put("title", title)
+                if (!text.isNullOrEmpty()) put("text", text)
+                put("is_call", isCallNotif.toString())
+            },
+            sensitivity = Event.Sensitivity.PERSONAL,
+            dedupeKey = sbn.key,
+        )
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
         removeEntry(sbn.key)
         Log.v(TAG, "Removed notification from buffer: key=${sbn.key}")
+        EventBus.publish(
+            kind = EventKind.NOTIFICATION_REMOVED,
+            source = "JarvisNotificationListener",
+            payload = mapOf("app_package" to sbn.packageName),
+            sensitivity = Event.Sensitivity.PUBLIC,
+            dedupeKey = sbn.key,
+        )
     }
 }
 

@@ -18,6 +18,11 @@ import com.jarvis.assistant.call.integration.TelecomCallActionExecutor
 import com.jarvis.assistant.call.integration.TelephonyCallMonitor
 import com.jarvis.assistant.context.ContextEngine
 import com.jarvis.assistant.context.Presence
+import com.jarvis.assistant.core.events.EventAdapters
+import com.jarvis.assistant.core.events.adapters.BatteryEventAdapter
+import com.jarvis.assistant.core.events.adapters.DrivingModeEventAdapter
+import com.jarvis.assistant.core.events.adapters.TelephonyEventAdapter
+import com.jarvis.assistant.core.safety.Sanitizer
 import com.jarvis.assistant.location.CurrentLocationProvider
 import com.jarvis.assistant.core.state.JarvisState
 import com.jarvis.assistant.core.state.JarvisStateMachine
@@ -278,6 +283,10 @@ class JarvisRuntime(
     private val callExecutor    = TelecomCallActionExecutor(context)
     private lateinit var callCoordinator : CallCoordinator
 
+    // Core event bus adapters — publish sensed signals to EventBus.
+    // Owned here so lifecycle matches the runtime; detached in shutdown().
+    private val eventAdapters = EventAdapters()
+
     // Pipeline state
     private var pipelineJob: Job? = null
     private var callEventJob: Job? = null
@@ -339,7 +348,10 @@ class JarvisRuntime(
         knowledgeCompiler     = KnowledgeCompiler(knowledgeRepo, knowledgeResolver, llmRouter::completeSilent)
         knowledgeQuery        = KnowledgeQueryEngine(knowledgeRepo)
         retentionPolicy       = RetentionPolicy(knowledgeRepo)
-        promptAssembler = PromptAssembler(contextEngine, memoryReader, profileMemory, knowledgeQuery)
+        promptAssembler = PromptAssembler(
+            contextEngine, memoryReader, profileMemory, knowledgeQuery,
+            sanitizer = Sanitizer()
+        )
 
         // Phase 7 — Orchestration
         reminderRepo = ReminderRepository(db.scheduledItemDao(), ReminderScheduler(context))
@@ -496,6 +508,15 @@ class JarvisRuntime(
         }
 
         callMonitor.start()           // Phase 6: register telephony listener
+
+        // Event bus adapters — must attach AFTER callMonitor.start() so the
+        // TelephonyEventAdapter's flow subscription sees events from tick zero.
+        eventAdapters
+            .add(TelephonyEventAdapter(callMonitor, scope))
+            .add(DrivingModeEventAdapter(drivingModeManager))
+            .add(BatteryEventAdapter(context))
+            .attachAll()
+
         proactiveEngine.start()       // Proactive awareness polling
         convProactiveEngine.start()   // Conversational follow-up polling
         brainEngine.start()           // Behavioural learning system
@@ -716,6 +737,7 @@ class JarvisRuntime(
         toolRegistry.release()
         bluetoothSco.release()   // Phase 4: full teardown
         audioFocus.abandonFocus() // Phase 5
+        eventAdapters.detachAll()       // Unwire bus adapters before callMonitor.stop()
         callMonitor.stop()              // Phase 6
         proactiveEngine.stop()          // Proactive awareness
         convProactiveEngine.stop()      // Conversational follow-up

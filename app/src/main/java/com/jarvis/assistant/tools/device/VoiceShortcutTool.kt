@@ -5,6 +5,7 @@ import com.jarvis.assistant.shortcuts.VoiceShortcutRepository
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 /**
  * VoiceShortcutTool — create, list, delete, and run named voice shortcut sequences.
@@ -20,6 +21,24 @@ class VoiceShortcutTool(private val repository: VoiceShortcutRepository) : Tool 
     override val name            = "voice_shortcut"
     override val description     = "Create, run, list, and delete named voice command shortcuts"
     override val requiresNetwork = false
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Manage named voice command shortcuts: add, run, list, or delete.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "action"        to mapOf(
+                    "type" to "string",
+                    "enum" to listOf("add", "run", "list", "delete"),
+                    "description" to "What to do"
+                ),
+                "shortcut_name" to mapOf("type" to "string", "description" to "Name of the shortcut (for add, run, delete)"),
+                "commands"      to mapOf("type" to "string", "description" to "Comma-separated command list (for add only)")
+            ),
+            "required" to listOf("action")
+        )
+    )
 
     companion object {
         private const val TAG = "VoiceShortcutTool"
@@ -54,7 +73,7 @@ class VoiceShortcutTool(private val repository: VoiceShortcutRepository) : Tool 
     }
 
     override suspend fun execute(input: ToolInput): ToolResult {
-        val t = input.rawTranscript.trim()
+        val t = input.transcript.trim()
 
         ADD_PATTERN.find(t)?.let { m ->
             val name     = m.groupValues[1].trim()

@@ -11,16 +11,31 @@ object ActionPolicyGate {
      * Returns [PolicyResult.ActionUnsupported] otherwise — the request is NOT silently dropped;
      * it is captured with full context for debugging and bug tracking.
      */
-    fun evaluate(toolName: String, transcript: String): PolicyResult {
+    fun evaluate(
+        toolName: String,
+        transcript: String,
+        /**
+         * Runtime kill switch.  When true, every tool — even allowlisted ones —
+         * is denied with [DenialReason.DISABLED_BY_POLICY].  Conversation with
+         * the LLM is unaffected; only tool execution is blocked.
+         */
+        killSwitchActive: Boolean = false
+    ): PolicyResult {
         val actionType = ActionType.fromToolName(toolName)
-        val result = if (actionType != null) {
-            PolicyResult.ActionApproved(
+        val result = when {
+            killSwitchActive -> PolicyResult.ActionDenied(
+                requestedActionType = actionType,
+                rawRequestedAction  = transcript,
+                reasonCode          = DenialReason.DISABLED_BY_POLICY,
+                humanMessage        = "Tool execution is paused. You can re-enable it in Settings \u2192 Privacy.",
+                debugDetails        = "Kill switch active (SettingsStore.toolExecutionDisabled=true)"
+            )
+            actionType != null -> PolicyResult.ActionApproved(
                 requestedActionType = actionType,
                 rawRequestedAction  = transcript,
                 toolName            = toolName
             )
-        } else {
-            PolicyResult.ActionUnsupported(
+            else -> PolicyResult.ActionUnsupported(
                 rawRequestedAction = transcript,
                 toolNameAttempted  = toolName,
                 debugDetails       = "Tool '$toolName' has no entry in ActionType.APPROVED_TOOL_MAP. " +

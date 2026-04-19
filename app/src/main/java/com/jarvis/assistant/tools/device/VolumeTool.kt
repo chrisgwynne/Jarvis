@@ -6,11 +6,28 @@ import com.jarvis.assistant.runtime.FailurePhrases
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 class VolumeTool(private val context: Context) : Tool {
 
     override val name = "volume_control"
     override val description = "Raise, lower, or mute the phone volume"
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Adjust the device volume. Use \"up\" to raise, \"down\" to lower, \"mute\" to silence the ringer.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "direction" to mapOf(
+                    "type" to "string",
+                    "enum" to listOf("up", "down", "mute"),
+                    "description" to "Direction to change the volume"
+                )
+            ),
+            "required" to listOf("direction")
+        )
+    )
 
     private val UP_RE   = Regex("""(?:turn\s+up|raise|increase|louder)\s*(?:the\s+)?volume|volume\s+up""", RegexOption.IGNORE_CASE)
     private val DOWN_RE = Regex("""(?:turn\s+down|lower|decrease|quieter)\s*(?:the\s+)?volume|volume\s+down""", RegexOption.IGNORE_CASE)

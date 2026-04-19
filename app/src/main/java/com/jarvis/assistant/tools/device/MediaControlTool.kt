@@ -12,6 +12,7 @@ import com.jarvis.assistant.runtime.FailurePhrases
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 class MediaControlTool(private val context: Context) : Tool {
 
@@ -19,6 +20,22 @@ class MediaControlTool(private val context: Context) : Tool {
     override val description = "Control media playback — play, pause, skip, previous"
     override val requiresNetwork = false
     override val requiredPermissions: List<String> = emptyList()
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Control currently-playing media (Spotify, YouTube Music, etc). Does NOT start new playback; use open_app or music_search for that.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "action" to mapOf(
+                    "type" to "string",
+                    "enum" to listOf("play", "pause", "skip", "previous", "shuffle", "repeat"),
+                    "description" to "Playback action"
+                )
+            ),
+            "required" to listOf("action")
+        )
+    )
 
     private val PAUSE_RE    = Regex("""(?:pause(?:\s+(?:music|that))?|stop\s+(?:music|playing))""", RegexOption.IGNORE_CASE)
     private val PLAY_RE     = Regex("""^(?:play|resume(?:\s+music)?|unpause)${'$'}""", RegexOption.IGNORE_CASE)

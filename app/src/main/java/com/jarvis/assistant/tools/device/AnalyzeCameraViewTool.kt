@@ -13,6 +13,7 @@ import com.jarvis.assistant.llm.Message
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 /**
  * AnalyzeCameraViewTool — "What do you see?" / "Look at this."
@@ -48,6 +49,16 @@ class AnalyzeCameraViewTool(
     override val description    = "Captures a photo and describes what's visible"
     override val requiresNetwork = true
     override val requiredPermissions = listOf(Manifest.permission.CAMERA)
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Take a photo with the rear camera and describe what's visible. Use when the user asks what you see or to look at something.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to emptyMap<String, Any>(),
+            "required" to emptyList<String>()
+        )
+    )
 
     companion object {
         private const val TAG = "AnalyzeCameraViewTool"

@@ -8,6 +8,7 @@ import com.jarvis.assistant.tools.ContactLookup
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 class CallTool(
     private val context: Context,
@@ -17,6 +18,18 @@ class CallTool(
     override val name = "call_contact"
     override val description = "Make a phone call to a contact by name"
     override val requiredPermissions = listOf(Manifest.permission.CALL_PHONE)
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Place a voice call to a contact by name. The user's device must have that contact saved.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "name" to mapOf("type" to "string", "description" to "Contact name to call, e.g. \"Mum\" or \"Chris\"")
+            ),
+            "required" to listOf("name")
+        )
+    )
 
     private val REGEX = Regex(
         """(?:call|phone|ring|dial)\s+(.+?)(?:\s+(?:for me|please|now))?$""",

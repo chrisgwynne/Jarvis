@@ -6,12 +6,30 @@ import com.jarvis.assistant.shopping.ShoppingRepository
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 class ShoppingListTool(private val repository: ShoppingRepository) : Tool {
 
     override val name = "shopping_list"
     override val description = "Manage a voice-controlled shopping list"
     override val requiresNetwork = false
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Manage the user's shopping list: add, read, remove, or clear.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "ACTION" to mapOf(
+                    "type" to "string",
+                    "enum" to listOf("add", "read", "remove", "clear"),
+                    "description" to "What to do with the list"
+                ),
+                "ITEM" to mapOf("type" to "string", "description" to "Item text for add / remove")
+            ),
+            "required" to listOf("ACTION")
+        )
+    )
 
     // Matches "add X to [my] [shopping] list", "buy X", "I need X"
     private val ADD_REGEX = Regex(

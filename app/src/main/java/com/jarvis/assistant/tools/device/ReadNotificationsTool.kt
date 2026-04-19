@@ -6,6 +6,7 @@ import com.jarvis.assistant.notifications.NotificationEntry
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 /**
  * ReadNotificationsTool — reads recent system notifications aloud.
@@ -27,6 +28,22 @@ class ReadNotificationsTool(
 
     // No manifest permission needed here — access is checked via isGranted()
     override val requiredPermissions: List<String> = emptyList()
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Read recent device notifications. Filter by source if the user asks for a specific app.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "source" to mapOf(
+                    "type" to "string",
+                    "enum" to listOf("", "whatsapp", "messages"),
+                    "description" to "Empty for all apps, \"whatsapp\" for WhatsApp only, \"messages\" for SMS/messaging apps"
+                )
+            ),
+            "required" to emptyList<String>()
+        )
+    )
 
     // ── Trigger patterns ──────────────────────────────────────────────────────
 

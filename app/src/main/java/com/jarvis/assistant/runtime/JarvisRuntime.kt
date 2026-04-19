@@ -359,7 +359,13 @@ class JarvisRuntime(
             llmRouter              = llmRouter,
             lastActionStore        = lastActionStore
         )
-        toolDispatcher = ToolDispatcher(context, toolRegistry, machine, lastActionStore)
+        toolDispatcher = ToolDispatcher(
+            context,
+            toolRegistry,
+            machine,
+            lastActionStore,
+            killSwitchProvider = { settings.toolExecutionDisabled }
+        )
         memoryHandler = MemoryActionHandler(profileMemory)
         reminderHandler = ReminderActionHandler(reminderRepo)
         planRunner = com.jarvis.assistant.runtime.plan.PlanRunner(
@@ -419,7 +425,8 @@ class JarvisRuntime(
                 onPassiveAction      = { action -> Log.d(TAG, "Proactive passive: ${action.title}") },
                 voiceResponseEnabled = { settings.voiceResponse }
             ),
-            isDrivingProvider    = { drivingModeManager.isDriving }
+            isDrivingProvider    = { drivingModeManager.isDriving },
+            cooldownDao          = db.proactiveCooldownDao()
         )
 
         // Conversational follow-up engine
@@ -1012,12 +1019,18 @@ class JarvisRuntime(
                     // system's recognition service has fully stabilized its 
                     // own AudioRecord before we open ours.
                     val listenStart = System.currentTimeMillis()
-                    val transcript  = speechCapture.listen(onReady = {
-                        scope.launch {
-                            delay(100)
-                            activeCapture?.start()
-                        }
-                    })
+                    // When offline, force the on-device recognizer (API 31+) so STT
+                    // keeps working without network. On older APIs this flag is a
+                    // no-op — the default intent already sets EXTRA_PREFER_OFFLINE.
+                    val transcript  = speechCapture.listen(
+                        onReady = {
+                            scope.launch {
+                                delay(100)
+                                activeCapture?.start()
+                            }
+                        },
+                        forceOffline = !contextEngine.isOnline()
+                    )
                     // Stop capture immediately — PCM is for this utterance only.
                     val utterancePcm = activeCapture?.stop()
                     val elapsed     = System.currentTimeMillis() - listenStart

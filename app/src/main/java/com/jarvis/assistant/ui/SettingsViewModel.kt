@@ -319,6 +319,33 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setMiniMaxModel(v: String) { _miniMaxModel.value = v; store.miniMaxModel = v }
     fun setWakeWord(v: String)     { _wakeWord.value = v;     store.wakeWord = v }
     fun setVoiceResponse(v: Boolean){ _voiceResponse.value = v; store.voiceResponse = v }
+
+    // ── Safety / lifecycle ────────────────────────────────────────────────
+
+    private val _toolExecutionDisabled = MutableStateFlow(store.toolExecutionDisabled)
+    val toolExecutionDisabled: StateFlow<Boolean> = _toolExecutionDisabled.asStateFlow()
+
+    private val _autoStartOnBoot = MutableStateFlow(store.autoStartOnBoot)
+    val autoStartOnBoot: StateFlow<Boolean> = _autoStartOnBoot.asStateFlow()
+
+    fun setToolExecutionDisabled(v: Boolean) {
+        _toolExecutionDisabled.value = v
+        store.toolExecutionDisabled  = v
+    }
+
+    fun setAutoStartOnBoot(v: Boolean) {
+        _autoStartOnBoot.value = v
+        store.autoStartOnBoot  = v
+    }
+
+    /**
+     * Stop the foreground [JarvisService].  Reminders and other AlarmManager
+     * callbacks continue to fire, but wake-word listening and the proactive
+     * loop shut down.  The user can relaunch from the app's main screen.
+     */
+    fun stopJarvisService() {
+        JarvisService.stop(getApplication())
+    }
     fun setTtsVoiceName(v: String) {
         _ttsVoiceName.value = v
         store.ttsVoiceName  = v

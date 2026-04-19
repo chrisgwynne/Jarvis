@@ -3,6 +3,7 @@ package com.jarvis.assistant.tools.device
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 /**
  * HelpTool — answers "what can you do?" with a dynamically built capability list.
@@ -16,6 +17,16 @@ class HelpTool(private val capabilityProvider: () -> String) : Tool {
     override val name = "help"
     override val description = "Lists what Jarvis can currently do"
     override val requiresNetwork = false
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Return a summary of what Jarvis can do right now based on live settings and registered tools.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to emptyMap<String, Any>(),
+            "required" to emptyList<String>()
+        )
+    )
 
     private val TRIGGERS = listOf(
         "what can you do",

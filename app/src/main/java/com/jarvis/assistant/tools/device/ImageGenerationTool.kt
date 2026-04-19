@@ -12,6 +12,7 @@ import com.jarvis.assistant.security.StoragePolicy
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 import com.jarvis.assistant.util.SettingsStore
 import org.json.JSONObject
 import java.io.InputStream
@@ -36,6 +37,18 @@ class ImageGenerationTool(
     override val name = "ImageGeneration"
     override val description = "Generate an AI image from a description and save to gallery"
     override val requiresNetwork = true
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Generate an AI image from a text description and save it to the device gallery. Requires MiniMax as the LLM provider.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "description" to mapOf("type" to "string", "description" to "Detailed description of the image to generate")
+            ),
+            "required" to listOf("description")
+        )
+    )
 
     companion object {
         private const val TAG = "ImageGenerationTool"

@@ -28,7 +28,14 @@ class ToolDispatcher(
     private val context: Context,
     private val toolRegistry: ToolRegistry,
     private val machine: JarvisStateMachine,
-    private val lastActionStore: LastActionStore? = null
+    private val lastActionStore: LastActionStore? = null,
+    /**
+     * Supplies the current kill-switch state at dispatch time.  Evaluated on
+     * every call so flipping the toggle in Settings takes effect on the next
+     * tool invocation with no runtime restart.  Defaults to "never denied" so
+     * tests and legacy callers don't need to plumb SettingsStore through.
+     */
+    private val killSwitchProvider: () -> Boolean = { false }
 ) {
 
     companion object {
@@ -81,7 +88,11 @@ class ToolDispatcher(
         }
 
         // ── Policy gate ───────────────────────────────────────────────────────
-        val policyResult = ActionPolicyGate.evaluate(tool.name, transcript)
+        val policyResult = ActionPolicyGate.evaluate(
+            toolName         = tool.name,
+            transcript       = transcript,
+            killSwitchActive = killSwitchProvider()
+        )
         LatencyTracker.mark("POLICY_EVALUATED")
         if (policyResult !is PolicyResult.ActionApproved) {
             val message = when (policyResult) {

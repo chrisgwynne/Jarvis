@@ -11,6 +11,7 @@ import com.jarvis.assistant.audio.recording.RecordingTranscriber
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -48,6 +49,22 @@ class AudioRecordingTool(
     // RECORD_AUDIO is already held by the foreground service, but ToolRegistry's
     // permission gate still validates it so the error path is exercised correctly.
     override val requiredPermissions = listOf(Manifest.permission.RECORD_AUDIO)
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Start, stop, transcribe, or summarize an audio recording. Transcription and summarization require OpenAI as the LLM provider.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "action" to mapOf(
+                    "type" to "string",
+                    "enum" to listOf("start", "stop", "transcribe", "summarize"),
+                    "description" to "Recording action"
+                )
+            ),
+            "required" to listOf("action")
+        )
+    )
 
     companion object {
         private const val TAG = "AudioRecordingTool"

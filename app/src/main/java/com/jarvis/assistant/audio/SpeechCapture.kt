@@ -2,6 +2,7 @@ package com.jarvis.assistant.audio
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -61,9 +62,21 @@ class SpeechCapture(private val context: Context) {
      * Returns "" if nothing was heard, recognition failed, or the 30 s hard
      * timeout fires.  Cancellation-safe.
      */
-    suspend fun listen(onReady: (() -> Unit)? = null): String = listenLock.withLock {
+    suspend fun listen(
+        onReady: (() -> Unit)? = null,
+        /**
+         * When true, constructs an on-device-only recognizer on API 31+ via
+         * [SpeechRecognizer.createOnDeviceSpeechRecognizer].  Guarantees no
+         * network round-trip even if Google's cloud model would give a better
+         * answer — use when connectivity is known to be unavailable.  On API
+         * < 31 this flag has no effect: the cloud recognizer already prefers
+         * offline via [RecognizerIntent.EXTRA_PREFER_OFFLINE] below, which is
+         * a hint rather than a hard guarantee.
+         */
+        forceOffline: Boolean = false
+    ): String = listenLock.withLock {
         withTimeoutOrNull(30_000L) {
-            listenInternal(onReady)
+            listenInternal(onReady, forceOffline)
         } ?: run {
             Log.w(TAG, "SpeechCapture timed out after 30 s — returning empty")
             cancel()
@@ -71,7 +84,10 @@ class SpeechCapture(private val context: Context) {
         }
     }
 
-    private suspend fun listenInternal(onReady: (() -> Unit)? = null): String = suspendCancellableCoroutine { cont ->
+    private suspend fun listenInternal(
+        onReady: (() -> Unit)? = null,
+        forceOffline: Boolean = false
+    ): String = suspendCancellableCoroutine { cont ->
 
         // Register cancellation cleanup BEFORE posting to handler,
         // so if the coroutine is cancelled while the handler post is pending
@@ -86,14 +102,23 @@ class SpeechCapture(private val context: Context) {
         }
 
         mainHandler.post {
-            if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+            val useOnDevice = forceOffline &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+
+            if (!useOnDevice && !SpeechRecognizer.isRecognitionAvailable(context)) {
                 Log.w(TAG, "SpeechRecognizer not available on this device")
                 if (cont.isActive) cont.resume("")
                 return@post
             }
 
             recognizer?.destroy()
-            recognizer = SpeechRecognizer.createSpeechRecognizer(context)
+            recognizer = if (useOnDevice) {
+                Log.d(TAG, "Using on-device SpeechRecognizer (forceOffline=true, API ${Build.VERSION.SDK_INT})")
+                SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+            } else {
+                SpeechRecognizer.createSpeechRecognizer(context)
+            }
 
             recognizer?.setRecognitionListener(object : RecognitionListener {
                 override fun onResults(results: Bundle) {

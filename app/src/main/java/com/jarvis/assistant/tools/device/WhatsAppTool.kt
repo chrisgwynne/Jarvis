@@ -8,6 +8,7 @@ import com.jarvis.assistant.tools.ContactLookup
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 class WhatsAppTool(
     private val context: Context,
@@ -16,6 +17,19 @@ class WhatsAppTool(
 
     override val name = "whatsapp_message"
     override val description = "Open WhatsApp with a pre-filled message to a contact"
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Send a WhatsApp message to a contact. Requires WhatsApp installed.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "name"    to mapOf("type" to "string", "description" to "Recipient contact name"),
+                "message" to mapOf("type" to "string", "description" to "Message body to pre-fill")
+            ),
+            "required" to listOf("name", "message")
+        )
+    )
 
     private val REGEX = Regex(
         """(?:whatsapp|whats\s*app|wa)\s+(.+?)\s+(?:and\s+)?(?:tell(?:\s+them)?|say(?:ing)?|send(?:ing)?|message)\s+(.+)""",

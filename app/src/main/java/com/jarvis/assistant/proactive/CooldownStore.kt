@@ -1,26 +1,45 @@
 package com.jarvis.assistant.proactive
 
+import android.util.Log
+import com.jarvis.assistant.proactive.db.ProactiveCooldownDao
+import com.jarvis.assistant.proactive.db.ProactiveCooldownEntity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * CooldownStore — thread-safe in-memory record of when each dedupeKey was
- * last surfaced and when any action was last surfaced globally.
+ * CooldownStore — thread-safe record of when each dedupeKey was last
+ * surfaced and when any action was last surfaced globally.
  *
- * Designed for high-frequency reads (every polling tick) with infrequent
- * writes (only when an action is actually dispatched).  All operations are
- * O(1) and lock-free for reads thanks to [ConcurrentHashMap] and [@Volatile].
+ * Reads are O(1) and lock-free (backing [ConcurrentHashMap] + `@Volatile`) so
+ * the polling loop stays fast.  Writes fan out: the in-memory map is updated
+ * synchronously, and if a [ProactiveCooldownDao] is supplied the change is
+ * also queued for persistent storage on an IO coroutine.
  *
- * The store is intentionally ephemeral — it resets when the process is
- * killed.  Cooldowns are a UX anti-annoyance mechanism; missing one
- * surfacing per app restart is an acceptable trade-off versus the complexity
- * of persisting to disk.
+ * Process-death behaviour: when constructed with a DAO the store rehydrates
+ * from disk on init.  The initial load is a single short suspend call done in
+ * the constructor via [runBlocking] on IO — this runs exactly once per
+ * process and happens before the proactive loop makes its first tick, so
+ * there is no race between rehydration and the first read.
+ *
+ * The DAO is optional so unit tests (and [ProactiveSimulator]) can construct
+ * a pure in-memory instance with no Room dependency.
  */
 class CooldownStore(
     /** Soft cap on the per-key maps so dynamic dedupe keys don't accumulate forever. */
     private val maxKeys: Int = 512,
     /** Entries untouched for this long are eligible for eviction. */
-    private val maxAgeMs: Long = 24 * 60 * 60 * 1000L
+    private val maxAgeMs: Long = 24 * 60 * 60 * 1000L,
+    /** Optional persistent backing store — null = pure in-memory (legacy / tests). */
+    private val dao: ProactiveCooldownDao? = null,
+    /** Scope used for background writes when [dao] is non-null. */
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 ) {
+
+    companion object { private const val TAG = "CooldownStore" }
 
     private val lastSurfacedMs = ConcurrentHashMap<String, Long>()
     private val ignoreCountByKey = ConcurrentHashMap<String, Int>()
@@ -28,105 +47,115 @@ class CooldownStore(
     @Volatile
     private var lastGlobalSurfaceMs: Long = Long.MIN_VALUE
 
-    // ── Query ─────────────────────────────────────────────────────────────────
+    init {
+        if (dao != null) hydrateFromDao()
+    }
 
     /**
-     * Returns true if [dedupeKey] was surfaced within [cooldownMs] milliseconds
-     * of [System.currentTimeMillis].
-     *
-     * A key that has never been surfaced is never on cooldown.
+     * Pulls every row out of the DAO into the in-memory maps.  Blocks the
+     * constructor briefly so the first [isOnCooldown] read after `new` sees
+     * the persisted state.  Measured hydration is a single short query — a
+     * handful of rows in practice — so blocking is acceptable and avoids a
+     * cold-start race window.
      */
+    private fun hydrateFromDao() {
+        try {
+            runBlocking {
+                dao!!.getAll().forEach { row ->
+                    if (row.dedupeKey == ProactiveCooldownEntity.GLOBAL_KEY) {
+                        lastGlobalSurfaceMs = row.lastSurfacedMs
+                    } else {
+                        lastSurfacedMs[row.dedupeKey] = row.lastSurfacedMs
+                        if (row.ignoreCount > 0) ignoreCountByKey[row.dedupeKey] = row.ignoreCount
+                    }
+                }
+            }
+            Log.d(TAG, "Hydrated ${lastSurfacedMs.size} cooldown keys from disk")
+        } catch (e: Exception) {
+            // A corrupt / unreadable persistent store must NEVER break the
+            // proactive loop — fall back to empty in-memory state and log.
+            Log.w(TAG, "Cooldown hydration failed; starting fresh: ${e.message}")
+        }
+    }
+
+    // ── Query ─────────────────────────────────────────────────────────────────
+
     fun isOnCooldown(dedupeKey: String, cooldownMs: Long): Boolean {
         val last = lastSurfacedMs[dedupeKey] ?: return false
         return (System.currentTimeMillis() - last) < cooldownMs
     }
 
-    /**
-     * Milliseconds since [dedupeKey] was last surfaced.
-     *
-     * Returns [Long.MAX_VALUE] if the key has never been surfaced, which makes
-     * it trivially larger than any cooldown window.
-     */
     fun msSinceSurfaced(dedupeKey: String): Long {
         val last = lastSurfacedMs[dedupeKey] ?: return Long.MAX_VALUE
         return System.currentTimeMillis() - last
     }
 
-    /**
-     * Milliseconds since any action was last surfaced globally.
-     *
-     * Returns [Long.MAX_VALUE] if nothing has ever been surfaced, which means
-     * the global gap check is always satisfied on first run.
-     */
     fun msSinceLastGlobalSurface(): Long {
         if (lastGlobalSurfaceMs == Long.MIN_VALUE) return Long.MAX_VALUE
         return System.currentTimeMillis() - lastGlobalSurfaceMs
     }
 
+    fun ignoreCount(dedupeKey: String): Int = ignoreCountByKey[dedupeKey] ?: 0
+
     // ── Mutation ──────────────────────────────────────────────────────────────
 
-    /**
-     * Record that [dedupeKey] was surfaced right now.
-     *
-     * Updates both the per-key timestamp and the global last-surface timestamp
-     * so that [isOnCooldown] and [msSinceLastGlobalSurface] reflect the event.
-     */
     fun markSurfaced(dedupeKey: String) {
         val now = System.currentTimeMillis()
         lastSurfacedMs[dedupeKey] = now
         lastGlobalSurfaceMs = now
         if (lastSurfacedMs.size > maxKeys) evictStale(now)
+        persist(dedupeKey, now, ignoreCountByKey[dedupeKey] ?: 0)
+        persist(ProactiveCooldownEntity.GLOBAL_KEY, now, 0)
     }
 
-    /**
-     * Drop per-key entries older than [maxAgeMs].  Called opportunistically
-     * from [markSurfaced] when the map grows past [maxKeys] so dynamic dedupe
-     * keys (minute buckets, notification timestamps) don't accumulate for the
-     * lifetime of the process.
-     */
-    private fun evictStale(now: Long) {
-        val cutoff = now - maxAgeMs
-        lastSurfacedMs.entries.removeAll { it.value < cutoff }
-        // An ignore count without a surfacing record is meaningless once the
-        // surfacing itself has been evicted — shed those too.
-        ignoreCountByKey.keys.removeAll { it !in lastSurfacedMs }
-    }
-
-    /**
-     * Number of times an action with [dedupeKey] was surfaced and the user
-     * did nothing with it.  Used by [EventScorer] to stretch the effective
-     * cooldown — ignored suggestions back off over time.
-     */
-    fun ignoreCount(dedupeKey: String): Int = ignoreCountByKey[dedupeKey] ?: 0
-
-    /**
-     * Record that an action with [dedupeKey] was surfaced and the user did
-     * not engage with it (see [ProactiveConfig.ignoreCheckDelayMs]).  Called
-     * by [ProactiveEngine] on the tick following a dispatch when no user
-     * interaction has happened in the intervening window.
-     */
     fun markIgnored(dedupeKey: String) {
-        ignoreCountByKey.merge(dedupeKey, 1) { old, _ -> old + 1 }
+        val newCount = ignoreCountByKey.merge(dedupeKey, 1) { old, _ -> old + 1 } ?: 1
+        val last = lastSurfacedMs[dedupeKey] ?: return
+        persist(dedupeKey, last, newCount)
     }
 
-    /**
-     * Record that the user engaged with the last action for [dedupeKey] —
-     * resets the ignore counter so future suggestions aren't punished for
-     * earlier misses.
-     */
     fun markAccepted(dedupeKey: String) {
         ignoreCountByKey.remove(dedupeKey)
+        val last = lastSurfacedMs[dedupeKey] ?: return
+        persist(dedupeKey, last, 0)
     }
 
-    /**
-     * Clear all recorded timestamps.
-     *
-     * Intended for use in unit tests so each test case starts with a clean slate
-     * without needing to instantiate a new [CooldownStore].
-     */
     fun reset() {
         lastSurfacedMs.clear()
         ignoreCountByKey.clear()
         lastGlobalSurfaceMs = Long.MIN_VALUE
+    }
+
+    // ── Internals ─────────────────────────────────────────────────────────────
+
+    private fun evictStale(now: Long) {
+        val cutoff = now - maxAgeMs
+        val removedKeys = lastSurfacedMs.entries
+            .filter { it.value < cutoff }
+            .map { it.key }
+        removedKeys.forEach { key ->
+            lastSurfacedMs.remove(key)
+            ignoreCountByKey.remove(key)
+        }
+        if (dao != null && removedKeys.isNotEmpty()) {
+            scope.launch {
+                try {
+                    dao.deleteExpired(cutoff)
+                } catch (e: Exception) {
+                    Log.w(TAG, "deleteExpired failed: ${e.message}")
+                }
+            }
+        }
+    }
+
+    private fun persist(key: String, lastMs: Long, ignoreCount: Int) {
+        val d = dao ?: return
+        scope.launch {
+            try {
+                d.upsert(ProactiveCooldownEntity(key, lastMs, ignoreCount))
+            } catch (e: Exception) {
+                Log.w(TAG, "upsert('$key') failed: ${e.message}")
+            }
+        }
     }
 }

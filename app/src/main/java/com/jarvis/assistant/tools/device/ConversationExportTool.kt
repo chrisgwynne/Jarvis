@@ -7,6 +7,7 @@ import com.jarvis.assistant.memory.db.JarvisDatabase
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -24,6 +25,16 @@ class ConversationExportTool(private val context: Context) : Tool {
     override val name            = "export_conversation"
     override val description     = "Exports the current conversation transcript to a markdown file in Downloads"
     override val requiresNetwork = false
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "Export the most recent conversation as a markdown file to the Downloads folder.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to emptyMap<String, Any>(),
+            "required" to emptyList<String>()
+        )
+    )
 
     companion object {
         private const val TAG = "ConversationExportTool"

@@ -6,6 +6,7 @@ import com.jarvis.assistant.call.OutgoingCallController
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
+import com.jarvis.assistant.tools.framework.ToolSchema
 
 /**
  * EndCallTool — voice-triggered end-call / hang-up command.
@@ -41,6 +42,16 @@ class EndCallTool(
 
     override val name        = "end_call"
     override val description = "Ends or cancels an outgoing ringing or active call"
+
+    override fun schema() = ToolSchema(
+        name        = name,
+        description = "End or cancel the current outgoing or active phone call.",
+        parameters  = mapOf(
+            "type" to "object",
+            "properties" to emptyMap<String, Any>(),
+            "required" to emptyList<String>()
+        )
+    )
 
     companion object {
         private const val TAG = "EndCallTool"

@@ -8,10 +8,8 @@
 -keep class com.jarvis.assistant.service.** { *; }
 -keep class com.jarvis.assistant.llm.** { *; }
 
-# Retrofit / OkHttp (pre-existing)
+# OkHttp — Retrofit is no longer a dependency; keep-rule removed.
 -dontwarn okhttp3.**
--dontwarn retrofit2.**
--keep class retrofit2.** { *; }
 
 # ============================================================
 # 1. Room — keep @Entity, @Dao, @Database annotated classes
@@ -67,6 +65,15 @@
 -keep class com.jarvis.assistant.followup.SlotKey { *; }
 -keep class com.jarvis.assistant.reminders.ScheduledItem { *; }
 -keep class com.jarvis.assistant.shopping.ShoppingItem { *; }
+
+# ============================================================
+# 7b. Reporting — GitHub issue payload + client response are serialised
+#     via Gson by field name (no @SerializedName annotations), so R8
+#     must not rename those fields or the JSON wire format breaks.
+# ============================================================
+-keep class com.jarvis.assistant.reporting.github.GitHubIssuePayload { *; }
+-keep class com.jarvis.assistant.reporting.github.PendingReportStore$Persisted { *; }
+-keep class com.jarvis.assistant.reporting.github.GitHubIssueClient$CreateResponse { *; }
 
 # ============================================================
 # 8. CameraX — keep lifecycle and capture classes

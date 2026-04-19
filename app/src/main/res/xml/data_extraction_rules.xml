@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Disables Android auto-backup and device-transfer for Jarvis.
+
+    Rationale: the app's on-device state includes the memory DB, the
+    knowledge DB, speaker-voice embeddings, and EncryptedSharedPreferences
+    holding API tokens / OAuth refresh tokens.  Backup to Google Drive and
+    device-to-device transfer would all carry this material off the device
+    in forms that we can't revoke later, and the EncryptedSharedPreferences
+    master key does NOT survive the transfer — the encrypted prefs become
+    unreadable, silently breaking OAuth auth.  Disabling both is simpler
+    and safer than trying to maintain a partial allow-list.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root"              />
+        <exclude domain="file"              />
+        <exclude domain="database"          />
+        <exclude domain="sharedpref"        />
+        <exclude domain="external"          />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root"              />
+        <exclude domain="file"              />
+        <exclude domain="database"          />
+        <exclude domain="sharedpref"        />
+        <exclude domain="external"          />
+    </device-transfer>
+</data-extraction-rules>

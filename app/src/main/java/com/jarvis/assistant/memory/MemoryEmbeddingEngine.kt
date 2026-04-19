@@ -38,11 +38,22 @@ class MemoryEmbeddingEngine private constructor(private val interpreter: Interpr
             instance?.let { return it }
             return synchronized(this) {
                 instance ?: try {
-                    val fd = context.assets.openFd(MODEL_ASSET)
-                    val buf = FileInputStream(fd.fileDescriptor).channel.map(
-                        FileChannel.MapMode.READ_ONLY, fd.startOffset, fd.declaredLength
-                    )
-                    MemoryEmbeddingEngine(Interpreter(buf)).also { instance = it }
+                    // Close the AssetFileDescriptor / FileInputStream / FileChannel
+                    // deterministically after mmap() — they'd otherwise leak on
+                    // every Jarvis cold-start.  The MappedByteBuffer keeps the
+                    // underlying pages alive independently of the channel.
+                    context.assets.openFd(MODEL_ASSET).use { fd ->
+                        FileInputStream(fd.fileDescriptor).use { input ->
+                            input.channel.use { channel ->
+                                val buf = channel.map(
+                                    FileChannel.MapMode.READ_ONLY,
+                                    fd.startOffset,
+                                    fd.declaredLength
+                                )
+                                MemoryEmbeddingEngine(Interpreter(buf)).also { instance = it }
+                            }
+                        }
+                    }
                 } catch (e: Exception) {
                     Log.w(TAG, "Sentence embedding model not available — using keyword retrieval: ${e.message}")
                     null

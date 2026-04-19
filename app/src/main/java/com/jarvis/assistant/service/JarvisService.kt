@@ -6,7 +6,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
-import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
@@ -165,7 +164,6 @@ class JarvisService : Service() {
     // Legacy state enum — kept so MainScreen.kt continues to work unchanged
     enum class State { IDLE, LISTENING, PROCESSING, SPEAKING }
 
-    private var wakeLock: PowerManager.WakeLock? = null
     private var runtime: JarvisRuntime? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -175,8 +173,16 @@ class JarvisService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        val t0 = System.currentTimeMillis()
         Log.d(TAG, "onCreate")
-        acquireWakeLock()
+        // NOTE: no PARTIAL_WAKE_LOCK here.  The foreground-service with
+        // FGS_TYPE=microphone already keeps the CPU alive while audio is
+        // recording, and the wake-word / pipeline coroutines run short-lived
+        // work that finishes before the device can sleep.  A permanent
+        // wakelock held for the service's lifetime prevented deep sleep and
+        // was the single biggest battery drain in long sessions.  If a
+        // specific branch ever needs the CPU awake outside of audio capture,
+        // acquire a scoped, timed lock at that site — never here.
         startForeground(NOTIFICATION_ID, buildNotification())
 
         serviceScope.launch {
@@ -196,11 +202,22 @@ class JarvisService : Service() {
                     instance.initialize()
                     instance
                 }
-                Log.d(TAG, "JarvisRuntime initialized in ${System.currentTimeMillis() - startTime}ms")
+                val initMs = System.currentTimeMillis() - startTime
+                Log.i(TAG, "startup: JarvisRuntime initialized in ${initMs}ms (since onCreate: ${System.currentTimeMillis() - t0}ms)")
                 runtime = r
                 runtimeDeferred.complete(r)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initialize JarvisRuntime", e)
+                // Service-startup failure is a blocker for every feature in
+                // the app.  Escalate to a GitHub issue (deduped per
+                // fingerprint + rate-limited globally).  The reporter is a
+                // no-op when the feature flag is off or no token is set.
+                com.jarvis.assistant.reporting.github.IssueReporter.get()?.reportFatal(
+                    subsystem = "service_startup",
+                    category  = "RUNTIME_INIT_FAILED",
+                    message   = "JarvisRuntime failed to initialize — service stopping.",
+                    throwable = e
+                )
                 stopSelf()
             }
         }
@@ -274,7 +291,6 @@ class JarvisService : Service() {
         serviceScope.cancel()
         runtime?.stop()
         runtime = null
-        releaseWakeLock()
         broadcast(BROADCAST_SERVICE_STOPPED)
         super.onDestroy()
     }
@@ -318,18 +334,4 @@ class JarvisService : Service() {
         )
     }
 
-    // ── WakeLock ──────────────────────────────────────────────────────────────
-
-    private fun acquireWakeLock() {
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "JarvisApp::ServiceWakeLock"
-        ).also { it.acquire() }
-    }
-
-    private fun releaseWakeLock() {
-        wakeLock?.let { if (it.isHeld) it.release() }
-        wakeLock = null
-    }
 }

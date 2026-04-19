@@ -1,17 +1,41 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Cleartext (HTTP) is permitted globally so that self-hosted LLM servers
-    on Tailscale (100.x.x.x IPs or *.ts.net hostnames) and local LAN
-    addresses work without TLS certificates.  Public HTTPS APIs are
-    unaffected — OkHttp uses HTTPS when the URL starts with https://.
+    Default stance: cleartext (HTTP) is DENIED.  Public LLM / Places / Maps /
+    Distance-Matrix APIs all use HTTPS — OkHttp picks the scheme from the URL,
+    so this tighter default has no effect on those flows.
+
+    Exceptions (cleartextTrafficPermitted="true") are scoped to the hosts the
+    app actually talks to in plaintext: self-hosted LLM / OpenClaw / Home
+    Assistant endpoints on the LAN and on Tailscale.  A MITM on a public
+    Wi-Fi can no longer see or modify any Jarvis API traffic, which was
+    possible under the previous globally-permissive base-config.
 -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="true">
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
-            <!-- Trust user-installed certificates (e.g. self-signed certs for
-                 OpenClaw/Tailscale servers installed via Settings → Security). -->
+            <!-- User-installed certs trusted so self-signed TLS on private
+                 networks (OpenClaw, Home Assistant with a local CA) still
+                 works without the app bundling a pinned cert set. -->
             <certificates src="user" />
         </trust-anchors>
     </base-config>
+
+    <!-- Private / local-network hosts — cleartext allowed here only. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <!-- RFC-1918 boundary literals.  Android's host matcher treats these
+             as suffix tests, so "10.0.0.0" matches every 10.x.y.z; same for
+             172.16.x.x and 192.168.x.x (the common home-network subnet). -->
+        <domain includeSubdomains="true">10.0.0.0</domain>
+        <domain includeSubdomains="true">172.16.0.0</domain>
+        <domain includeSubdomains="true">192.168.0.0</domain>
+        <domain includeSubdomains="true">169.254.0.0</domain>
+        <!-- Tailscale CGNAT block (100.64.0.0/10). -->
+        <domain includeSubdomains="true">100.64.0.0</domain>
+        <domain includeSubdomains="true">100.127.0.0</domain>
+        <!-- Tailscale MagicDNS. -->
+        <domain includeSubdomains="true">ts.net</domain>
+    </domain-config>
 </network-security-config>

@@ -10,6 +10,7 @@ import androidx.core.content.ContextCompat
 import com.jarvis.assistant.memory.db.JarvisDatabase
 import com.jarvis.assistant.reminders.ReminderRepository
 import com.jarvis.assistant.reminders.ReminderScheduler
+import com.jarvis.assistant.util.SettingsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -68,6 +69,14 @@ class BootReceiver : BroadcastReceiver() {
 
             if (!recordAudioGranted) {
                 Log.w(TAG, "RECORD_AUDIO not granted — skipping auto-start from boot")
+                return
+            }
+
+            // User-facing auto-start toggle.  Defaults to true so existing
+            // installs keep their current behaviour; set to false via
+            // Settings → Privacy to require a manual launch after reboot.
+            if (!SettingsStore(context).autoStartOnBoot) {
+                Log.i(TAG, "autoStartOnBoot=false — skipping auto-start from boot")
                 return
             }
 

@@ -69,6 +69,12 @@ class SettingsStore(context: Context) {
         const val KEY_HA_BASE_URL        = "ha_base_url"
         const val KEY_HA_API_TOKEN       = "ha_api_token"
 
+        // ── Safety / lifecycle toggles ────────────────────────────────────────
+        /** Kill switch: when true, ActionPolicyGate denies every tool execution. */
+        const val KEY_TOOL_EXECUTION_DISABLED = "tool_execution_disabled"
+        /** When false, BootReceiver skips auto-starting JarvisService on boot. */
+        const val KEY_AUTO_START_ON_BOOT      = "auto_start_on_boot"
+
         // OpenClaw remote routing keys
         const val KEY_OPENCLAW_ENABLED    = "openclaw_enabled"
         const val KEY_OPENCLAW_HOST       = "openclaw_host"
@@ -293,6 +299,27 @@ class SettingsStore(context: Context) {
     var haApiToken: String
         get() = prefs.getString(KEY_HA_API_TOKEN, "") ?: ""
         set(v) = prefs.edit().putString(KEY_HA_API_TOKEN, v).apply()
+
+    // ── Safety / lifecycle ────────────────────────────────────────────────
+
+    /**
+     * Kill switch.  When true, [ActionPolicyGate.evaluate] denies every tool
+     * execution with [DenialReason.DISABLED_BY_POLICY].  Conversation still
+     * flows through the LLM — the user just can't trigger any device action
+     * until the flag is flipped back.
+     */
+    var toolExecutionDisabled: Boolean
+        get() = prefs.getBoolean(KEY_TOOL_EXECUTION_DISABLED, false)
+        set(v) = prefs.edit().putBoolean(KEY_TOOL_EXECUTION_DISABLED, v).apply()
+
+    /**
+     * When true (default), [BootReceiver] auto-starts [JarvisService] on
+     * device boot.  Set to false to keep Jarvis off until the user launches
+     * the app manually.
+     */
+    var autoStartOnBoot: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_START_ON_BOOT, true)
+        set(v) = prefs.edit().putBoolean(KEY_AUTO_START_ON_BOOT, v).apply()
 
     fun clearOpenAiOAuth() {
         prefs.edit()

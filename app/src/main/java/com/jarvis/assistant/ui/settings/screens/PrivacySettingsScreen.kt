@@ -13,6 +13,7 @@ import com.jarvis.assistant.ui.settings.SettingsGroup
 import com.jarvis.assistant.ui.settings.SettingsInfoCard
 import com.jarvis.assistant.ui.settings.SettingsRowDivider
 import com.jarvis.assistant.ui.settings.SettingsScaffold
+import com.jarvis.assistant.ui.settings.SettingsToggleRow
 
 @Composable
 internal fun PrivacySettingsScreen(
@@ -22,6 +23,8 @@ internal fun PrivacySettingsScreen(
 ) {
     val context = LocalContext.current
     val signedIn by vm.openAiSignedIn.collectAsStateWithLifecycle()
+    val killSwitch by vm.toolExecutionDisabled.collectAsStateWithLifecycle()
+    val autoStart  by vm.autoStartOnBoot.collectAsStateWithLifecycle()
 
     SettingsScaffold(title = "Privacy", onBack = onBack, onClose = onClose) {
 
@@ -31,6 +34,38 @@ internal fun PrivacySettingsScreen(
                     "EncryptedSharedPreferences. Voice recordings are processed locally " +
                     "and discarded — only transcripts leave the device.",
         )
+
+        SettingsGroup(
+            title  = "Control",
+            footer = "Pausing tool execution keeps conversation working but blocks every " +
+                     "device action until the toggle is turned back on.",
+        ) {
+            SettingsToggleRow(
+                title       = "Pause tool execution",
+                description = "Disable every tool (calls, messages, alarms, camera, etc.) " +
+                              "while still allowing conversation.",
+                checked     = killSwitch,
+                onCheckedChange = vm::setToolExecutionDisabled,
+            )
+            SettingsRowDivider()
+            SettingsToggleRow(
+                title       = "Start Jarvis on boot",
+                description = "When off, Jarvis stays idle after device reboot until you " +
+                              "open the app.",
+                checked     = autoStart,
+                onCheckedChange = vm::setAutoStartOnBoot,
+            )
+            SettingsRowDivider()
+            SettingsActionRow(
+                title       = "Stop Jarvis now",
+                description = "Shut down the foreground service until you relaunch the app.",
+                actionLabel = "Stop service",
+                destructive = true,
+                confirm     = true,
+                confirmCopy = "Stop",
+                onAction    = vm::stopJarvisService,
+            )
+        }
 
         SettingsGroup(
             title  = "Accounts",

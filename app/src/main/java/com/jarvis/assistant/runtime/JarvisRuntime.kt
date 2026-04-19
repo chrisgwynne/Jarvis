@@ -359,7 +359,13 @@ class JarvisRuntime(
             llmRouter              = llmRouter,
             lastActionStore        = lastActionStore
         )
-        toolDispatcher = ToolDispatcher(context, toolRegistry, machine, lastActionStore)
+        toolDispatcher = ToolDispatcher(
+            context,
+            toolRegistry,
+            machine,
+            lastActionStore,
+            killSwitchProvider = { settings.toolExecutionDisabled }
+        )
         memoryHandler = MemoryActionHandler(profileMemory)
         reminderHandler = ReminderActionHandler(reminderRepo)
         planRunner = com.jarvis.assistant.runtime.plan.PlanRunner(

@@ -10,6 +10,8 @@ import com.jarvis.assistant.brain.db.dao.BrainEventDao
 import com.jarvis.assistant.brain.db.dao.BrainPatternDao
 import com.jarvis.assistant.brain.db.entity.BrainEvent
 import com.jarvis.assistant.brain.db.entity.BrainPattern
+import com.jarvis.assistant.proactive.db.ProactiveCooldownDao
+import com.jarvis.assistant.proactive.db.ProactiveCooldownEntity
 import com.jarvis.assistant.proactive.followup.PendingFollowUp
 import com.jarvis.assistant.proactive.followup.PendingFollowUpDao
 import com.jarvis.assistant.knowledge.db.dao.ContradictionDao
@@ -67,9 +69,10 @@ import com.jarvis.assistant.runtime.plan.JournalEntry
         BrainEvent::class,
         BrainPattern::class,
         VoiceShortcut::class,
-        JournalEntry::class
+        JournalEntry::class,
+        ProactiveCooldownEntity::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = false
 )
 abstract class JarvisDatabase : RoomDatabase() {
@@ -93,6 +96,7 @@ abstract class JarvisDatabase : RoomDatabase() {
     abstract fun brainPatternDao(): BrainPatternDao
     abstract fun voiceShortcutDao(): VoiceShortcutDao
     abstract fun actionJournalDao(): ActionJournalDao
+    abstract fun proactiveCooldownDao(): ProactiveCooldownDao
 
     companion object {
         private const val DB_NAME = "jarvis.db"
@@ -379,6 +383,25 @@ abstract class JarvisDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration 11 → 12: add proactive_cooldowns table so CooldownStore
+         * survives process death (before: in-memory only, app restart reset
+         * per-key ignore counts and the global last-surface timestamp).
+         */
+        private val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS proactive_cooldowns (
+                        dedupeKey       TEXT    NOT NULL PRIMARY KEY,
+                        lastSurfacedMs  INTEGER NOT NULL,
+                        ignoreCount     INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
+        /**
          * Migration 9 → 10: add voice_shortcuts table for custom trigger sequences.
          */
         private val MIGRATION_9_10 = object : Migration(9, 10) {
@@ -409,7 +432,7 @@ abstract class JarvisDatabase : RoomDatabase() {
                 )
                     .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                                   MIGRATION_9_10, MIGRATION_10_11)
+                                   MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
                     .build()
                     .also { INSTANCE = it }
             }

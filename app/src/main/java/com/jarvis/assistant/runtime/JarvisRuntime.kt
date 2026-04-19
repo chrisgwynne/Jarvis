@@ -419,7 +419,8 @@ class JarvisRuntime(
                 onPassiveAction      = { action -> Log.d(TAG, "Proactive passive: ${action.title}") },
                 voiceResponseEnabled = { settings.voiceResponse }
             ),
-            isDrivingProvider    = { drivingModeManager.isDriving }
+            isDrivingProvider    = { drivingModeManager.isDriving },
+            cooldownDao          = db.proactiveCooldownDao()
         )
 
         // Conversational follow-up engine

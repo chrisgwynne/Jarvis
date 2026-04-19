@@ -1,6 +1,7 @@
 package com.jarvis.assistant.proactive
 
 import android.util.Log
+import com.jarvis.assistant.proactive.db.ProactiveCooldownDao
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -66,7 +67,13 @@ class ProactiveEngine(
      * tests and legacy callers simple — defaults to "not driving" when not
      * wired up.  JarvisRuntime passes `drivingModeManager::isDriving`.
      */
-    private val isDrivingProvider: () -> Boolean = { false }
+    private val isDrivingProvider: () -> Boolean = { false },
+    /**
+     * When non-null, cooldowns and ignore counts persist across process
+     * restarts.  JarvisRuntime supplies the real DAO; tests leave this null
+     * for a pure in-memory store.
+     */
+    private val cooldownDao: ProactiveCooldownDao? = null
 ) {
 
     companion object {
@@ -75,7 +82,7 @@ class ProactiveEngine(
 
     // ── Internals ─────────────────────────────────────────────────────────────
 
-    private val cooldownStore   = CooldownStore()
+    private val cooldownStore   = CooldownStore(dao = cooldownDao)
     private val eventGenerator  = EventGenerator(config)
     private val eventScorer     = EventScorer(config, cooldownStore)
     private val decisionEngine  = DecisionEngine(config, cooldownStore)

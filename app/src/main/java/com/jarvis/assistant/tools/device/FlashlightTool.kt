@@ -4,6 +4,7 @@ import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.util.Log
+import com.jarvis.assistant.runtime.FailurePhrases
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
@@ -45,14 +46,14 @@ class FlashlightTool(private val context: Context) : Tool {
         val on = input.param("on") == "true"
         return try {
             val cm = context.getSystemService(CameraManager::class.java)
-                ?: return ToolResult.Failure("Camera service unavailable.")
+                ?: return ToolResult.Failure(FailurePhrases.CAMERA_SERVICE_UNAVAILABLE)
             val cameraId = resolveFlashCameraId(cm)
-                ?: return ToolResult.Failure("No flash on this phone.")
+                ?: return ToolResult.Failure(FailurePhrases.NO_FLASH)
             cm.setTorchMode(cameraId, on)
             ToolResult.Success(if (on) "Flashlight on." else "Flashlight off.", silent = true)
         } catch (e: Exception) {
             Log.w("FlashlightTool", "Toggle failed", e)
-            ToolResult.Failure("Couldn't toggle the flashlight.")
+            ToolResult.Failure(FailurePhrases.FLASHLIGHT_DIDNT_RESPOND)
         }
     }
 }

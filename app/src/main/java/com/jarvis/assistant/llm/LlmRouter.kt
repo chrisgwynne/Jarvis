@@ -372,13 +372,21 @@ class LlmRouter(context: Context) {
      * Strip chain-of-thought blocks that reasoning models emit before their answer.
      * Handles <think>…</think> (MiniMax, DeepSeek) and <thinking>…</thinking>.
      * Also collapses any leading/trailing whitespace left behind.
+     *
+     * Previous behaviour: if the whole response was inside think tags we
+     * returned the raw text — which meant the user's TTS spoke the model's
+     * chain-of-thought verbatim. That's worse than saying nothing, because
+     * the reasoning is often verbose and off-voice. Return a short, safe
+     * fallback string instead and let the caller treat it as an error line
+     * (isErrorResponse already flags this constant).
      */
-    private fun stripReasoningTags(text: String): String =
-        text
+    private fun stripReasoningTags(text: String): String {
+        val stripped = text
             .replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE), "")
             .replace(Regex("<thinking>[\\s\\S]*?</thinking>", RegexOption.IGNORE_CASE), "")
             .trim()
-            .ifBlank { text.trim() }   // if the whole response was inside think tags, keep raw
+        return stripped.ifBlank { "Something went wrong." }
+    }
 
     /** True if the server is rate-limiting us (HTTP 429). 429 is retryable with backoff. */
     private fun isRateLimit(e: LlmException): Boolean =

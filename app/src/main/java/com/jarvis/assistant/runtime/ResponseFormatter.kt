@@ -3,12 +3,20 @@ package com.jarvis.assistant.runtime
 /**
  * ResponseFormatter — post-processes LLM output for spoken delivery.
  *
- * RULES:
- *   1. Strip any markdown that slipped through (**, *, #, `, ```, ---, ===).
+ * RULES (applied in order, each building on the previous step):
+ *   1. Markdown strip — fenced/inline code, headings, bullets, bold/italic,
+ *      underline, dividers, then collapse whitespace.  Done BEFORE sentence
+ *      counting so `**Hello.** **World.**` becomes `Hello. World.` and is
+ *      correctly seen as two sentences.
  *   2. Cap at MAX_SENTENCES.  Voice output should never exceed 3 sentences by
  *      default.  The user can ask "tell me more" for the rest.
- *   3. Hard-cap at MAX_CHARS as a safety net.
- *   4. Normalise whitespace.
+ *   3. Hard-cap at MAX_CHARS as a safety net, preferring the last sentence
+ *      boundary inside the limit when one is available past MAX_CHARS / 2.
+ *
+ * The whitespace collapse on step 1 matters: stripping a divider line leaves a
+ * bare newline, and a bare `\n` between two sentences would otherwise get
+ * normalised but is already handled here.  Tests exercise the order — if you
+ * move the steps around, move the tests first.
  *
  * These are enforced in the runtime, not just in the system prompt, so they
  * hold even if the LLM ignores the instructions.

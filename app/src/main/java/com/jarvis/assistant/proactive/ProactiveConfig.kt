@@ -55,7 +55,12 @@ package com.jarvis.assistant.proactive
  *                                this window the action is counted as ignored.
  */
 data class ProactiveConfig(
-    val pollingIntervalMs: Long           = 10_000L,
+    /**
+     * How often the engine polls for new events.
+     * Matches [minGlobalGapMs] — polling faster than the global gap can't
+     * surface anything extra and just burns battery on CPU wakeups.
+     */
+    val pollingIntervalMs: Long           = 60_000L,
     val passiveThreshold: Float           = 0.55f,
     val activeThreshold: Float            = 0.80f,
     val cooldownLowBatteryMs: Long        = 10 * 60 * 1000L,

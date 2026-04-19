@@ -76,9 +76,6 @@
     <!-- ConnectivityManager.getActiveNetwork() / getNetworkCapabilities() -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Keep CPU alive while service is running -->
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-
     <!-- Audio ducking / routing -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
@@ -130,7 +127,9 @@
     ═══════════════════════════════════════════ -->
     <application
         android:name=".JarvisApp"
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -201,13 +200,14 @@
         <!-- ─── Reminder alarm receiver ─── -->
         <!--
              Receives AlarmManager broadcasts when a scheduled reminder or timer
-             is due.  Must be exported on API 34+ (Android 14) because the OS
-             delivers the alarm from outside the app process.
+             is due.  ReminderScheduler builds the PendingIntent with an explicit
+             ComponentName, so the alarm is delivered *in-process* and no other
+             app can target this receiver — exported=false is correct and secure.
         -->
         <receiver
             android:name=".reminders.ReminderAlarmReceiver"
             android:enabled="true"
-            android:exported="true" />
+            android:exported="false" />
 
         <!-- ─── Location reminder receiver ─── -->
         <!--

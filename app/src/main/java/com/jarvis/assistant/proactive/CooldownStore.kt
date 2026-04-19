@@ -15,7 +15,12 @@ import java.util.concurrent.ConcurrentHashMap
  * surfacing per app restart is an acceptable trade-off versus the complexity
  * of persisting to disk.
  */
-class CooldownStore {
+class CooldownStore(
+    /** Soft cap on the per-key maps so dynamic dedupe keys don't accumulate forever. */
+    private val maxKeys: Int = 512,
+    /** Entries untouched for this long are eligible for eviction. */
+    private val maxAgeMs: Long = 24 * 60 * 60 * 1000L
+) {
 
     private val lastSurfacedMs = ConcurrentHashMap<String, Long>()
     private val ignoreCountByKey = ConcurrentHashMap<String, Int>()
@@ -70,6 +75,21 @@ class CooldownStore {
         val now = System.currentTimeMillis()
         lastSurfacedMs[dedupeKey] = now
         lastGlobalSurfaceMs = now
+        if (lastSurfacedMs.size > maxKeys) evictStale(now)
+    }
+
+    /**
+     * Drop per-key entries older than [maxAgeMs].  Called opportunistically
+     * from [markSurfaced] when the map grows past [maxKeys] so dynamic dedupe
+     * keys (minute buckets, notification timestamps) don't accumulate for the
+     * lifetime of the process.
+     */
+    private fun evictStale(now: Long) {
+        val cutoff = now - maxAgeMs
+        lastSurfacedMs.entries.removeAll { it.value < cutoff }
+        // An ignore count without a surfacing record is meaningless once the
+        // surfacing itself has been evicted — shed those too.
+        ignoreCountByKey.keys.removeAll { it !in lastSurfacedMs }
     }
 
     /**

@@ -8,6 +8,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * ProactiveEngine — the main coordinator for the proactive alert system.
@@ -88,6 +90,7 @@ class ProactiveEngine(
      */
     private data class PendingVerdict(val dedupeKey: String, val dispatchedAt: Long)
     @Volatile private var pendingVerdict: PendingVerdict? = null
+    private val verdictLock = Mutex()
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -171,14 +174,14 @@ class ProactiveEngine(
      * user accepted (interacted after it) or ignored it (no interaction within
      * the configured window) and update the [CooldownStore] accordingly.
      */
-    private fun resolvePendingVerdict(snapshot: ContextSnapshot) {
-        val verdict = pendingVerdict ?: return
+    private suspend fun resolvePendingVerdict(snapshot: ContextSnapshot) = verdictLock.withLock {
+        val verdict = pendingVerdict ?: return@withLock
         val lastUser = snapshot.lastUserInteractionTimeMillis
         if (lastUser != null && lastUser > verdict.dispatchedAt) {
             cooldownStore.markAccepted(verdict.dedupeKey)
             Log.d(TAG, "Accepted verdict for ${verdict.dedupeKey}")
             pendingVerdict = null
-            return
+            return@withLock
         }
         val age = snapshot.currentTimeMillis - verdict.dispatchedAt
         if (age >= config.ignoreCheckDelayMs) {
@@ -249,14 +252,16 @@ class ProactiveEngine(
         // didn't engage with it — otherwise the accept branch of
         // resolvePendingVerdict would have already cleared it.  Count it as
         // ignored before overwriting so adaptation isn't lost.
-        pendingVerdict?.let { prior ->
-            if (prior.dedupeKey != key) {
-                cooldownStore.markIgnored(prior.dedupeKey)
-                Log.d(TAG, "Displaced verdict ignored: ${prior.dedupeKey}")
+        verdictLock.withLock {
+            pendingVerdict?.let { prior ->
+                if (prior.dedupeKey != key) {
+                    cooldownStore.markIgnored(prior.dedupeKey)
+                    Log.d(TAG, "Displaced verdict ignored: ${prior.dedupeKey}")
+                }
             }
+            cooldownStore.markSurfaced(key)
+            pendingVerdict = PendingVerdict(key, System.currentTimeMillis())
         }
-        cooldownStore.markSurfaced(key)
-        pendingVerdict = PendingVerdict(key, System.currentTimeMillis())
 
         try {
             dispatcher.dispatch(action)

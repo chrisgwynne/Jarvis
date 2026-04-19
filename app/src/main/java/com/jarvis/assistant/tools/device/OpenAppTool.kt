@@ -150,14 +150,13 @@ class OpenAppTool(
         val label      : String
     )
 
-    companion object {
-        /**
-         * Cross-turn state for "Did you mean …?" confirmation flow.  Volatile
-         * because match()/execute() may be called from different coroutine
-         * dispatchers.  Scoped to the process — if Jarvis is killed between
-         * turns the pending match is dropped, which is the right behaviour.
-         */
-        @Volatile
-        private var pendingConfirmation: Pending? = null
-    }
+    /**
+     * Cross-turn state for "Did you mean …?" confirmation flow.  Volatile
+     * because match()/execute() may be called from different coroutine
+     * dispatchers.  Scoped to the instance — the runtime holds a single
+     * OpenAppTool so process-lifetime semantics are preserved, while tests
+     * and any future per-session instances no longer share state.
+     */
+    @Volatile
+    private var pendingConfirmation: Pending? = null
 }

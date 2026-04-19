@@ -19,6 +19,15 @@ class ConversationStore(private val context: Context) : CompressibleStore {
         // pairs are repeatedly compressed and appended across a long session.
         private const val ROLLING_CONTEXT_MAX_CHARS = 4_000
 
+        /**
+         * Approximate token cap for the live history window.  Token counting
+         * isn't exact without a tokenizer but chars / 4 is a common English
+         * estimate for OpenAI-family tokenisation and keeps the window sane
+         * when one turn (e.g. a tool result dump) is unusually long.
+         */
+        private const val MAX_HISTORY_TOKENS_APPROX = 2_000
+        private const val CHARS_PER_TOKEN_APPROX    = 4
+
         /** Delegates to [DefaultSystemPrompt.build] — retained for backwards compat. */
         fun buildSystemPrompt(context: Context): String = DefaultSystemPrompt.build(context)
     }
@@ -36,8 +45,26 @@ class ConversationStore(private val context: Context) : CompressibleStore {
 
     fun addMessage(role: String, content: String) = synchronized(lock) {
         history.addLast(Message(role = role, content = content))
+        enforceWindow()
+    }
+
+    /**
+     * Keep the live history inside both a turn-pair cap and an approximate
+     * token cap.  A single oversized turn (tool result, long web summary)
+     * used to push only one message out at a time; honour the byte budget
+     * too so context bloat is bounded even with small message counts.
+     */
+    private fun enforceWindow() {
         val maxMessages = MAX_HISTORY_PAIRS * 2
         while (history.size > maxMessages) history.removeFirst()
+        // Char-based approximation of token budget.  Drop from the front
+        // until the remaining window fits; always keep at least the last
+        // pair so the immediate turn isn't evicted.
+        val tokenBudgetChars = MAX_HISTORY_TOKENS_APPROX * CHARS_PER_TOKEN_APPROX
+        var totalChars = history.sumOf { it.content.length }
+        while (totalChars > tokenBudgetChars && history.size > 2) {
+            totalChars -= history.removeFirst().content.length
+        }
     }
 
     fun getContextMessages(): List<Message> = synchronized(lock) {

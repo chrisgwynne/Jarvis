@@ -138,7 +138,7 @@
     ═══════════════════════════════════════════ -->
     <application
         android:name=".JarvisApp"
-        android:allowBackup="false"
+        android:allowBackup="true"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"

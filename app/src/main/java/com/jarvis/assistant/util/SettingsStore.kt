@@ -69,6 +69,19 @@ class SettingsStore(context: Context) {
         const val KEY_HA_BASE_URL        = "ha_base_url"
         const val KEY_HA_API_TOKEN       = "ha_api_token"
 
+        // ── Cloud sync (optional, opt-in) ────────────────────────────────────
+        // Firebase credentials entered by the user at runtime. With all four
+        // populated, CloudSyncService can initialise a FirebaseApp without
+        // google-services.json being baked in at build time.
+        const val KEY_CLOUD_SYNC_ENABLED   = "cloud_sync_enabled"
+        const val KEY_FIREBASE_API_KEY     = "firebase_api_key"
+        const val KEY_FIREBASE_APP_ID      = "firebase_app_id"
+        const val KEY_FIREBASE_PROJECT_ID  = "firebase_project_id"
+        const val KEY_FIREBASE_DB_URL      = "firebase_db_url"
+        const val KEY_CLOUD_SYNC_EMAIL     = "cloud_sync_email"
+        /** Timestamp of the most recent successful two-way sync, 0 if never. */
+        const val KEY_CLOUD_SYNC_LAST_MS   = "cloud_sync_last_ms"
+
         // ── Safety / lifecycle toggles ────────────────────────────────────────
         /** Kill switch: when true, ActionPolicyGate denies every tool execution. */
         const val KEY_TOOL_EXECUTION_DISABLED = "tool_execution_disabled"
@@ -309,6 +322,45 @@ class SettingsStore(context: Context) {
     var haApiToken: String
         get() = prefs.getString(KEY_HA_API_TOKEN, "") ?: ""
         set(v) = prefs.edit().putString(KEY_HA_API_TOKEN, v).apply()
+
+    // ── Cloud sync (Firebase, optional) ────────────────────────────────────
+    //
+    // Everything here is user-entered. The CloudSyncService only initialises
+    // Firebase when all four credentials are non-blank and cloudSyncEnabled
+    // is true, so a fresh install does nothing until the user opts in.
+
+    var cloudSyncEnabled: Boolean
+        get() = prefs.getBoolean(KEY_CLOUD_SYNC_ENABLED, false)
+        set(v) = prefs.edit().putBoolean(KEY_CLOUD_SYNC_ENABLED, v).apply()
+
+    var firebaseApiKey: String
+        get() = prefs.getString(KEY_FIREBASE_API_KEY, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_FIREBASE_API_KEY, v).apply()
+
+    var firebaseAppId: String
+        get() = prefs.getString(KEY_FIREBASE_APP_ID, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_FIREBASE_APP_ID, v).apply()
+
+    var firebaseProjectId: String
+        get() = prefs.getString(KEY_FIREBASE_PROJECT_ID, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_FIREBASE_PROJECT_ID, v).apply()
+
+    var firebaseDbUrl: String
+        get() = prefs.getString(KEY_FIREBASE_DB_URL, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_FIREBASE_DB_URL, v).apply()
+
+    var cloudSyncEmail: String
+        get() = prefs.getString(KEY_CLOUD_SYNC_EMAIL, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_CLOUD_SYNC_EMAIL, v).apply()
+
+    var cloudSyncLastMs: Long
+        get() = prefs.getLong(KEY_CLOUD_SYNC_LAST_MS, 0L)
+        set(v) = prefs.edit().putLong(KEY_CLOUD_SYNC_LAST_MS, v).apply()
+
+    /** All four Firebase credentials present and non-blank. */
+    fun firebaseConfigured(): Boolean =
+        firebaseApiKey.isNotBlank() && firebaseAppId.isNotBlank() &&
+            firebaseProjectId.isNotBlank()
 
     // ── Safety / lifecycle ────────────────────────────────────────────────
 

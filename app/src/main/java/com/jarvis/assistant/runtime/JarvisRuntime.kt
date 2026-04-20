@@ -317,6 +317,17 @@ class JarvisRuntime(
             com.jarvis.assistant.memory.db.JarvisDatabase.getInstance(context).expectationDao()
         )
     }
+    // Optional cloud sync (Firebase). No-op unless the user has opted in
+    // and entered Firebase credentials in Settings.
+    private val cloudSyncService by lazy {
+        com.jarvis.assistant.core.sync.CloudSyncService(
+            context = context,
+            settings = settings,
+            memoryFactDao = com.jarvis.assistant.memory.db.JarvisDatabase.getInstance(context).memoryFactDao(),
+            savedRoutineDao = com.jarvis.assistant.memory.db.JarvisDatabase.getInstance(context).savedRoutineDao(),
+        )
+    }
+
     // Continuous-tick provider; subscribes to EventBus on start.
     // Built lazily so it captures proactiveEngine after initialize().
     private val agentContextProvider by lazy {
@@ -613,6 +624,7 @@ class JarvisRuntime(
         routineSynthesizer.attach()
         expectationStore.attach()
         agentContextProvider.attach()
+        cloudSyncService.start()
 
         proactiveEngine.start()       // Proactive awareness polling
         convProactiveEngine.start()   // Conversational follow-up polling
@@ -834,6 +846,7 @@ class JarvisRuntime(
         toolRegistry.release()
         bluetoothSco.release()   // Phase 4: full teardown
         audioFocus.abandonFocus() // Phase 5
+        cloudSyncService.stop()
         agentContextProvider.detach()
         expectationStore.detach()
         routineSynthesizer.detach()

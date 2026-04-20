@@ -122,6 +122,16 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.4.0")
     implementation("androidx.camera:camera-lifecycle:1.4.0")
 
+    // Firebase — optional cloud sync. Initialised at RUNTIME via FirebaseOptions
+    // read from SettingsStore, so the google-services plugin is NOT applied and
+    // google-services.json is NOT required at build time. Users who never sign
+    // in pay for the dependency footprint only (~1.5 MB).
+    implementation(platform("com.google.firebase:firebase-bom:33.5.1"))
+    implementation("com.google.firebase:firebase-auth-ktx")
+    implementation("com.google.firebase:firebase-firestore-ktx")
+    // Bridges Firebase Task<T> → coroutine .await()
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
+
     // Unit tests
     testImplementation(libs.junit)
     testImplementation(libs.mockito.kotlin)

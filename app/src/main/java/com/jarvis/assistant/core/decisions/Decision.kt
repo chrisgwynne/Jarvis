@@ -1,5 +1,7 @@
 package com.jarvis.assistant.core.decisions
 
+import com.jarvis.assistant.core.situations.SituationType
+
 /**
  * Decision — the unified vocabulary that both pipelines speak.
  *
@@ -63,6 +65,16 @@ data class DecisionTrace(
     val classifiers: List<String> = emptyList(),
     val suppressionReason: SuppressionReason? = null,
     val notes: String? = null,
+    /** Top active situation at the moment of the decision, if any.
+     *  Populated when the proactive tick ran the situation evaluator. */
+    val situationType: SituationType? = null,
+    /** Active goal the decision was advancing, if any. */
+    val goalId: Long? = null,
+    /** Plan id when the decision led to a multi-step execution. */
+    val planId: String? = null,
+    /** Outcome id if an outcome was recorded as part of this decision (rare —
+     *  most outcomes arrive later when the verdict resolves). */
+    val outcomeId: Long? = null,
 ) {
     enum class Source { REACTIVE, PROACTIVE }
 }

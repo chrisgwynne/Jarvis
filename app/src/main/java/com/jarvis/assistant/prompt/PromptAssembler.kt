@@ -65,6 +65,8 @@ class PromptAssembler(
         speakerContext      : SpeakerSessionContext? = null,
         presence            : Presence? = null,
         social              : SocialContext? = null,
+        situationSummary    : String? = null,
+        activeGoalTitle     : String? = null,
     ): List<Message> {
         val ctx = contextEngine.build()
 
@@ -88,6 +90,7 @@ class PromptAssembler(
             threadsFragment   = threadsFrag,
             expectationFragment = expectationFrag,
             socialFragment    = social?.toPromptFragment().orEmpty(),
+            situationFragment = buildSituationFragment(situationSummary, activeGoalTitle),
         )
 
         return buildList {
@@ -123,6 +126,7 @@ class PromptAssembler(
         threadsFragment  : String = "",
         expectationFragment: String = "",
         socialFragment   : String = "",
+        situationFragment: String = "",
     ): String = buildString {
 
         append("""
@@ -244,6 +248,12 @@ State time and date confidently. Never disclaim real-time access or knowledge cu
             append(socialFragment)
         }
 
+        // Situation + goal — single short line, never cited explicitly by the LLM.
+        if (situationFragment.isNotBlank()) {
+            append("\n\n")
+            append(situationFragment)
+        }
+
         // Structured user profile — only when speaker is identified at high confidence
         if (profileFragment.isNotBlank()) {
             append("\n\n")
@@ -302,6 +312,22 @@ State time and date confidently. Never disclaim real-time access or knowledge cu
     private fun shouldInjectProfile(ctx: SpeakerSessionContext?): Boolean {
         if (ctx == null) return true  // no recognition running — original behaviour
         return ctx.result.band == SpeakerIdentityResult.ConfidenceBand.HIGH_CONFIDENCE_MATCH
+    }
+
+    /**
+     * Single-line situation / goal fragment. Kept short because presence
+     * already covers mid-conversation / late-night tone — this layer only
+     * adds a read of what the system thinks is currently unfolding.
+     */
+    private fun buildSituationFragment(
+        situationSummary: String?,
+        activeGoalTitle: String?,
+    ): String {
+        val parts = mutableListOf<String>()
+        if (!situationSummary.isNullOrBlank()) parts += "Situation: $situationSummary"
+        if (!activeGoalTitle.isNullOrBlank())  parts += "Goal: $activeGoalTitle"
+        if (parts.isEmpty()) return ""
+        return parts.joinToString(" · ")
     }
 
     /** Inline note directing the LLM not to use a specific name when unsure. */

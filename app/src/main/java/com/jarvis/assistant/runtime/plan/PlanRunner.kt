@@ -2,6 +2,7 @@ package com.jarvis.assistant.runtime.plan
 
 import android.content.Context
 import android.util.Log
+import com.jarvis.assistant.core.outcomes.OutcomeRecorder
 import com.jarvis.assistant.llm.LlmResult
 import com.jarvis.assistant.runtime.reference.LastActionStore
 import com.jarvis.assistant.tools.framework.Tool
@@ -35,7 +36,11 @@ class PlanRunner(
     private val journalDao: ActionJournalDao,
     /** Window used by [undoLastPlan] to refuse undoing very old plans. */
     private val undoMaxAgeMs: Long = 5 * 60 * 1000L,
-    private val lastActionStore: LastActionStore? = null
+    private val lastActionStore: LastActionStore? = null,
+    /** Optional sink for plan-level outcomes. When supplied, every run
+     *  emits PLAN_COMPLETED / PLAN_HALTED through the recorder so the
+     *  learning loop closes back on the originating [Plan.originatingGoalId]. */
+    private val outcomeRecorder: OutcomeRecorder? = null,
 ) {
 
     companion object {
@@ -114,13 +119,15 @@ class PlanRunner(
      */
     suspend fun execute(plan: Plan): Resolution {
         var anyFailed = false
+        val planContext = PlanContext()
         for (step in plan.steps) {
             val tool = registry.findByName(step.toolName)
                 ?: run {
                     journal(plan, step, JournalEntry.STATUS_SKIPPED, "")
                     continue
                 }
-            val argsMap = parseArgs(step.argsJson)
+            val resolvedArgs = PlanAdapter.resolve(step.argsJson, planContext)
+            val argsMap = parseArgs(resolvedArgs)
             val input   = ToolInput(plan.originatingTranscript, argsMap)
             val journalId = journal(plan, step, JournalEntry.STATUS_PENDING, "")
 
@@ -129,6 +136,9 @@ class PlanRunner(
             when (result) {
                 is ToolResult.Success -> {
                     if (result.rawData.isNotEmpty()) journalDao.updatePayload(journalId, result.rawData)
+                    if (step.resultCapture != null && result.rawData.isNotEmpty()) {
+                        planContext.capture(step.resultCapture, result.rawData)
+                    }
                     journalDao.setStatus(journalId, JournalEntry.STATUS_SUCCEEDED, now)
                 }
                 is ToolResult.Failure -> {
@@ -140,17 +150,19 @@ class PlanRunner(
                         val skipId = journal(plan, skip, JournalEntry.STATUS_SKIPPED, "")
                         journalDao.setStatus(skipId, JournalEntry.STATUS_SKIPPED, now)
                     }
-                    if (plan.autoRollbackOnHalt) {
+                    val rollbackSuffix = if (plan.autoRollbackOnHalt) {
                         val rollback = rollbackHaltedPlan(plan.id)
-                        val suffix = (rollback as? UndoResult.Done)?.spoken?.let { " — $it" } ?: ""
-                        return Resolution.Halted(
-                            spoken = "Stopped at ${step.shortLabel}: ${result.spokenFeedback}$suffix",
-                            planId = plan.id,
-                        )
-                    }
+                        (rollback as? UndoResult.Done)?.spoken?.let { " — $it" } ?: ""
+                    } else ""
+                    outcomeRecorder?.recordPlanOutcome(
+                        planId = plan.id,
+                        goalId = plan.originatingGoalId,
+                        completed = false,
+                        detail = "halted at ${step.shortLabel}: ${result.spokenFeedback}",
+                    )
                     return Resolution.Halted(
-                        spoken = "Stopped at ${step.shortLabel}: ${result.spokenFeedback}",
-                        planId = plan.id
+                        spoken = "Stopped at ${step.shortLabel}: ${result.spokenFeedback}$rollbackSuffix",
+                        planId = plan.id,
                     )
                 }
                 else -> { /* Augmented / NotMatched are unexpected here */ }
@@ -168,6 +180,12 @@ class PlanRunner(
                 reversible            = plan.allReversible
             )
         }
+        outcomeRecorder?.recordPlanOutcome(
+            planId = plan.id,
+            goalId = plan.originatingGoalId,
+            completed = !anyFailed,
+            detail = if (anyFailed) "completed with failed steps" else "completed",
+        )
 
         return Resolution.Ran(
             spoken    = "Done.",

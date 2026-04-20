@@ -166,12 +166,15 @@ class MemoryWriter(
     // ── Maintenance ───────────────────────────────────────────────────────────
 
     suspend fun prune() {
-        val thirtyDaysAgo = System.currentTimeMillis() - 30L * 24 * 3600 * 1000
-        val ninetyDaysAgo = System.currentTimeMillis() - 90L * 24 * 3600 * 1000
+        // Retention: keep raw turns + session metadata for a year, semantic
+        // memories for two years. MemoryRetriever already weights by recency
+        // so old turns don't dominate; the extra window is pure optionality.
+        val oneYearAgo = System.currentTimeMillis() - 365L * 24 * 3600 * 1000
+        val twoYearsAgo = System.currentTimeMillis() - 730L * 24 * 3600 * 1000
 
-        conversationDao.pruneTurnsOlderThan(thirtyDaysAgo)
-        conversationDao.pruneSessionsOlderThan(thirtyDaysAgo)
-        memoryDao.pruneOlderThan(ninetyDaysAgo)
+        conversationDao.pruneTurnsOlderThan(oneYearAgo)
+        conversationDao.pruneSessionsOlderThan(oneYearAgo)
+        memoryDao.pruneOlderThan(twoYearsAgo)
 
         Log.d(TAG, "Pruning complete")
     }

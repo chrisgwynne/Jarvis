@@ -73,7 +73,39 @@ class ProactiveEngine(
      * restarts.  JarvisRuntime supplies the real DAO; tests leave this null
      * for a pure in-memory store.
      */
-    private val cooldownDao: ProactiveCooldownDao? = null
+    private val cooldownDao: ProactiveCooldownDao? = null,
+    /**
+     * Optional shared cooldown store. When provided the engine uses it for
+     * scoring + decision gating; the ledger passed alongside must wrap the
+     * same instance. When null, a fresh store is constructed from [cooldownDao].
+     */
+    sharedCooldownStore: CooldownStore? = null,
+    /**
+     * Optional shared action ledger. When provided the engine uses it for
+     * markSurfaced / markIgnored / markAccepted so reactive tool calls and
+     * proactive dispatches share one cooldown view. When null, a fresh
+     * ledger is created around [cooldownStore] with no cross-path sharing.
+     */
+    actionLedger: com.jarvis.assistant.core.decisions.ActionLedger? = null,
+    /**
+     * Optional trace store. When provided every tick appends one row
+     * describing candidates, gate outcome, and dispatched action. Fire-
+     * and-forget: never blocks the tick.
+     */
+    private val traceStore: com.jarvis.assistant.core.telemetry.DecisionTraceStore? = null,
+    /**
+     * Optional recent-event buffer. When supplied, each tick hands its
+     * snapshot to the trigger engine so composite triggers can reason
+     * about cross-stream history (e.g. "SSID changed 30s ago").
+     */
+    private val recentEventBuffer: com.jarvis.assistant.core.events.RecentEventBuffer? = null,
+    /**
+     * Optional known-SSID store so [UnfamiliarSsidTrigger] can be
+     * registered in the trigger engine. Null = trigger skipped.
+     */
+    knownSsidStore: com.jarvis.assistant.core.learning.KnownSsidStore? = null,
+    /** Optional routine-pattern detector whose proposals are surfaced via RoutineProposalTrigger. */
+    routineSynthesizer: com.jarvis.assistant.core.routines.RoutineSynthesizer? = null,
 ) {
 
     companion object {
@@ -82,9 +114,14 @@ class ProactiveEngine(
 
     // ── Internals ─────────────────────────────────────────────────────────────
 
-    private val cooldownStore   = CooldownStore(dao = cooldownDao)
-    private val eventGenerator  = EventGenerator(config)
-    private val eventScorer     = EventScorer(config, cooldownStore)
+    private val cooldownStore   = sharedCooldownStore ?: CooldownStore(dao = cooldownDao)
+    val ledger: com.jarvis.assistant.core.decisions.ActionLedger =
+        actionLedger ?: com.jarvis.assistant.core.decisions.ActionLedger(cooldownStore)
+    private val eventGenerator  = EventGenerator(
+        config = config,
+        triggerEngine = com.jarvis.assistant.core.decisions.triggers.DefaultTriggers.engine(config, knownSsidStore, routineSynthesizer),
+    )
+    private val eventScorer     = EventScorer(config, cooldownStore, ledger)
     private val decisionEngine  = DecisionEngine(config, cooldownStore)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -97,7 +134,33 @@ class ProactiveEngine(
      * action counts as ignored and future effective cooldowns for [dedupeKey]
      * stretch by [ProactiveConfig.ignoreEscalationFactor].
      */
-    private data class PendingVerdict(val dedupeKey: String, val dispatchedAt: Long)
+    private data class PendingVerdict(
+        val dedupeKey: String,
+        val dispatchedAt: Long,
+        val actionClass: String?,
+    )
+
+    /**
+     * Candidate held for later delivery after the presence gate suppressed
+     * it but nothing else would have. Re-tried on subsequent ticks; dropped
+     * after [presenceDeferralTtlMs] so stale queued items never surface.
+     */
+    private data class DeferredCandidate(
+        val event: ProactiveEvent,
+        val queuedAt: Long,
+    )
+    private val deferredQueue = ArrayDeque<DeferredCandidate>()
+    private val deferredLock = Any()
+    private val presenceDeferralTtlMs: Long = 10 * 60 * 1000L
+
+    /**
+     * Last snapshot built by [tick], exposed so [com.jarvis.assistant.core
+     * .context.AgentContextProvider] and other consumers can read the
+     * most recent proactive view without rebuilding it themselves.
+     * Null until the first tick completes.
+     */
+    @Volatile var lastSnapshot: ContextSnapshot? = null
+        private set
     @Volatile private var pendingVerdict: PendingVerdict? = null
     private val verdictLock = Mutex()
 
@@ -164,25 +227,87 @@ class ProactiveEngine(
      */
     private suspend fun tick() {
         val snapshot  = buildSnapshot()
+        lastSnapshot = snapshot
 
         // Resolve any pending ignore/accept verdict from a previous dispatch.
         resolvePendingVerdict(snapshot)
 
-        val events    = eventGenerator.generate(snapshot)
+        val recent = recentEventBuffer?.snapshot(maxAgeMs = 5 * 60_000L) ?: emptyList()
+        val generated = eventGenerator.generate(snapshot, recent)
+        val deferred = drainDeferred(snapshot.currentTimeMillis)
+        val events = if (deferred.isEmpty()) generated else generated + deferred
         ProactiveMetrics.increment(ProactiveMetrics.Counter.EVENTS_GENERATED, events.size.toLong())
 
         if (events.isEmpty()) {
             Log.v(TAG, "tick: no events generated")
+            traceStore?.record(outcome = "no_events")
             return
         }
 
         val scored    = eventScorer.scoreAll(events, snapshot)
         val action    = decisionEngine.decide(scored, snapshot)
+        decisionEngine.lastDeferredByPresence?.let { enqueueDeferred(it.event) }
+
+        val outcome = when (action) {
+            is ProactiveAction.SpeakAction -> "speak"
+            is ProactiveAction.PassiveAction -> "passive"
+            ProactiveAction.NoAction -> "suppressed"
+        }
+        val dispatchedKey = when (action) {
+            is ProactiveAction.SpeakAction -> action.dedupeKey
+            is ProactiveAction.PassiveAction -> action.dedupeKey
+            ProactiveAction.NoAction -> null
+        }
+        traceStore?.record(
+            outcome = outcome,
+            dispatchedDedupeKey = dispatchedKey,
+            snapshotJson = snapshotSummary(snapshot),
+            candidatesJson = events.joinToString(prefix = "[", postfix = "]") { candidateSummary(it) },
+        )
 
         if (action !is ProactiveAction.NoAction) {
             ProactiveMetrics.increment(ProactiveMetrics.Counter.ACTIONS_DISPATCHED)
             dispatch(action)
         }
+    }
+
+    /**
+     * Pull every deferred candidate whose queued age is still within TTL.
+     * Drops expired entries. Called at the top of each tick so the fresh
+     * [EventGenerator] output is merged with re-attempted deferrals.
+     */
+    private fun drainDeferred(now: Long): List<ProactiveEvent> = synchronized(deferredLock) {
+        val cutoff = now - presenceDeferralTtlMs
+        while (deferredQueue.isNotEmpty() && deferredQueue.peekFirst().queuedAt < cutoff) {
+            deferredQueue.removeFirst()
+        }
+        if (deferredQueue.isEmpty()) emptyList() else deferredQueue.map { it.event }.also { deferredQueue.clear() }
+    }
+
+    private fun enqueueDeferred(event: ProactiveEvent) = synchronized(deferredLock) {
+        if (deferredQueue.any { it.event.dedupeKey == event.dedupeKey }) return@synchronized
+        deferredQueue.addLast(DeferredCandidate(event, System.currentTimeMillis()))
+        while (deferredQueue.size > 8) deferredQueue.removeFirst()
+    }
+
+    private fun snapshotSummary(s: ContextSnapshot): String = buildString {
+        append('{')
+        append("\"battery\":").append(s.batteryLevel).append(',')
+        append("\"charging\":").append(s.isCharging).append(',')
+        append("\"driving\":").append(s.isDriving).append(',')
+        append("\"speaking\":").append(s.isJarvisSpeaking).append(',')
+        append("\"listening\":").append(s.isJarvisListening).append(',')
+        append("\"unread\":").append(s.unreadNotificationCount).append(',')
+        append("\"missed\":").append(s.missedCallsCount).append(',')
+        append("\"meetings_today\":").append(s.meetingsTodayCount)
+        append('}')
+    }
+
+    private fun candidateSummary(e: ProactiveEvent): String = buildString {
+        append("{\"type\":\"").append(e.type.name).append("\",")
+        append("\"urgency\":").append(e.urgency).append(',')
+        append("\"relevance\":").append(e.relevance).append(',')
+        append("\"dedupe\":\"").append(e.dedupeKey).append("\"}")
     }
 
     /**
@@ -194,7 +319,7 @@ class ProactiveEngine(
         val verdict = pendingVerdict ?: return@withLock
         val lastUser = snapshot.lastUserInteractionTimeMillis
         if (lastUser != null && lastUser > verdict.dispatchedAt) {
-            cooldownStore.markAccepted(verdict.dedupeKey)
+            ledger.recordVerdict(verdict.dedupeKey, accepted = true, actionClass = verdict.actionClass)
             Log.d(TAG, "Accepted verdict for ${verdict.dedupeKey}")
             ProactiveMetrics.increment(ProactiveMetrics.Counter.VERDICT_ACCEPTED)
             pendingVerdict = null
@@ -202,11 +327,11 @@ class ProactiveEngine(
         }
         val age = snapshot.currentTimeMillis - verdict.dispatchedAt
         if (age >= config.ignoreCheckDelayMs) {
-            cooldownStore.markIgnored(verdict.dedupeKey)
+            ledger.recordVerdict(verdict.dedupeKey, accepted = false, actionClass = verdict.actionClass)
             Log.d(
                 TAG,
                 "Ignored verdict for ${verdict.dedupeKey} " +
-                "(count=${cooldownStore.ignoreCount(verdict.dedupeKey)})"
+                "(count=${ledger.ignoreCount(verdict.dedupeKey)})"
             )
             ProactiveMetrics.increment(ProactiveMetrics.Counter.VERDICT_IGNORED)
             pendingVerdict = null
@@ -279,16 +404,21 @@ class ProactiveEngine(
         // didn't engage with it — otherwise the accept branch of
         // resolvePendingVerdict would have already cleared it.  Count it as
         // ignored before overwriting so adaptation isn't lost.
+        val actionClass = when (action) {
+            is ProactiveAction.SpeakAction -> action.sourceType.actionClassKey()
+            is ProactiveAction.PassiveAction -> action.sourceType.actionClassKey()
+            ProactiveAction.NoAction -> null
+        }
         verdictLock.withLock {
             pendingVerdict?.let { prior ->
                 if (prior.dedupeKey != key) {
-                    cooldownStore.markIgnored(prior.dedupeKey)
+                    ledger.recordVerdict(prior.dedupeKey, accepted = false, actionClass = prior.actionClass)
                     Log.d(TAG, "Displaced verdict ignored: ${prior.dedupeKey}")
                     ProactiveMetrics.increment(ProactiveMetrics.Counter.VERDICT_DISPLACED)
                 }
             }
-            cooldownStore.markSurfaced(key)
-            pendingVerdict = PendingVerdict(key, System.currentTimeMillis())
+            ledger.recordProactiveDispatch(key, actionClass)
+            pendingVerdict = PendingVerdict(key, System.currentTimeMillis(), actionClass)
         }
 
         try {

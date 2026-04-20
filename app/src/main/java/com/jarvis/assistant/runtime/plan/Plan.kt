@@ -26,6 +26,13 @@ data class Plan(
     val allReversible: Boolean,
     /** Original user transcript — kept for the journal so undo can describe what was undone. */
     val originatingTranscript: String,
+    /**
+     * When true, [PlanRunner.execute] automatically rolls back every step
+     * that succeeded if a later step halts the plan. Defaults to true only
+     * when every step is reversible so a halted mixed-plan doesn't silently
+     * undo the reversible prefix while leaving an irreversible one in place.
+     */
+    val autoRollbackOnHalt: Boolean = allReversible,
     val createdAtMs: Long = System.currentTimeMillis()
 )
 

@@ -128,12 +128,7 @@ class PlanRunner(
             val now = System.currentTimeMillis()
             when (result) {
                 is ToolResult.Success -> {
-                    // The tool's rawData would ideally be persisted as the
-                    // undoPayload here, but the current ActionJournalDao only
-                    // exposes status updates — the row already carries the
-                    // empty payload from journal().  When tools that need
-                    // payload-driven undo land, add an updatePayload() query
-                    // and write result.rawData back here.
+                    if (result.rawData.isNotEmpty()) journalDao.updatePayload(journalId, result.rawData)
                     journalDao.setStatus(journalId, JournalEntry.STATUS_SUCCEEDED, now)
                 }
                 is ToolResult.Failure -> {
@@ -144,6 +139,14 @@ class PlanRunner(
                     for (skip in plan.steps.drop(step.ordinal + 1)) {
                         val skipId = journal(plan, skip, JournalEntry.STATUS_SKIPPED, "")
                         journalDao.setStatus(skipId, JournalEntry.STATUS_SKIPPED, now)
+                    }
+                    if (plan.autoRollbackOnHalt) {
+                        val rollback = rollbackHaltedPlan(plan.id)
+                        val suffix = (rollback as? UndoResult.Done)?.spoken?.let { " — $it" } ?: ""
+                        return Resolution.Halted(
+                            spoken = "Stopped at ${step.shortLabel}: ${result.spokenFeedback}$suffix",
+                            planId = plan.id,
+                        )
                     }
                     return Resolution.Halted(
                         spoken = "Stopped at ${step.shortLabel}: ${result.spokenFeedback}",
@@ -177,6 +180,47 @@ class PlanRunner(
     fun cancel(plan: Plan): Resolution.Cancelled {
         Log.d(TAG, "Plan ${plan.id} cancelled by user")
         return Resolution.Cancelled("Okay, scrapped it.")
+    }
+
+    /**
+     * Roll back a plan that halted partway. Walks every SUCCEEDED step of
+     * [planId] in reverse and calls [Tool.undo] on each reversible one.
+     * Used by the runtime after [Resolution.Halted] so the user can ask
+     * "roll that back" without the halt leaving partial state behind.
+     */
+    suspend fun rollbackHaltedPlan(planId: String): UndoResult {
+        val entries = journalDao.forPlan(planId)
+        if (entries.isEmpty()) return UndoResult.Nothing
+        var undone = 0
+        var skipped = 0
+        for (entry in entries.sortedByDescending { it.ordinal }) {
+            if (entry.status != JournalEntry.STATUS_SUCCEEDED) continue
+            val tool = registry.findByName(entry.toolName)
+            if (tool == null || !tool.isReversible) {
+                skipped++
+                continue
+            }
+            try {
+                val argsMap = parseArgs(entry.argsJson)
+                val result = tool.undo(ToolInput(entry.originatingTranscript, argsMap), entry.undoPayload)
+                if (result is ToolResult.Success) {
+                    journalDao.setStatus(entry.id, JournalEntry.STATUS_UNDONE)
+                    undone++
+                } else {
+                    skipped++
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "rollback undo() threw on ${entry.toolName}: ${e.message}")
+                skipped++
+            }
+        }
+        val spoken = when {
+            undone == 0 && skipped == 0 -> "Nothing to roll back."
+            undone == 0 -> "Couldn't undo any of it — those steps don't reverse."
+            skipped == 0 -> if (undone == 1) "Rolled back." else "Rolled $undone back."
+            else -> "Rolled back $undone — couldn't reverse $skipped."
+        }
+        return UndoResult.Done(spoken, undone, skipped)
     }
 
     /**

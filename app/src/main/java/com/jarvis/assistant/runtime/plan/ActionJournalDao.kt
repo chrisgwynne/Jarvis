@@ -16,6 +16,19 @@ interface ActionJournalDao {
     @Query("UPDATE action_journal SET status = :status WHERE id = :id")
     suspend fun setStatus(id: Long, status: String)
 
+    /** Update the undo payload for a journal row after [Tool.execute]. */
+    @Query("UPDATE action_journal SET undoPayload = :payload WHERE id = :id")
+    suspend fun updatePayload(id: Long, payload: String)
+
+    /** Most recent halted plan — used by rollback to reverse partial work. */
+    @Query("""
+        SELECT planId FROM action_journal
+        WHERE status = 'FAILED'
+        ORDER BY createdAtMs DESC
+        LIMIT 1
+    """)
+    suspend fun mostRecentFailedPlanId(): String?
+
     /** All steps for a single plan, in execution order. */
     @Query("SELECT * FROM action_journal WHERE planId = :planId ORDER BY ordinal ASC")
     suspend fun forPlan(planId: String): List<JournalEntry>

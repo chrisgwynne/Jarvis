@@ -2,6 +2,8 @@ package com.jarvis.assistant.runtime
 
 import android.content.Context
 import android.util.Log
+import com.jarvis.assistant.core.decisions.ActionLedger
+import com.jarvis.assistant.core.safety.ConfirmationGate
 import com.jarvis.assistant.core.state.DeviceStateStore
 import com.jarvis.assistant.core.state.JarvisState
 import com.jarvis.assistant.core.state.JarvisStateMachine
@@ -35,11 +37,38 @@ class ToolDispatcher(
      * tool invocation with no runtime restart.  Defaults to "never denied" so
      * tests and legacy callers don't need to plumb SettingsStore through.
      */
-    private val killSwitchProvider: () -> Boolean = { false }
+    private val killSwitchProvider: () -> Boolean = { false },
+    /**
+     * Supplies the shared action ledger at dispatch time. Lambda rather
+     * than direct injection so JarvisRuntime can construct the dispatcher
+     * before ProactiveEngine (which currently owns the ledger). Returns
+     * null until the ledger is wired — dispatcher then records nothing,
+     * which is the safe legacy behaviour.
+     */
+    private val actionLedgerProvider: () -> ActionLedger? = { null },
+    /**
+     * Optional confirmation gate. When supplied, destructive tools
+     * (RiskClass MEDIUM / HIGH) are intercepted before execute() — the
+     * dispatcher registers a pending confirmation with the gate and
+     * returns [DispatchResult.NeedsConfirmation] so the runtime can
+     * speak the prompt and await the user's next utterance.
+     */
+    private val confirmationGate: ConfirmationGate? = null,
+    /**
+     * Optional buffer that captures every successful tool execution so the
+     * user can later say "save that as a routine called X" and the
+     * [com.jarvis.assistant.tools.device.SaveRoutineTool] finds a sequence
+     * to persist.
+     */
+    private val recentToolCallBuffer: com.jarvis.assistant.core.routines.RecentToolCallBuffer? = null,
 ) {
 
     companion object {
         private const val TAG = "ToolDispatcher"
+        private val ROUTINE_TOOL_NAMES = setOf(
+            "save_routine", "run_routine", "list_routines", "delete_routine",
+            "undo_last_action", "repeat_last_action",
+        )
     }
 
     /**
@@ -58,6 +87,17 @@ class ToolDispatcher(
         data class LlmFollowUp(val spokenFeedback: String, val hints: BrainHints?) : DispatchResult()
         /** Execution failed — caller speaks the failure message then resumes. */
         data class Failed(val message: String) : DispatchResult()
+        /**
+         * Tool is risk-gated. Caller MUST speak [prompt] and transition
+         * back to listening so the user's next utterance reaches the
+         * [ConfirmationGate]. The runtime re-dispatches via
+         * [dispatch] with `skipConfirmation=true` on affirmative.
+         */
+        data class NeedsConfirmation(
+            val prompt: String,
+            val pendingId: String,
+            val toolName: String,
+        ) : DispatchResult()
     }
 
     /** Carries tool name + input so JarvisRuntime can log brain events. */
@@ -70,6 +110,29 @@ class ToolDispatcher(
     }
 
     /**
+     * Map a tool name to the ledger's action-class label. Must match the
+     * labels the proactive triggers use so a voice action suppresses a
+     * proactive nudge in the same domain. Unknown tools return null.
+     */
+    private fun toolActionClass(toolName: String): String? = when (toolName) {
+        "call_contact", "end_call" -> "CALL"
+        "send_sms", "whatsapp_message", "email_send" -> "MESSAGE"
+        "read_notifications", "clear_notifications" -> "NOTIFICATION"
+        "set_alarm" -> "ALARM"
+        "set_timer" -> "TIMER"
+        "set_reminder", "create_reminder", "location_reminder",
+        "list_reminders", "cancel_reminder" -> "REMINDER"
+        "calendar_read", "calendar_create", "calendar_accept" -> "CALENDAR"
+        "smart_home" -> "SMART_HOME"
+        "volume_control" -> "VOLUME"
+        "flashlight" -> "FLASHLIGHT"
+        "media_control", "music_search" -> "MEDIA"
+        "shopping_list" -> "SHOPPING"
+        "daily_briefing" -> "BRIEFING"
+        else -> null
+    }
+
+    /**
      * Run the full dispatch pipeline for [tool] / [input] given [sessionSpeaker].
      * Does NOT call speakAndRecord — the caller owns TTS.
      */
@@ -77,7 +140,8 @@ class ToolDispatcher(
         tool: com.jarvis.assistant.tools.framework.Tool,
         input: ToolInput,
         sessionSpeaker: SpeakerSessionContext,
-        transcript: String
+        transcript: String,
+        skipConfirmation: Boolean = false,
     ): DispatchResult {
         val hints = BrainHints(tool.name, input)
 
@@ -103,6 +167,19 @@ class ToolDispatcher(
                 else                              -> "I can't do that right now."
             }
             return DispatchResult.Denied(message)
+        }
+
+        // ── Confirmation gate ─────────────────────────────────────────────────
+        if (!skipConfirmation && confirmationGate != null &&
+            tool.riskClass != com.jarvis.assistant.tools.framework.RiskClass.LOW
+        ) {
+            val registered = confirmationGate.registerPending(tool, input, transcript)
+            Log.d(TAG, "Confirmation required for ${tool.name} (risk=${tool.riskClass}) pending=${registered.pending.id}")
+            return DispatchResult.NeedsConfirmation(
+                prompt = registered.prompt,
+                pendingId = registered.pending.id,
+                toolName = tool.name,
+            )
         }
 
         // ── Execute ───────────────────────────────────────────────────────────
@@ -131,6 +208,20 @@ class ToolDispatcher(
                 reversible            = tool.isReversible,
                 rawData               = result.rawData
             )
+            actionLedgerProvider()?.recordToolExecution(
+                toolName = tool.name,
+                actionClass = toolActionClass(tool.name),
+            )
+            // Don't buffer the routine tools themselves — recording a
+            // save_routine call would make the next save capture save_routine.
+            if (tool.name !in ROUTINE_TOOL_NAMES) {
+                recentToolCallBuffer?.record(
+                    toolName = tool.name,
+                    shortLabel = tool.name.replace('_', ' '),
+                    reversible = tool.isReversible,
+                    input = input,
+                )
+            }
         }
 
         return when (result) {

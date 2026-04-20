@@ -1,29 +1,54 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Disables Android auto-backup and device-transfer for Jarvis.
+    Auto Backup + device-transfer policy for Jarvis.
 
-    Rationale: the app's on-device state includes the memory DB, the
-    knowledge DB, speaker-voice embeddings, and EncryptedSharedPreferences
-    holding API tokens / OAuth refresh tokens.  Backup to Google Drive and
-    device-to-device transfer would all carry this material off the device
-    in forms that we can't revoke later, and the EncryptedSharedPreferences
-    master key does NOT survive the transfer — the encrypted prefs become
-    unreadable, silently breaking OAuth auth.  Disabling both is simpler
-    and safer than trying to maintain a partial allow-list.
+    WHAT SYNCS
+      The Room database (jarvis.db) — memory facts, wiki pages, saved
+      routines, conversation summaries, reminders, speaker profiles,
+      etc. Plus the non-encrypted SharedPreferences stores used by
+      the presence / learning layer.
+
+    WHAT DOES NOT
+      EncryptedSharedPreferences (jarvis_settings.xml) holds API keys,
+      OAuth refresh tokens, and the master-key-encrypted payloads. The
+      AES master key lives in the Android KeyStore which is per-device
+      and does NOT survive backup or device transfer — restoring an
+      encrypted prefs file with a different master key silently produces
+      unreadable data. Simpler to re-enter keys on a new device than to
+      debug corrupted auth.
+
+      Anything under files/ (TFLite models, recordings, image outputs)
+      is excluded — it's either re-downloadable or regenerated locally.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <exclude domain="root"              />
-        <exclude domain="file"              />
-        <exclude domain="database"          />
-        <exclude domain="sharedpref"        />
-        <exclude domain="external"          />
+        <!-- Room database: memory, knowledge, routines, expectations. -->
+        <include domain="database" path="jarvis.db" />
+        <include domain="database" path="jarvis.db-wal" />
+        <include domain="database" path="jarvis.db-shm" />
+
+        <!-- Non-encrypted SharedPreferences the presence + learning layer use. -->
+        <include domain="sharedpref" path="jarvis_known_ssids.xml" />
+        <include domain="sharedpref" path="jarvis_action_ledger.xml" />
+        <include domain="sharedpref" path="jarvis_conversation_threads.xml" />
+        <include domain="sharedpref" path="jarvis_routine_synth.xml" />
+
+        <!-- Hard excludes so a future pref file isn't accidentally captured. -->
+        <exclude domain="sharedpref" path="jarvis_settings.xml" />
+        <exclude domain="file" />
+        <exclude domain="external" />
     </cloud-backup>
+
     <device-transfer>
-        <exclude domain="root"              />
-        <exclude domain="file"              />
-        <exclude domain="database"          />
-        <exclude domain="sharedpref"        />
-        <exclude domain="external"          />
+        <include domain="database" path="jarvis.db" />
+        <include domain="database" path="jarvis.db-wal" />
+        <include domain="database" path="jarvis.db-shm" />
+        <include domain="sharedpref" path="jarvis_known_ssids.xml" />
+        <include domain="sharedpref" path="jarvis_action_ledger.xml" />
+        <include domain="sharedpref" path="jarvis_conversation_threads.xml" />
+        <include domain="sharedpref" path="jarvis_routine_synth.xml" />
+        <exclude domain="sharedpref" path="jarvis_settings.xml" />
+        <exclude domain="file" />
+        <exclude domain="external" />
     </device-transfer>
 </data-extraction-rules>

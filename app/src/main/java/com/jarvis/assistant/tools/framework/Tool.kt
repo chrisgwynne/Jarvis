@@ -71,6 +71,19 @@ interface Tool {
     val isReversible: Boolean get() = false
 
     /**
+     * Risk class governing whether [com.jarvis.assistant.core.safety
+     * .ConfirmationGate] asks the user to confirm before execution.
+     *
+     * - LOW (default) — run without asking.
+     * - MEDIUM — ask once; default is decline; short TTL.
+     * - HIGH — ask; default is decline; require explicit affirmative.
+     *
+     * Tools that send messages, end calls, clear state, or control
+     * connected devices SHOULD override to MEDIUM or HIGH.
+     */
+    val riskClass: RiskClass get() = RiskClass.LOW
+
+    /**
      * Reverse the effect of a previously successful [execute] call.
      *
      * The [journal] is the post-execute state captured by the [PlanRunner]

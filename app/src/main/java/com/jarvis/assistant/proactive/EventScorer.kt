@@ -33,11 +33,20 @@ import android.util.Log
  */
 class EventScorer(
     private val config: ProactiveConfig,
-    private val cooldownStore: CooldownStore
+    private val cooldownStore: CooldownStore,
+    /**
+     * Optional per-action-class feedback source. When supplied, events in
+     * classes the user consistently ignores get an additional penalty so
+     * the system quietens itself instead of waiting for cooldown to stretch.
+     */
+    private val actionLedger: com.jarvis.assistant.core.decisions.ActionLedger? = null,
 ) {
 
     companion object {
         private const val TAG = "EventScorer"
+        private const val LEARNED_MIN_SAMPLES = 4
+        private const val LEARNED_NEUTRAL_RATE = 0.5f
+        private const val LEARNED_PENALTY_WEIGHT = 0.4f
 
         /**
          * Maximum ignore count that contributes to cooldown escalation.  Past
@@ -85,6 +94,21 @@ class EventScorer(
      * Score a single [event] against [snapshot].
      */
     fun score(event: ProactiveEvent, snapshot: ContextSnapshot): ScoredEvent {
+        // Step 0 — honour explicit user-level suppression. When the user
+        // has muted an action class the final score is forced to zero so
+        // the event cannot cross either interrupt threshold regardless of
+        // how urgent the signal looks.
+        val actionClass = event.type.actionClassKey()
+        if (actionLedger?.isClassSuppressed(actionClass) == true) {
+            return ScoredEvent(
+                event = event,
+                rawScore = 0f,
+                finalScore = 0f,
+                interruptLevel = InterruptLevel.NONE,
+                penalties = mapOf("suppressed" to 1f),
+            )
+        }
+
         // Step 1 — raw score
         val raw = (event.urgency + event.relevance + event.confidence - event.annoyanceCost) / 3f
 
@@ -122,8 +146,23 @@ class EventScorer(
         }
         if (recentInteractionPenalty > 0f) penalties["recentInteraction"] = recentInteractionPenalty
 
+        // Step 4b — learned annoyance penalty from per-class accept rate.
+        // Classes the user has consistently dismissed get an added penalty
+        // on top of the linear cooldown escalation so sustained disinterest
+        // pulls the score below both thresholds rather than just slowing it.
+        val learnedPenalty = run {
+            val ledger = actionLedger ?: return@run 0f
+            val cls = event.type.actionClassKey()
+            val samples = ledger.verdictCount(cls)
+            if (samples < LEARNED_MIN_SAMPLES) return@run 0f
+            val rate = ledger.acceptRate(cls, minSamples = LEARNED_MIN_SAMPLES)
+            if (rate >= LEARNED_NEUTRAL_RATE) 0f
+            else (LEARNED_NEUTRAL_RATE - rate) * LEARNED_PENALTY_WEIGHT
+        }
+        if (learnedPenalty > 0f) penalties["learned"] = learnedPenalty
+
         // Step 5 — apply total penalty
-        val totalPenalty = cooldownPenalty + speakingPenalty + recentInteractionPenalty
+        val totalPenalty = cooldownPenalty + speakingPenalty + recentInteractionPenalty + learnedPenalty
         val finalScore   = (raw - totalPenalty).coerceIn(0f, 1f)
 
         // Step 6 — map to interrupt level

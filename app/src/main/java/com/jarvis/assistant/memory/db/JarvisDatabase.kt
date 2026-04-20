@@ -10,6 +10,12 @@ import com.jarvis.assistant.brain.db.dao.BrainEventDao
 import com.jarvis.assistant.brain.db.dao.BrainPatternDao
 import com.jarvis.assistant.brain.db.entity.BrainEvent
 import com.jarvis.assistant.brain.db.entity.BrainPattern
+import com.jarvis.assistant.core.presence.ExpectationDao
+import com.jarvis.assistant.core.presence.ExpectationEntity
+import com.jarvis.assistant.core.routines.SavedRoutineDao
+import com.jarvis.assistant.core.routines.SavedRoutineEntity
+import com.jarvis.assistant.core.telemetry.DecisionTraceDao
+import com.jarvis.assistant.core.telemetry.DecisionTraceEntity
 import com.jarvis.assistant.proactive.db.ProactiveCooldownDao
 import com.jarvis.assistant.proactive.db.ProactiveCooldownEntity
 import com.jarvis.assistant.proactive.followup.PendingFollowUp
@@ -70,9 +76,12 @@ import com.jarvis.assistant.runtime.plan.JournalEntry
         BrainPattern::class,
         VoiceShortcut::class,
         JournalEntry::class,
-        ProactiveCooldownEntity::class
+        ProactiveCooldownEntity::class,
+        DecisionTraceEntity::class,
+        SavedRoutineEntity::class,
+        ExpectationEntity::class
     ],
-    version = 12,
+    version = 15,
     exportSchema = false
 )
 abstract class JarvisDatabase : RoomDatabase() {
@@ -97,6 +106,9 @@ abstract class JarvisDatabase : RoomDatabase() {
     abstract fun voiceShortcutDao(): VoiceShortcutDao
     abstract fun actionJournalDao(): ActionJournalDao
     abstract fun proactiveCooldownDao(): ProactiveCooldownDao
+    abstract fun decisionTraceDao(): DecisionTraceDao
+    abstract fun savedRoutineDao(): SavedRoutineDao
+    abstract fun expectationDao(): ExpectationDao
 
     companion object {
         private const val DB_NAME = "jarvis.db"
@@ -402,6 +414,81 @@ abstract class JarvisDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration 12 → 13: add decision_traces table so DecisionTraceStore
+         * can persist one row per policy cycle for post-hoc replay/debugging.
+         */
+        private val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS decision_traces (
+                        id                  INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        createdAtMs         INTEGER NOT NULL,
+                        tickId              TEXT    NOT NULL,
+                        outcome             TEXT    NOT NULL,
+                        dispatchedDedupeKey TEXT,
+                        snapshotJson        TEXT    NOT NULL,
+                        candidatesJson      TEXT    NOT NULL,
+                        gatesJson           TEXT    NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_decision_traces_createdAtMs ON decision_traces(createdAtMs)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_decision_traces_outcome ON decision_traces(outcome)")
+            }
+        }
+
+        /**
+         * Migration 14 → 15: add expectations table for short-term
+         * anticipations the agent holds (time-based or event-kind-based).
+         */
+        private val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS expectations (
+                        id               INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        label            TEXT    NOT NULL,
+                        triggerAtMs      INTEGER,
+                        triggerEventKind TEXT,
+                        createdAtMs      INTEGER NOT NULL,
+                        expiresAtMs      INTEGER NOT NULL,
+                        status           TEXT    NOT NULL DEFAULT 'PENDING',
+                        sourceTranscript TEXT
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_expectations_triggerAtMs ON expectations(triggerAtMs)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_expectations_triggerEventKind ON expectations(triggerEventKind)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_expectations_status ON expectations(status)")
+            }
+        }
+
+        /**
+         * Migration 13 → 14: add saved_routines table for persisted tool-call
+         * sequences the user has promoted to reusable plans.
+         */
+        private val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS saved_routines (
+                        id             INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name           TEXT    NOT NULL,
+                        nameNormalized TEXT    NOT NULL,
+                        stepsJson      TEXT    NOT NULL,
+                        createdAtMs    INTEGER NOT NULL,
+                        lastRunAtMs    INTEGER,
+                        runCount       INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_saved_routines_nameNormalized ON saved_routines(nameNormalized)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_saved_routines_createdAtMs ON saved_routines(createdAtMs)")
+            }
+        }
+
+        /**
          * Migration 9 → 10: add voice_shortcuts table for custom trigger sequences.
          */
         private val MIGRATION_9_10 = object : Migration(9, 10) {
@@ -432,7 +519,8 @@ abstract class JarvisDatabase : RoomDatabase() {
                 )
                     .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                                   MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+                                   MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
+                                   MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
                     .build()
                     .also { INSTANCE = it }
             }

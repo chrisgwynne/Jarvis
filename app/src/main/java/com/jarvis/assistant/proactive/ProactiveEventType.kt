@@ -52,4 +52,23 @@ enum class ProactiveEventType {
      */
     val cooldownKey: String
         get() = name.lowercase()
+
+    /**
+     * Canonical action-class label recorded in [com.jarvis.assistant.core
+     * .decisions.ActionLedger]. Multiple event types can share a class so
+     * a voice command in the same domain suppresses a proactive nudge.
+     */
+    fun actionClassKey(): String = when (this) {
+        LOW_BATTERY -> "BATTERY"
+        UPCOMING_REMINDER -> "REMINDER"
+        MISSED_CALL -> "CALL"
+        BEHAVIORAL_LEARNING -> "BRAIN"
+        UNREAD_NOTIFICATION -> "NOTIFICATION"
+        UPCOMING_MEETING,
+        MEETING_STARTING_SOON,
+        DAILY_AGENDA -> "CALENDAR"
+        ARRIVED_HOME,
+        LEFT_HOME,
+        ARRIVED_KNOWN_PLACE -> "LOCATION"
+    }
 }

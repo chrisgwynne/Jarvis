@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- ═══════════════════════════════════════════
          PACKAGE VISIBILITY (Android 11+, API 30+)
@@ -76,6 +77,16 @@
     <!-- ConnectivityManager.getActiveNetwork() / getNetworkCapabilities() -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Wi-Fi SSID inspection for NetworkEventAdapter (SSID is returned via
+         WifiManager.getConnectionInfo, which requires WIFI_STATE). SSID text
+         itself requires location permission which Jarvis already declares. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+    <!-- UsageStatsManager for foreground-app tracking. App-op level; user
+         must grant via Settings → Apps → Special access → Usage access. -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
     <!-- Audio ducking / routing -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
@@ -127,7 +138,7 @@
     ═══════════════════════════════════════════ -->
     <application
         android:name=".JarvisApp"
-        android:allowBackup="false"
+        android:allowBackup="true"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"

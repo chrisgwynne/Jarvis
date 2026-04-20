@@ -18,6 +18,18 @@ import com.jarvis.assistant.call.integration.TelecomCallActionExecutor
 import com.jarvis.assistant.call.integration.TelephonyCallMonitor
 import com.jarvis.assistant.context.ContextEngine
 import com.jarvis.assistant.context.Presence
+import com.jarvis.assistant.core.events.EventAdapters
+import com.jarvis.assistant.core.events.RecentEventBuffer
+import com.jarvis.assistant.core.events.adapters.BatteryEventAdapter
+import com.jarvis.assistant.core.events.adapters.DrivingModeEventAdapter
+import com.jarvis.assistant.core.events.adapters.ForegroundAppEventAdapter
+import com.jarvis.assistant.core.events.adapters.HomeAssistantEventAdapter
+import com.jarvis.assistant.core.events.adapters.NetworkEventAdapter
+import com.jarvis.assistant.core.events.adapters.ProximityEventAdapter
+import com.jarvis.assistant.core.events.adapters.TelephonyEventAdapter
+import com.jarvis.assistant.core.safety.ConfirmationGate
+import com.jarvis.assistant.core.safety.Sanitizer
+import com.jarvis.assistant.core.telemetry.DecisionTraceStore
 import com.jarvis.assistant.location.CurrentLocationProvider
 import com.jarvis.assistant.core.state.JarvisState
 import com.jarvis.assistant.core.state.JarvisStateMachine
@@ -278,6 +290,68 @@ class JarvisRuntime(
     private val callExecutor    = TelecomCallActionExecutor(context)
     private lateinit var callCoordinator : CallCoordinator
 
+    // Core event bus adapters — publish sensed signals to EventBus.
+    // Owned here so lifecycle matches the runtime; detached in shutdown().
+    private val eventAdapters = EventAdapters()
+
+    // Recent-event ring buffer so composite triggers can reason about
+    // cross-stream history ("SSID changed 30s ago AND driving mode on").
+    private val recentEventBuffer = RecentEventBuffer()
+
+    // Durable known-SSID set for UnfamiliarSsidTrigger.
+    private val knownSsidStore = com.jarvis.assistant.core.learning.KnownSsidStore(context)
+
+    // Buffer of recent successful tool calls so SaveRoutineTool can persist
+    // a sequence the user says "save that as a routine called X" on.
+    private val recentToolCallBuffer = com.jarvis.assistant.core.routines.RecentToolCallBuffer()
+
+    // Observes TOOL_EXECUTED events to auto-propose routines after a
+    // sequence recurs a few times in the same hour-of-day.
+    private val routineSynthesizer = com.jarvis.assistant.core.routines.RoutineSynthesizer(context)
+
+    // Presence layer — rolling topics and short-term expectations the
+    // system prompt and scoring can consult every turn.
+    private val conversationThreads = com.jarvis.assistant.core.presence.ConversationThreads(context)
+    private val expectationStore by lazy {
+        com.jarvis.assistant.core.presence.ExpectationStore(
+            com.jarvis.assistant.memory.db.JarvisDatabase.getInstance(context).expectationDao()
+        )
+    }
+    // Optional cloud sync (Firebase). No-op unless the user has opted in
+    // and entered Firebase credentials in Settings.
+    private val cloudSyncService by lazy {
+        com.jarvis.assistant.core.sync.CloudSyncService(
+            context = context,
+            settings = settings,
+            memoryFactDao = com.jarvis.assistant.memory.db.JarvisDatabase.getInstance(context).memoryFactDao(),
+            savedRoutineDao = com.jarvis.assistant.memory.db.JarvisDatabase.getInstance(context).savedRoutineDao(),
+        )
+    }
+
+    // Continuous-tick provider; subscribes to EventBus on start.
+    // Built lazily so it captures proactiveEngine after initialize().
+    private val agentContextProvider by lazy {
+        com.jarvis.assistant.core.context.AgentContextProvider(
+            contextEngine = contextEngine,
+            presenceProvider = { currentPresence() },
+            snapshotProvider = { proactiveEngine.lastSnapshot },
+        )
+    }
+
+    // Shared cooldown so the ledger can be constructed before ProactiveEngine
+    // and handed to both the engine and the tool dispatcher.
+    private val sharedCooldownStore = com.jarvis.assistant.proactive.CooldownStore(
+        dao = com.jarvis.assistant.memory.db.JarvisDatabase.getInstance(context).proactiveCooldownDao()
+    )
+    private val sharedActionLedger = com.jarvis.assistant.core.decisions.ActionLedger(
+        cooldownStore = sharedCooldownStore,
+        prefs = com.jarvis.assistant.core.decisions.ActionLedger.prefsFor(context),
+    )
+
+    // Cross-path confirmation layer for destructive tools. LOW-risk tools
+    // don't touch it; MEDIUM/HIGH trigger a "are you sure?" handshake.
+    private val confirmationGate = ConfirmationGate()
+
     // Pipeline state
     private var pipelineJob: Job? = null
     private var callEventJob: Job? = null
@@ -339,7 +413,12 @@ class JarvisRuntime(
         knowledgeCompiler     = KnowledgeCompiler(knowledgeRepo, knowledgeResolver, llmRouter::completeSilent)
         knowledgeQuery        = KnowledgeQueryEngine(knowledgeRepo)
         retentionPolicy       = RetentionPolicy(knowledgeRepo)
-        promptAssembler = PromptAssembler(contextEngine, memoryReader, profileMemory, knowledgeQuery)
+        promptAssembler = PromptAssembler(
+            contextEngine, memoryReader, profileMemory, knowledgeQuery,
+            sanitizer = Sanitizer(),
+            conversationThreads = conversationThreads,
+            expectationStore = expectationStore,
+        )
 
         // Phase 7 — Orchestration
         reminderRepo = ReminderRepository(db.scheduledItemDao(), ReminderScheduler(context))
@@ -347,6 +426,9 @@ class JarvisRuntime(
         // Referential-action store — powers "undo that" / "do the same for X".
         // In-memory only; lifetime matches the runtime.
         lastActionStore = com.jarvis.assistant.runtime.reference.LastActionStore()
+
+        // Routine repository — persistent saved sequences.
+        val routineRepository = com.jarvis.assistant.core.routines.RoutineRepository(db.savedRoutineDao())
 
         // Tool registry
         toolRegistry = ToolRegistry.buildDefault(
@@ -357,14 +439,25 @@ class JarvisRuntime(
             outgoingCallController = outgoingCallController,
             locationProvider       = locationProvider,
             llmRouter              = llmRouter,
-            lastActionStore        = lastActionStore
+            lastActionStore        = lastActionStore,
+            actionLedger           = sharedActionLedger,
+            routineRepository      = routineRepository,
+            recentToolCallBuffer   = recentToolCallBuffer,
+            planRunnerProvider     = { if (::planRunner.isInitialized) planRunner else null },
+            expectationStore       = expectationStore
         )
         toolDispatcher = ToolDispatcher(
             context,
             toolRegistry,
             machine,
             lastActionStore,
-            killSwitchProvider = { settings.toolExecutionDisabled }
+            killSwitchProvider = { settings.toolExecutionDisabled },
+            // Resolves to the engine's ledger once ProactiveEngine is built
+            // below. Until then the lambda returns null and the dispatcher
+            // records nothing, which matches legacy behaviour.
+            actionLedgerProvider = { sharedActionLedger },
+            confirmationGate = confirmationGate,
+            recentToolCallBuffer = recentToolCallBuffer
         )
         memoryHandler = MemoryActionHandler(profileMemory)
         reminderHandler = ReminderActionHandler(reminderRepo)
@@ -426,7 +519,13 @@ class JarvisRuntime(
                 voiceResponseEnabled = { settings.voiceResponse }
             ),
             isDrivingProvider    = { drivingModeManager.isDriving },
-            cooldownDao          = db.proactiveCooldownDao()
+            cooldownDao          = db.proactiveCooldownDao(),
+            traceStore           = DecisionTraceStore(db.decisionTraceDao()),
+            recentEventBuffer    = recentEventBuffer,
+            knownSsidStore       = knownSsidStore,
+            sharedCooldownStore  = sharedCooldownStore,
+            actionLedger         = sharedActionLedger,
+            routineSynthesizer   = routineSynthesizer
         )
 
         // Conversational follow-up engine
@@ -496,6 +595,37 @@ class JarvisRuntime(
         }
 
         callMonitor.start()           // Phase 6: register telephony listener
+
+        // Event bus adapters — must attach AFTER callMonitor.start() so the
+        // TelephonyEventAdapter's flow subscription sees events from tick zero.
+        eventAdapters
+            .add(TelephonyEventAdapter(callMonitor, scope))
+            .add(DrivingModeEventAdapter(drivingModeManager))
+            .add(BatteryEventAdapter(context))
+            .add(NetworkEventAdapter(context))
+            .add(ForegroundAppEventAdapter(context))
+            .add(ProximityEventAdapter(context))
+            .add(HomeAssistantEventAdapter(
+                clientProvider = {
+                    val base = settings.haBaseUrl
+                    val token = settings.haApiToken
+                    if (base.isBlank() || token.isBlank()) null
+                    else com.jarvis.assistant.tools.smart.HomeAssistantClient(base, token)
+                },
+                wsClientProvider = {
+                    val base = settings.haBaseUrl
+                    val token = settings.haApiToken
+                    if (base.isBlank() || token.isBlank()) null
+                    else com.jarvis.assistant.tools.smart.HomeAssistantWebSocketClient(base, token)
+                },
+            ))
+            .attachAll()
+        recentEventBuffer.attach()
+        routineSynthesizer.attach()
+        expectationStore.attach()
+        agentContextProvider.attach()
+        cloudSyncService.start()
+
         proactiveEngine.start()       // Proactive awareness polling
         convProactiveEngine.start()   // Conversational follow-up polling
         brainEngine.start()           // Behavioural learning system
@@ -716,6 +846,12 @@ class JarvisRuntime(
         toolRegistry.release()
         bluetoothSco.release()   // Phase 4: full teardown
         audioFocus.abandonFocus() // Phase 5
+        cloudSyncService.stop()
+        agentContextProvider.detach()
+        expectationStore.detach()
+        routineSynthesizer.detach()
+        recentEventBuffer.detach()
+        eventAdapters.detachAll()       // Unwire bus adapters before callMonitor.stop()
         callMonitor.stop()              // Phase 6
         proactiveEngine.stop()          // Proactive awareness
         convProactiveEngine.stop()      // Conversational follow-up
@@ -1585,6 +1721,53 @@ class JarvisRuntime(
                         }
                     }
 
+                    // Feed the live thread store so PromptAssembler can tell
+                    // the LLM what's still open and what's recently faded.
+                    // Skipped for short affirmations/negations which shouldn't
+                    // spawn their own thread — the gate below catches those.
+                    if (transcript.trim().split(' ').size > 2) {
+                        conversationThreads.touchFromUtterance(transcript)
+                    }
+
+                    // ── Confirmation gate handshake ───────────────────────────
+                    // Any pending risky tool from a prior turn gets first bite
+                    // at this utterance. Affirmative → re-dispatch the stashed
+                    // tool with skipConfirmation=true. Declined → drop silently.
+                    when (val verdict = confirmationGate.consume(transcript)) {
+                        is ConfirmationGate.Verdict.Affirmed -> {
+                            val stashed = verdict.pending
+                            val tool = toolRegistry.findByName(stashed.toolName)
+                            if (tool != null) {
+                                val r = toolDispatcher.dispatch(
+                                    tool, stashed.input, sessionSpeaker,
+                                    stashed.originatingTranscript, skipConfirmation = true,
+                                )
+                                when (r) {
+                                    is ToolDispatcher.DispatchResult.Done ->
+                                        if (r.spokenFeedback.isNotBlank()) speakAndRecord(r.spokenFeedback)
+                                    is ToolDispatcher.DispatchResult.Failed -> speakAndRecord(r.message)
+                                    is ToolDispatcher.DispatchResult.Denied -> speakAndRecord(r.message)
+                                    is ToolDispatcher.DispatchResult.SilentExit,
+                                    is ToolDispatcher.DispatchResult.AugmentedLlm,
+                                    is ToolDispatcher.DispatchResult.LlmFollowUp,
+                                    is ToolDispatcher.DispatchResult.NeedsConfirmation -> Unit
+                                }
+                            } else {
+                                speakAndRecord("That tool's gone — skipping it.")
+                            }
+                            machine.transition(JarvisState.Listening)
+                            syncState(JarvisState.Listening)
+                            continue
+                        }
+                        is ConfirmationGate.Verdict.Declined -> {
+                            speakAndRecord("Dropped it.")
+                            machine.transition(JarvisState.Listening)
+                            syncState(JarvisState.Listening)
+                            continue
+                        }
+                        ConfirmationGate.Verdict.None -> Unit
+                    }
+
                     // ── Conversation intent classification ─────────────────────
                     // Classify BEFORE tool matching so casual/personal messages
                     // never reach the tool layer (and never trigger web search).
@@ -1661,6 +1844,12 @@ class JarvisRuntime(
                             is ToolDispatcher.DispatchResult.AugmentedLlm -> {
                                 val response = callLlm(r.augmentedTranscript, isOnline)
                                 speakAndRecord(response)
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                            is ToolDispatcher.DispatchResult.NeedsConfirmation -> {
+                                speakAndRecord(r.prompt)
                                 machine.transition(JarvisState.Listening)
                                 syncState(JarvisState.Listening)
                                 continue

@@ -51,10 +51,21 @@ class DecisionEngine(
      * @param snapshot   The [ContextSnapshot] from the same polling tick.
      * @return A concrete [ProactiveAction]; never throws.
      */
+    /**
+     * When [decide] suppresses a PASSIVE candidate for the sole reason
+     * that presence disallowed soft suggestions, the suppressed event is
+     * stashed here so ProactiveEngine can queue it for a later tick when
+     * presence opens up. Cleared on every call so stale candidates never
+     * leak across ticks.
+     */
+    @Volatile var lastDeferredByPresence: EventScorer.ScoredEvent? = null
+        private set
+
     fun decide(
         candidates: List<EventScorer.ScoredEvent>,
         snapshot: ContextSnapshot
     ): ProactiveAction {
+        lastDeferredByPresence = null
         // Step 1 — stale / NONE filter
         val valid = candidates.filter { scored ->
             val age = snapshot.currentTimeMillis - scored.event.createdAtMillis
@@ -134,6 +145,7 @@ class DecisionEngine(
                     "deferring soft ${top.event.type}"
                 )
                 ProactiveMetrics.increment(ProactiveMetrics.Counter.SUPPRESSED_PRESENCE)
+                lastDeferredByPresence = top
                 return ProactiveAction.NoAction
             }
         }

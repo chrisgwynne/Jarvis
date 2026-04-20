@@ -566,12 +566,20 @@ class JarvisRuntime(
             .add(BatteryEventAdapter(context))
             .add(NetworkEventAdapter(context))
             .add(ForegroundAppEventAdapter(context))
-            .add(HomeAssistantEventAdapter(clientProvider = {
-                val base = settings.haBaseUrl
-                val token = settings.haApiToken
-                if (base.isBlank() || token.isBlank()) null
-                else com.jarvis.assistant.tools.smart.HomeAssistantClient(base, token)
-            }))
+            .add(HomeAssistantEventAdapter(
+                clientProvider = {
+                    val base = settings.haBaseUrl
+                    val token = settings.haApiToken
+                    if (base.isBlank() || token.isBlank()) null
+                    else com.jarvis.assistant.tools.smart.HomeAssistantClient(base, token)
+                },
+                wsClientProvider = {
+                    val base = settings.haBaseUrl
+                    val token = settings.haApiToken
+                    if (base.isBlank() || token.isBlank()) null
+                    else com.jarvis.assistant.tools.smart.HomeAssistantWebSocketClient(base, token)
+                },
+            ))
             .attachAll()
         recentEventBuffer.attach()
 

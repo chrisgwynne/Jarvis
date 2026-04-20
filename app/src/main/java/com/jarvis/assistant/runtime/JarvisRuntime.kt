@@ -25,6 +25,7 @@ import com.jarvis.assistant.core.events.adapters.DrivingModeEventAdapter
 import com.jarvis.assistant.core.events.adapters.ForegroundAppEventAdapter
 import com.jarvis.assistant.core.events.adapters.HomeAssistantEventAdapter
 import com.jarvis.assistant.core.events.adapters.NetworkEventAdapter
+import com.jarvis.assistant.core.events.adapters.ProximityEventAdapter
 import com.jarvis.assistant.core.events.adapters.TelephonyEventAdapter
 import com.jarvis.assistant.core.safety.ConfirmationGate
 import com.jarvis.assistant.core.safety.Sanitizer
@@ -304,6 +305,10 @@ class JarvisRuntime(
     // a sequence the user says "save that as a routine called X" on.
     private val recentToolCallBuffer = com.jarvis.assistant.core.routines.RecentToolCallBuffer()
 
+    // Observes TOOL_EXECUTED events to auto-propose routines after a
+    // sequence recurs a few times in the same hour-of-day.
+    private val routineSynthesizer = com.jarvis.assistant.core.routines.RoutineSynthesizer(context)
+
     // Shared cooldown so the ledger can be constructed before ProactiveEngine
     // and handed to both the engine and the tool dispatcher.
     private val sharedCooldownStore = com.jarvis.assistant.proactive.CooldownStore(
@@ -487,7 +492,8 @@ class JarvisRuntime(
             recentEventBuffer    = recentEventBuffer,
             knownSsidStore       = knownSsidStore,
             sharedCooldownStore  = sharedCooldownStore,
-            actionLedger         = sharedActionLedger
+            actionLedger         = sharedActionLedger,
+            routineSynthesizer   = routineSynthesizer
         )
 
         // Conversational follow-up engine
@@ -566,6 +572,7 @@ class JarvisRuntime(
             .add(BatteryEventAdapter(context))
             .add(NetworkEventAdapter(context))
             .add(ForegroundAppEventAdapter(context))
+            .add(ProximityEventAdapter(context))
             .add(HomeAssistantEventAdapter(
                 clientProvider = {
                     val base = settings.haBaseUrl
@@ -582,6 +589,7 @@ class JarvisRuntime(
             ))
             .attachAll()
         recentEventBuffer.attach()
+        routineSynthesizer.attach()
 
         proactiveEngine.start()       // Proactive awareness polling
         convProactiveEngine.start()   // Conversational follow-up polling
@@ -803,6 +811,7 @@ class JarvisRuntime(
         toolRegistry.release()
         bluetoothSco.release()   // Phase 4: full teardown
         audioFocus.abandonFocus() // Phase 5
+        routineSynthesizer.detach()
         recentEventBuffer.detach()
         eventAdapters.detachAll()       // Unwire bus adapters before callMonitor.stop()
         callMonitor.stop()              // Phase 6

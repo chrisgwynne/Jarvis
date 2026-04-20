@@ -104,6 +104,8 @@ class ProactiveEngine(
      * registered in the trigger engine. Null = trigger skipped.
      */
     knownSsidStore: com.jarvis.assistant.core.learning.KnownSsidStore? = null,
+    /** Optional routine-pattern detector whose proposals are surfaced via RoutineProposalTrigger. */
+    routineSynthesizer: com.jarvis.assistant.core.routines.RoutineSynthesizer? = null,
 ) {
 
     companion object {
@@ -117,7 +119,7 @@ class ProactiveEngine(
         actionLedger ?: com.jarvis.assistant.core.decisions.ActionLedger(cooldownStore)
     private val eventGenerator  = EventGenerator(
         config = config,
-        triggerEngine = com.jarvis.assistant.core.decisions.triggers.DefaultTriggers.engine(config, knownSsidStore),
+        triggerEngine = com.jarvis.assistant.core.decisions.triggers.DefaultTriggers.engine(config, knownSsidStore, routineSynthesizer),
     )
     private val eventScorer     = EventScorer(config, cooldownStore, ledger)
     private val decisionEngine  = DecisionEngine(config, cooldownStore)

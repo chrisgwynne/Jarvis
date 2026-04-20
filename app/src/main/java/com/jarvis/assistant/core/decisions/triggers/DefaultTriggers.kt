@@ -17,6 +17,7 @@ object DefaultTriggers {
     fun build(
         config: ProactiveConfig = ProactiveConfig(),
         knownSsidStore: com.jarvis.assistant.core.learning.KnownSsidStore? = null,
+        routineSynthesizer: com.jarvis.assistant.core.routines.RoutineSynthesizer? = null,
     ): List<Trigger> = buildList {
         add(LowBatteryTrigger(config))
         add(UpcomingReminderTrigger(config))
@@ -30,10 +31,12 @@ object DefaultTriggers {
         add(LowBatteryBeforeTravelTrigger(config))
         add(HomeAssistantMotionAwayTrigger())
         if (knownSsidStore != null) add(UnfamiliarSsidTrigger(knownSsidStore))
+        if (routineSynthesizer != null) add(RoutineProposalTrigger(routineSynthesizer))
     }
 
     fun engine(
         config: ProactiveConfig = ProactiveConfig(),
         knownSsidStore: com.jarvis.assistant.core.learning.KnownSsidStore? = null,
-    ): TriggerEngine = TriggerEngine(build(config, knownSsidStore))
+        routineSynthesizer: com.jarvis.assistant.core.routines.RoutineSynthesizer? = null,
+    ): TriggerEngine = TriggerEngine(build(config, knownSsidStore, routineSynthesizer))
 }

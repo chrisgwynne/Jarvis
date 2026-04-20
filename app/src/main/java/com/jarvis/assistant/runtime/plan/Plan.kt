@@ -33,7 +33,15 @@ data class Plan(
      * undo the reversible prefix while leaving an irreversible one in place.
      */
     val autoRollbackOnHalt: Boolean = allReversible,
-    val createdAtMs: Long = System.currentTimeMillis()
+    val createdAtMs: Long = System.currentTimeMillis(),
+    /**
+     * Optional link back to a goal the plan was generated for. Populated
+     * when [com.jarvis.assistant.core.goals.GoalStore] upserted a goal for
+     * the situation that led here; null for ad-hoc direct plans. Passed to
+     * [com.jarvis.assistant.core.outcomes.OutcomeRecorder] so
+     * PLAN_COMPLETED / PLAN_HALTED outcomes close the loop on the goal.
+     */
+    val originatingGoalId: Long? = null,
 )
 
 /**
@@ -48,5 +56,17 @@ data class PlannedStep(
     val argsJson: String,
     /** Short one-noun-phrase label for the spoken summary ("text", "reminder"). */
     val shortLabel: String,
-    val reversible: Boolean
+    val reversible: Boolean,
+    /**
+     * When non-null, the step's [com.jarvis.assistant.tools.framework.ToolResult.Success.rawData]
+     * is stashed in the [PlanContext] under this name so subsequent steps can
+     * reference it via `$name` placeholders in their [argsJson].
+     *
+     * Example: a `search_contacts` step captures as `contact`, then a later
+     * `send_sms` step references `"to": "$contact.phone"`.
+     *
+     * Null means the step produces no reusable output (the default — plans
+     * without output passing behave exactly as before).
+     */
+    val resultCapture: String? = null,
 )

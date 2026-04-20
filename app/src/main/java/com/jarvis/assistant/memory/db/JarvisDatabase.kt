@@ -10,6 +10,10 @@ import com.jarvis.assistant.brain.db.dao.BrainEventDao
 import com.jarvis.assistant.brain.db.dao.BrainPatternDao
 import com.jarvis.assistant.brain.db.entity.BrainEvent
 import com.jarvis.assistant.brain.db.entity.BrainPattern
+import com.jarvis.assistant.core.goals.GoalDao
+import com.jarvis.assistant.core.goals.GoalEntity
+import com.jarvis.assistant.core.outcomes.OutcomeDao
+import com.jarvis.assistant.core.outcomes.OutcomeEntity
 import com.jarvis.assistant.core.presence.ExpectationDao
 import com.jarvis.assistant.core.presence.ExpectationEntity
 import com.jarvis.assistant.core.routines.SavedRoutineDao
@@ -79,9 +83,11 @@ import com.jarvis.assistant.runtime.plan.JournalEntry
         ProactiveCooldownEntity::class,
         DecisionTraceEntity::class,
         SavedRoutineEntity::class,
-        ExpectationEntity::class
+        ExpectationEntity::class,
+        GoalEntity::class,
+        OutcomeEntity::class
     ],
-    version = 15,
+    version = 16,
     exportSchema = false
 )
 abstract class JarvisDatabase : RoomDatabase() {
@@ -109,6 +115,8 @@ abstract class JarvisDatabase : RoomDatabase() {
     abstract fun decisionTraceDao(): DecisionTraceDao
     abstract fun savedRoutineDao(): SavedRoutineDao
     abstract fun expectationDao(): ExpectationDao
+    abstract fun goalDao(): GoalDao
+    abstract fun outcomeDao(): OutcomeDao
 
     companion object {
         private const val DB_NAME = "jarvis.db"
@@ -465,6 +473,60 @@ abstract class JarvisDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration 15 → 16: add goals and outcomes tables for the
+         * situation / goal / outcome learning loop. Goals persist the
+         * agent's read of the user's longer-running intent; outcomes
+         * record what happened after a decision so the scorer, memory
+         * policy, and trace store can close the learning loop.
+         */
+        private val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS goals (
+                        id               INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        type             TEXT    NOT NULL,
+                        title            TEXT    NOT NULL,
+                        status           TEXT    NOT NULL,
+                        originSituation  TEXT,
+                        rootDedupeKey    TEXT    NOT NULL,
+                        createdAtMs      INTEGER NOT NULL,
+                        updatedAtMs      INTEGER NOT NULL,
+                        expiresAtMs      INTEGER NOT NULL,
+                        evidenceJson     TEXT    NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_goals_type ON goals(type)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_goals_status ON goals(status)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_goals_rootDedupeKey ON goals(rootDedupeKey)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_goals_expiresAtMs ON goals(expiresAtMs)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS outcomes (
+                        id             INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        type           TEXT    NOT NULL,
+                        actionClass    TEXT,
+                        dedupeKey      TEXT,
+                        situationType  TEXT,
+                        goalId         INTEGER,
+                        planId         TEXT,
+                        traceId        INTEGER,
+                        occurredAtMs   INTEGER NOT NULL,
+                        detail         TEXT
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_outcomes_occurredAtMs ON outcomes(occurredAtMs)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_outcomes_type ON outcomes(type)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_outcomes_actionClass ON outcomes(actionClass)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_outcomes_dedupeKey ON outcomes(dedupeKey)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_outcomes_goalId ON outcomes(goalId)")
+            }
+        }
+
+        /**
          * Migration 13 → 14: add saved_routines table for persisted tool-call
          * sequences the user has promoted to reusable plans.
          */
@@ -520,7 +582,8 @@ abstract class JarvisDatabase : RoomDatabase() {
                     .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                                    MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
-                                   MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
+                                   MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
+                                   MIGRATION_15_16)
                     .build()
                     .also { INSTANCE = it }
             }

@@ -300,6 +300,10 @@ class JarvisRuntime(
     // Durable known-SSID set for UnfamiliarSsidTrigger.
     private val knownSsidStore = com.jarvis.assistant.core.learning.KnownSsidStore(context)
 
+    // Buffer of recent successful tool calls so SaveRoutineTool can persist
+    // a sequence the user says "save that as a routine called X" on.
+    private val recentToolCallBuffer = com.jarvis.assistant.core.routines.RecentToolCallBuffer()
+
     // Shared cooldown so the ledger can be constructed before ProactiveEngine
     // and handed to both the engine and the tool dispatcher.
     private val sharedCooldownStore = com.jarvis.assistant.proactive.CooldownStore(
@@ -387,6 +391,9 @@ class JarvisRuntime(
         // In-memory only; lifetime matches the runtime.
         lastActionStore = com.jarvis.assistant.runtime.reference.LastActionStore()
 
+        // Routine repository — persistent saved sequences.
+        val routineRepository = com.jarvis.assistant.core.routines.RoutineRepository(db.savedRoutineDao())
+
         // Tool registry
         toolRegistry = ToolRegistry.buildDefault(
             context                = context,
@@ -397,7 +404,10 @@ class JarvisRuntime(
             locationProvider       = locationProvider,
             llmRouter              = llmRouter,
             lastActionStore        = lastActionStore,
-            actionLedger           = sharedActionLedger
+            actionLedger           = sharedActionLedger,
+            routineRepository      = routineRepository,
+            recentToolCallBuffer   = recentToolCallBuffer,
+            planRunnerProvider     = { if (::planRunner.isInitialized) planRunner else null }
         )
         toolDispatcher = ToolDispatcher(
             context,
@@ -409,7 +419,8 @@ class JarvisRuntime(
             // below. Until then the lambda returns null and the dispatcher
             // records nothing, which matches legacy behaviour.
             actionLedgerProvider = { sharedActionLedger },
-            confirmationGate = confirmationGate
+            confirmationGate = confirmationGate,
+            recentToolCallBuffer = recentToolCallBuffer
         )
         memoryHandler = MemoryActionHandler(profileMemory)
         reminderHandler = ReminderActionHandler(reminderRepo)

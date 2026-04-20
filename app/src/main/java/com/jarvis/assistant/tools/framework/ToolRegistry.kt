@@ -113,6 +113,13 @@ class ToolRegistry private constructor(
             llmRouter: com.jarvis.assistant.llm.LlmRouter? = null,
             lastActionStore: LastActionStore? = null,
             actionLedger: com.jarvis.assistant.core.decisions.ActionLedger? = null,
+            routineRepository: com.jarvis.assistant.core.routines.RoutineRepository? = null,
+            recentToolCallBuffer: com.jarvis.assistant.core.routines.RecentToolCallBuffer? = null,
+            /**
+             * Lazy because PlanRunner itself takes a ToolRegistry — resolving
+             * the runner at execute time breaks the circular dependency.
+             */
+            planRunnerProvider: () -> com.jarvis.assistant.runtime.plan.PlanRunner? = { null },
         ): ToolRegistry {
             val contacts = ContactLookup(context)
             val search   = WebSearch()
@@ -205,6 +212,15 @@ class ToolRegistry private constructor(
                     }
                     actionLedger?.let {
                         add(com.jarvis.assistant.tools.device.MuteSuggestionTool(it))
+                    }
+                    // Routine tools: need the repository + buffer + planner.
+                    // Gated on all three being present so partial wiring skips
+                    // them cleanly in tests.
+                    if (routineRepository != null && recentToolCallBuffer != null) {
+                        add(com.jarvis.assistant.tools.device.SaveRoutineTool(recentToolCallBuffer, routineRepository))
+                        add(com.jarvis.assistant.tools.device.RunRoutineTool(routineRepository, planRunnerProvider))
+                        add(com.jarvis.assistant.tools.device.ListRoutinesTool(routineRepository))
+                        add(com.jarvis.assistant.tools.device.DeleteRoutineTool(routineRepository))
                     }
                     add(HelpTool { buildCapabilitySummary(settings) })
                 },

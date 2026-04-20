@@ -10,6 +10,8 @@ import com.jarvis.assistant.brain.db.dao.BrainEventDao
 import com.jarvis.assistant.brain.db.dao.BrainPatternDao
 import com.jarvis.assistant.brain.db.entity.BrainEvent
 import com.jarvis.assistant.brain.db.entity.BrainPattern
+import com.jarvis.assistant.core.routines.SavedRoutineDao
+import com.jarvis.assistant.core.routines.SavedRoutineEntity
 import com.jarvis.assistant.core.telemetry.DecisionTraceDao
 import com.jarvis.assistant.core.telemetry.DecisionTraceEntity
 import com.jarvis.assistant.proactive.db.ProactiveCooldownDao
@@ -73,9 +75,10 @@ import com.jarvis.assistant.runtime.plan.JournalEntry
         VoiceShortcut::class,
         JournalEntry::class,
         ProactiveCooldownEntity::class,
-        DecisionTraceEntity::class
+        DecisionTraceEntity::class,
+        SavedRoutineEntity::class
     ],
-    version = 13,
+    version = 14,
     exportSchema = false
 )
 abstract class JarvisDatabase : RoomDatabase() {
@@ -101,6 +104,7 @@ abstract class JarvisDatabase : RoomDatabase() {
     abstract fun actionJournalDao(): ActionJournalDao
     abstract fun proactiveCooldownDao(): ProactiveCooldownDao
     abstract fun decisionTraceDao(): DecisionTraceDao
+    abstract fun savedRoutineDao(): SavedRoutineDao
 
     companion object {
         private const val DB_NAME = "jarvis.db"
@@ -431,6 +435,30 @@ abstract class JarvisDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration 13 → 14: add saved_routines table for persisted tool-call
+         * sequences the user has promoted to reusable plans.
+         */
+        private val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS saved_routines (
+                        id             INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name           TEXT    NOT NULL,
+                        nameNormalized TEXT    NOT NULL,
+                        stepsJson      TEXT    NOT NULL,
+                        createdAtMs    INTEGER NOT NULL,
+                        lastRunAtMs    INTEGER,
+                        runCount       INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_saved_routines_nameNormalized ON saved_routines(nameNormalized)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_saved_routines_createdAtMs ON saved_routines(createdAtMs)")
+            }
+        }
+
+        /**
          * Migration 9 → 10: add voice_shortcuts table for custom trigger sequences.
          */
         private val MIGRATION_9_10 = object : Migration(9, 10) {
@@ -462,7 +490,7 @@ abstract class JarvisDatabase : RoomDatabase() {
                     .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                                    MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
-                                   MIGRATION_12_13)
+                                   MIGRATION_12_13, MIGRATION_13_14)
                     .build()
                     .also { INSTANCE = it }
             }

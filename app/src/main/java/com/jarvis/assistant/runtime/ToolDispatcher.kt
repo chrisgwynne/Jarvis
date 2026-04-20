@@ -54,10 +54,21 @@ class ToolDispatcher(
      * speak the prompt and await the user's next utterance.
      */
     private val confirmationGate: ConfirmationGate? = null,
+    /**
+     * Optional buffer that captures every successful tool execution so the
+     * user can later say "save that as a routine called X" and the
+     * [com.jarvis.assistant.tools.device.SaveRoutineTool] finds a sequence
+     * to persist.
+     */
+    private val recentToolCallBuffer: com.jarvis.assistant.core.routines.RecentToolCallBuffer? = null,
 ) {
 
     companion object {
         private const val TAG = "ToolDispatcher"
+        private val ROUTINE_TOOL_NAMES = setOf(
+            "save_routine", "run_routine", "list_routines", "delete_routine",
+            "undo_last_action", "repeat_last_action",
+        )
     }
 
     /**
@@ -201,6 +212,16 @@ class ToolDispatcher(
                 toolName = tool.name,
                 actionClass = toolActionClass(tool.name),
             )
+            // Don't buffer the routine tools themselves — recording a
+            // save_routine call would make the next save capture save_routine.
+            if (tool.name !in ROUTINE_TOOL_NAMES) {
+                recentToolCallBuffer?.record(
+                    toolName = tool.name,
+                    shortLabel = tool.name.replace('_', ' '),
+                    reversible = tool.isReversible,
+                    input = input,
+                )
+            }
         }
 
         return when (result) {

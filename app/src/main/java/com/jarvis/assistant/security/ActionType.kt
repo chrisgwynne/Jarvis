@@ -22,7 +22,11 @@ enum class ActionType(val displayName: String) {
     CAPTURE_PHOTO("Capture Photo"),
     ANALYZE_CAMERA_VIEW("Analyze Camera View"),
     AUDIO_RECORDING("Audio Recording"),
-    MUTE_SUGGESTION("Mute Suggestion");
+    MUTE_SUGGESTION("Mute Suggestion"),
+    SAVE_ROUTINE("Save Routine"),
+    RUN_ROUTINE("Run Routine"),
+    LIST_ROUTINES("List Routines"),
+    DELETE_ROUTINE("Delete Routine");
 
     companion object {
         /** All tool names that are approved for execution, mapped to their ActionType. */
@@ -48,7 +52,11 @@ enum class ActionType(val displayName: String) {
             "camera_capture"      to CAPTURE_PHOTO,
             "analyze_camera_view" to ANALYZE_CAMERA_VIEW,
             "audio_recording"     to AUDIO_RECORDING,
-            "mute_suggestion"     to MUTE_SUGGESTION
+            "mute_suggestion"     to MUTE_SUGGESTION,
+            "save_routine"        to SAVE_ROUTINE,
+            "run_routine"         to RUN_ROUTINE,
+            "list_routines"       to LIST_ROUTINES,
+            "delete_routine"      to DELETE_ROUTINE
         )
 
         fun fromToolName(toolName: String): ActionType? = APPROVED_TOOL_MAP[toolName]

@@ -111,7 +111,8 @@ class ToolRegistry private constructor(
             outgoingCallController: OutgoingCallController? = null,
             locationProvider: CurrentLocationProvider? = null,
             llmRouter: com.jarvis.assistant.llm.LlmRouter? = null,
-            lastActionStore: LastActionStore? = null
+            lastActionStore: LastActionStore? = null,
+            actionLedger: com.jarvis.assistant.core.decisions.ActionLedger? = null,
         ): ToolRegistry {
             val contacts = ContactLookup(context)
             val search   = WebSearch()
@@ -201,6 +202,9 @@ class ToolRegistry private constructor(
                     lastActionStore?.let {
                         add(UndoLastActionTool(it))
                         add(RepeatLastActionTool(it))
+                    }
+                    actionLedger?.let {
+                        add(com.jarvis.assistant.tools.device.MuteSuggestionTool(it))
                     }
                     add(HelpTool { buildCapabilitySummary(settings) })
                 },

@@ -396,7 +396,8 @@ class JarvisRuntime(
             outgoingCallController = outgoingCallController,
             locationProvider       = locationProvider,
             llmRouter              = llmRouter,
-            lastActionStore        = lastActionStore
+            lastActionStore        = lastActionStore,
+            actionLedger           = sharedActionLedger
         )
         toolDispatcher = ToolDispatcher(
             context,

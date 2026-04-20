@@ -33,8 +33,12 @@ class ActionLedger(
     private val lastToolCallMs = ConcurrentHashMap<String, Long>()
     private val classAccepts = ConcurrentHashMap<String, Int>()
     private val classIgnores = ConcurrentHashMap<String, Int>()
+    private val suppressed: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
-    init { hydrateCounters() }
+    init {
+        hydrateCounters()
+        hydrateSuppression()
+    }
 
     fun recordProactiveDispatch(dedupeKey: String, actionClass: String?) {
         cooldownStore.markSurfaced(dedupeKey)
@@ -126,6 +130,27 @@ class ActionLedger(
     fun verdictCount(actionClass: String): Int =
         (classAccepts[actionClass] ?: 0) + (classIgnores[actionClass] ?: 0)
 
+    // ── Explicit suppression ─────────────────────────────────────────────────
+    //
+    // Per-class "never suggest this again" toggle. The user voices it
+    // ("stop telling me about notifications"), a MuteSuggestionTool writes
+    // it here, and [isClassSuppressed] is queried by EventScorer to force
+    // the finalScore to zero regardless of what the signal looks like.
+
+    fun suppressClass(actionClass: String) {
+        suppressed.add(actionClass)
+        prefs?.edit()?.putStringSet(PREF_SUPPRESSED, suppressed.toSet())?.apply()
+    }
+
+    fun unsuppressClass(actionClass: String) {
+        suppressed.remove(actionClass)
+        prefs?.edit()?.putStringSet(PREF_SUPPRESSED, suppressed.toSet())?.apply()
+    }
+
+    fun isClassSuppressed(actionClass: String): Boolean = actionClass in suppressed
+
+    fun suppressedClasses(): Set<String> = suppressed.toSet()
+
     // ── Persistence ───────────────────────────────────────────────────────────
 
     private fun hydrateCounters() {
@@ -137,6 +162,12 @@ class ActionLedger(
                 key.startsWith(PREF_IGNORE_PREFIX) -> classIgnores[key.removePrefix(PREF_IGNORE_PREFIX)] = raw
             }
         }
+    }
+
+    private fun hydrateSuppression() {
+        val p = prefs ?: return
+        val set = p.getStringSet(PREF_SUPPRESSED, emptySet()) ?: return
+        suppressed.addAll(set)
     }
 
     private fun persistCounter(actionClass: String) {
@@ -153,6 +184,7 @@ class ActionLedger(
         const val PREFS_NAME = "jarvis_action_ledger"
         private const val PREF_ACCEPT_PREFIX = "accepts_"
         private const val PREF_IGNORE_PREFIX = "ignores_"
+        private const val PREF_SUPPRESSED = "suppressed_classes"
 
         fun prefsFor(context: Context): SharedPreferences =
             context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

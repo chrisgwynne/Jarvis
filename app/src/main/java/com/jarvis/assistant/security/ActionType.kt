@@ -21,7 +21,8 @@ enum class ActionType(val displayName: String) {
     HELP("Help"),
     CAPTURE_PHOTO("Capture Photo"),
     ANALYZE_CAMERA_VIEW("Analyze Camera View"),
-    AUDIO_RECORDING("Audio Recording");
+    AUDIO_RECORDING("Audio Recording"),
+    MUTE_SUGGESTION("Mute Suggestion");
 
     companion object {
         /** All tool names that are approved for execution, mapped to their ActionType. */
@@ -46,7 +47,8 @@ enum class ActionType(val displayName: String) {
             "create_reminder"     to SET_REMINDER,
             "camera_capture"      to CAPTURE_PHOTO,
             "analyze_camera_view" to ANALYZE_CAMERA_VIEW,
-            "audio_recording"     to AUDIO_RECORDING
+            "audio_recording"     to AUDIO_RECORDING,
+            "mute_suggestion"     to MUTE_SUGGESTION
         )
 
         fun fromToolName(toolName: String): ActionType? = APPROVED_TOOL_MAP[toolName]

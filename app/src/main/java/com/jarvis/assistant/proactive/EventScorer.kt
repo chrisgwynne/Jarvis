@@ -94,6 +94,21 @@ class EventScorer(
      * Score a single [event] against [snapshot].
      */
     fun score(event: ProactiveEvent, snapshot: ContextSnapshot): ScoredEvent {
+        // Step 0 — honour explicit user-level suppression. When the user
+        // has muted an action class the final score is forced to zero so
+        // the event cannot cross either interrupt threshold regardless of
+        // how urgent the signal looks.
+        val actionClass = event.type.actionClassKey()
+        if (actionLedger?.isClassSuppressed(actionClass) == true) {
+            return ScoredEvent(
+                event = event,
+                rawScore = 0f,
+                finalScore = 0f,
+                interruptLevel = InterruptLevel.NONE,
+                penalties = mapOf("suppressed" to 1f),
+            )
+        }
+
         // Step 1 — raw score
         val raw = (event.urgency + event.relevance + event.confidence - event.annoyanceCost) / 3f
 

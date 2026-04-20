@@ -120,6 +120,7 @@ class ToolRegistry private constructor(
              * the runner at execute time breaks the circular dependency.
              */
             planRunnerProvider: () -> com.jarvis.assistant.runtime.plan.PlanRunner? = { null },
+            expectationStore: com.jarvis.assistant.core.presence.ExpectationStore? = null,
         ): ToolRegistry {
             val contacts = ContactLookup(context)
             val search   = WebSearch()
@@ -221,6 +222,9 @@ class ToolRegistry private constructor(
                         add(com.jarvis.assistant.tools.device.RunRoutineTool(routineRepository, planRunnerProvider))
                         add(com.jarvis.assistant.tools.device.ListRoutinesTool(routineRepository))
                         add(com.jarvis.assistant.tools.device.DeleteRoutineTool(routineRepository))
+                    }
+                    expectationStore?.let {
+                        add(com.jarvis.assistant.tools.device.NoteExpectationTool(it))
                     }
                     add(HelpTool { buildCapabilitySummary(settings) })
                 },

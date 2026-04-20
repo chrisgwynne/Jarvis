@@ -309,6 +309,24 @@ class JarvisRuntime(
     // sequence recurs a few times in the same hour-of-day.
     private val routineSynthesizer = com.jarvis.assistant.core.routines.RoutineSynthesizer(context)
 
+    // Presence layer — rolling topics and short-term expectations the
+    // system prompt and scoring can consult every turn.
+    private val conversationThreads = com.jarvis.assistant.core.presence.ConversationThreads(context)
+    private val expectationStore by lazy {
+        com.jarvis.assistant.core.presence.ExpectationStore(
+            com.jarvis.assistant.memory.db.JarvisDatabase.getInstance(context).expectationDao()
+        )
+    }
+    // Continuous-tick provider; subscribes to EventBus on start.
+    // Built lazily so it captures proactiveEngine after initialize().
+    private val agentContextProvider by lazy {
+        com.jarvis.assistant.core.context.AgentContextProvider(
+            contextEngine = contextEngine,
+            presenceProvider = { currentPresence() },
+            snapshotProvider = { proactiveEngine.lastSnapshot },
+        )
+    }
+
     // Shared cooldown so the ledger can be constructed before ProactiveEngine
     // and handed to both the engine and the tool dispatcher.
     private val sharedCooldownStore = com.jarvis.assistant.proactive.CooldownStore(
@@ -386,7 +404,9 @@ class JarvisRuntime(
         retentionPolicy       = RetentionPolicy(knowledgeRepo)
         promptAssembler = PromptAssembler(
             contextEngine, memoryReader, profileMemory, knowledgeQuery,
-            sanitizer = Sanitizer()
+            sanitizer = Sanitizer(),
+            conversationThreads = conversationThreads,
+            expectationStore = expectationStore,
         )
 
         // Phase 7 — Orchestration
@@ -412,7 +432,8 @@ class JarvisRuntime(
             actionLedger           = sharedActionLedger,
             routineRepository      = routineRepository,
             recentToolCallBuffer   = recentToolCallBuffer,
-            planRunnerProvider     = { if (::planRunner.isInitialized) planRunner else null }
+            planRunnerProvider     = { if (::planRunner.isInitialized) planRunner else null },
+            expectationStore       = expectationStore
         )
         toolDispatcher = ToolDispatcher(
             context,
@@ -590,6 +611,8 @@ class JarvisRuntime(
             .attachAll()
         recentEventBuffer.attach()
         routineSynthesizer.attach()
+        expectationStore.attach()
+        agentContextProvider.attach()
 
         proactiveEngine.start()       // Proactive awareness polling
         convProactiveEngine.start()   // Conversational follow-up polling
@@ -811,6 +834,8 @@ class JarvisRuntime(
         toolRegistry.release()
         bluetoothSco.release()   // Phase 4: full teardown
         audioFocus.abandonFocus() // Phase 5
+        agentContextProvider.detach()
+        expectationStore.detach()
         routineSynthesizer.detach()
         recentEventBuffer.detach()
         eventAdapters.detachAll()       // Unwire bus adapters before callMonitor.stop()
@@ -1681,6 +1706,14 @@ class JarvisRuntime(
                             syncState(JarvisState.Listening)
                             continue
                         }
+                    }
+
+                    // Feed the live thread store so PromptAssembler can tell
+                    // the LLM what's still open and what's recently faded.
+                    // Skipped for short affirmations/negations which shouldn't
+                    // spawn their own thread — the gate below catches those.
+                    if (transcript.trim().split(' ').size > 2) {
+                        conversationThreads.touchFromUtterance(transcript)
                     }
 
                     // ── Confirmation gate handshake ───────────────────────────

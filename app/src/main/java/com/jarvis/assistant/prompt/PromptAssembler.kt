@@ -37,7 +37,9 @@ class PromptAssembler(
     private val memoryRetriever: MemoryRetriever,
     private val profileMemory: ProfileMemoryService? = null,
     private val knowledgeEngine: KnowledgeQueryEngine? = null,
-    private val sanitizer: Sanitizer? = null
+    private val sanitizer: Sanitizer? = null,
+    private val conversationThreads: com.jarvis.assistant.core.presence.ConversationThreads? = null,
+    private val expectationStore: com.jarvis.assistant.core.presence.ExpectationStore? = null,
 ) {
     // Profile facts change rarely — cache for 30 s to avoid a DB round-trip
     // on every LLM call. Invalidated automatically by TTL.
@@ -64,21 +66,25 @@ class PromptAssembler(
     ): List<Message> {
         val ctx = contextEngine.build()
 
-        val (memories, profileFrag, knowledgeFrag) = coroutineScope {
+        val (memories, profileFrag, knowledgeFrag, expectationFrag) = coroutineScope {
             val memoriesJob  = async { memoryRetriever.retrieveRelevant(userQuery, limit = maxMemories) }
             // Only hit the DB for the profile when we will actually use it.
             val useProfile   = shouldInjectProfile(speakerContext)
             val profileJob   = async { if (useProfile) getCachedProfileFragment() else "" }
             val knowledgeJob = async { knowledgeEngine?.retrieveContext(userQuery) ?: "" }
-            Triple(memoriesJob.await(), profileJob.await(), knowledgeJob.await())
+            val expectationJob = async { expectationStore?.toPromptFragment() ?: "" }
+            Quad(memoriesJob.await(), profileJob.await(), knowledgeJob.await(), expectationJob.await())
         }
+        val threadsFrag = conversationThreads?.toPromptFragment().orEmpty()
 
         val system = buildSystemPrompt(
             contextFragment   = contextEngine.toPromptFragment(ctx, presence),
             profileFragment   = profileFrag,
             memories          = memories,
             speakerContext    = speakerContext,
-            knowledgeFragment = sanitizer?.redactString(knowledgeFrag) ?: knowledgeFrag
+            knowledgeFragment = sanitizer?.redactString(knowledgeFrag) ?: knowledgeFrag,
+            threadsFragment   = threadsFrag,
+            expectationFragment = expectationFrag,
         )
 
         return buildList {
@@ -102,12 +108,17 @@ class PromptAssembler(
 
     // ── System prompt construction ────────────────────────────────────────────
 
+    /** 4-tuple to keep the coroutine-scope return clean; Triple was one short. */
+    private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+
     private fun buildSystemPrompt(
         contextFragment  : String,
         profileFragment  : String,
         memories         : List<MemoryEntry>,
         speakerContext   : SpeakerSessionContext?,
-        knowledgeFragment: String = ""
+        knowledgeFragment: String = "",
+        threadsFragment  : String = "",
+        expectationFragment: String = ""
     ): String = buildString {
 
         append("""
@@ -233,6 +244,18 @@ State time and date confidently. Never disclaim real-time access or knowledge cu
         if (knowledgeFragment.isNotBlank()) {
             append("\n\n")
             append(knowledgeFragment)
+        }
+
+        // Live conversation threads — what's still open / recently faded
+        if (threadsFragment.isNotBlank()) {
+            append("\n\n")
+            append(threadsFragment)
+        }
+
+        // Short-term expectations — what the agent is holding in mind
+        if (expectationFragment.isNotBlank()) {
+            append("\n\n")
+            append(expectationFragment)
         }
 
         // Speaker identity note (LOW / UNKNOWN) — prevents wrong-name greetings

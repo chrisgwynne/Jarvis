@@ -139,6 +139,28 @@ class ProactiveEngine(
         val dispatchedAt: Long,
         val actionClass: String?,
     )
+
+    /**
+     * Candidate held for later delivery after the presence gate suppressed
+     * it but nothing else would have. Re-tried on subsequent ticks; dropped
+     * after [presenceDeferralTtlMs] so stale queued items never surface.
+     */
+    private data class DeferredCandidate(
+        val event: ProactiveEvent,
+        val queuedAt: Long,
+    )
+    private val deferredQueue = ArrayDeque<DeferredCandidate>()
+    private val deferredLock = Any()
+    private val presenceDeferralTtlMs: Long = 10 * 60 * 1000L
+
+    /**
+     * Last snapshot built by [tick], exposed so [com.jarvis.assistant.core
+     * .context.AgentContextProvider] and other consumers can read the
+     * most recent proactive view without rebuilding it themselves.
+     * Null until the first tick completes.
+     */
+    @Volatile var lastSnapshot: ContextSnapshot? = null
+        private set
     @Volatile private var pendingVerdict: PendingVerdict? = null
     private val verdictLock = Mutex()
 
@@ -205,12 +227,15 @@ class ProactiveEngine(
      */
     private suspend fun tick() {
         val snapshot  = buildSnapshot()
+        lastSnapshot = snapshot
 
         // Resolve any pending ignore/accept verdict from a previous dispatch.
         resolvePendingVerdict(snapshot)
 
         val recent = recentEventBuffer?.snapshot(maxAgeMs = 5 * 60_000L) ?: emptyList()
-        val events = eventGenerator.generate(snapshot, recent)
+        val generated = eventGenerator.generate(snapshot, recent)
+        val deferred = drainDeferred(snapshot.currentTimeMillis)
+        val events = if (deferred.isEmpty()) generated else generated + deferred
         ProactiveMetrics.increment(ProactiveMetrics.Counter.EVENTS_GENERATED, events.size.toLong())
 
         if (events.isEmpty()) {
@@ -221,6 +246,7 @@ class ProactiveEngine(
 
         val scored    = eventScorer.scoreAll(events, snapshot)
         val action    = decisionEngine.decide(scored, snapshot)
+        decisionEngine.lastDeferredByPresence?.let { enqueueDeferred(it.event) }
 
         val outcome = when (action) {
             is ProactiveAction.SpeakAction -> "speak"
@@ -243,6 +269,25 @@ class ProactiveEngine(
             ProactiveMetrics.increment(ProactiveMetrics.Counter.ACTIONS_DISPATCHED)
             dispatch(action)
         }
+    }
+
+    /**
+     * Pull every deferred candidate whose queued age is still within TTL.
+     * Drops expired entries. Called at the top of each tick so the fresh
+     * [EventGenerator] output is merged with re-attempted deferrals.
+     */
+    private fun drainDeferred(now: Long): List<ProactiveEvent> = synchronized(deferredLock) {
+        val cutoff = now - presenceDeferralTtlMs
+        while (deferredQueue.isNotEmpty() && deferredQueue.peekFirst().queuedAt < cutoff) {
+            deferredQueue.removeFirst()
+        }
+        if (deferredQueue.isEmpty()) emptyList() else deferredQueue.map { it.event }.also { deferredQueue.clear() }
+    }
+
+    private fun enqueueDeferred(event: ProactiveEvent) = synchronized(deferredLock) {
+        if (deferredQueue.any { it.event.dedupeKey == event.dedupeKey }) return@synchronized
+        deferredQueue.addLast(DeferredCandidate(event, System.currentTimeMillis()))
+        while (deferredQueue.size > 8) deferredQueue.removeFirst()
     }
 
     private fun snapshotSummary(s: ContextSnapshot): String = buildString {

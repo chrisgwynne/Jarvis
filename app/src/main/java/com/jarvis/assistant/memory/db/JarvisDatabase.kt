@@ -10,6 +10,8 @@ import com.jarvis.assistant.brain.db.dao.BrainEventDao
 import com.jarvis.assistant.brain.db.dao.BrainPatternDao
 import com.jarvis.assistant.brain.db.entity.BrainEvent
 import com.jarvis.assistant.brain.db.entity.BrainPattern
+import com.jarvis.assistant.core.presence.ExpectationDao
+import com.jarvis.assistant.core.presence.ExpectationEntity
 import com.jarvis.assistant.core.routines.SavedRoutineDao
 import com.jarvis.assistant.core.routines.SavedRoutineEntity
 import com.jarvis.assistant.core.telemetry.DecisionTraceDao
@@ -76,9 +78,10 @@ import com.jarvis.assistant.runtime.plan.JournalEntry
         JournalEntry::class,
         ProactiveCooldownEntity::class,
         DecisionTraceEntity::class,
-        SavedRoutineEntity::class
+        SavedRoutineEntity::class,
+        ExpectationEntity::class
     ],
-    version = 14,
+    version = 15,
     exportSchema = false
 )
 abstract class JarvisDatabase : RoomDatabase() {
@@ -105,6 +108,7 @@ abstract class JarvisDatabase : RoomDatabase() {
     abstract fun proactiveCooldownDao(): ProactiveCooldownDao
     abstract fun decisionTraceDao(): DecisionTraceDao
     abstract fun savedRoutineDao(): SavedRoutineDao
+    abstract fun expectationDao(): ExpectationDao
 
     companion object {
         private const val DB_NAME = "jarvis.db"
@@ -435,6 +439,32 @@ abstract class JarvisDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration 14 → 15: add expectations table for short-term
+         * anticipations the agent holds (time-based or event-kind-based).
+         */
+        private val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS expectations (
+                        id               INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        label            TEXT    NOT NULL,
+                        triggerAtMs      INTEGER,
+                        triggerEventKind TEXT,
+                        createdAtMs      INTEGER NOT NULL,
+                        expiresAtMs      INTEGER NOT NULL,
+                        status           TEXT    NOT NULL DEFAULT 'PENDING',
+                        sourceTranscript TEXT
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_expectations_triggerAtMs ON expectations(triggerAtMs)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_expectations_triggerEventKind ON expectations(triggerEventKind)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_expectations_status ON expectations(status)")
+            }
+        }
+
+        /**
          * Migration 13 → 14: add saved_routines table for persisted tool-call
          * sequences the user has promoted to reusable plans.
          */
@@ -490,7 +520,7 @@ abstract class JarvisDatabase : RoomDatabase() {
                     .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                                    MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
-                                   MIGRATION_12_13, MIGRATION_13_14)
+                                   MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
                     .build()
                     .also { INSTANCE = it }
             }

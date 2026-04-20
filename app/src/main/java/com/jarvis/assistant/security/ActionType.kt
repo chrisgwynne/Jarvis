@@ -26,7 +26,8 @@ enum class ActionType(val displayName: String) {
     SAVE_ROUTINE("Save Routine"),
     RUN_ROUTINE("Run Routine"),
     LIST_ROUTINES("List Routines"),
-    DELETE_ROUTINE("Delete Routine");
+    DELETE_ROUTINE("Delete Routine"),
+    NOTE_EXPECTATION("Note Expectation");
 
     companion object {
         /** All tool names that are approved for execution, mapped to their ActionType. */
@@ -56,7 +57,8 @@ enum class ActionType(val displayName: String) {
             "save_routine"        to SAVE_ROUTINE,
             "run_routine"         to RUN_ROUTINE,
             "list_routines"       to LIST_ROUTINES,
-            "delete_routine"      to DELETE_ROUTINE
+            "delete_routine"      to DELETE_ROUTINE,
+            "note_expectation"    to NOTE_EXPECTATION
         )
 
         fun fromToolName(toolName: String): ActionType? = APPROVED_TOOL_MAP[toolName]

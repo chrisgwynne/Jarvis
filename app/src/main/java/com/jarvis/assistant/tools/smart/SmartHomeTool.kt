@@ -22,6 +22,7 @@ class SmartHomeTool(private val settings: SettingsStore) : Tool {
     override val name             = "smart_home"
     override val description      = "Control smart home devices via Home Assistant"
     override val requiresNetwork  = true
+    override val riskClass        = com.jarvis.assistant.tools.framework.RiskClass.MEDIUM
 
     override fun schema() = ToolSchema(
         name        = name,

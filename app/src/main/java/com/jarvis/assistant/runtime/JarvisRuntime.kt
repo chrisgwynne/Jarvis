@@ -21,7 +21,11 @@ import com.jarvis.assistant.context.Presence
 import com.jarvis.assistant.core.events.EventAdapters
 import com.jarvis.assistant.core.events.adapters.BatteryEventAdapter
 import com.jarvis.assistant.core.events.adapters.DrivingModeEventAdapter
+import com.jarvis.assistant.core.events.adapters.ForegroundAppEventAdapter
+import com.jarvis.assistant.core.events.adapters.HomeAssistantEventAdapter
+import com.jarvis.assistant.core.events.adapters.NetworkEventAdapter
 import com.jarvis.assistant.core.events.adapters.TelephonyEventAdapter
+import com.jarvis.assistant.core.safety.ConfirmationGate
 import com.jarvis.assistant.core.safety.Sanitizer
 import com.jarvis.assistant.core.telemetry.DecisionTraceStore
 import com.jarvis.assistant.location.CurrentLocationProvider
@@ -288,6 +292,10 @@ class JarvisRuntime(
     // Owned here so lifecycle matches the runtime; detached in shutdown().
     private val eventAdapters = EventAdapters()
 
+    // Cross-path confirmation layer for destructive tools. LOW-risk tools
+    // don't touch it; MEDIUM/HIGH trigger a "are you sure?" handshake.
+    private val confirmationGate = ConfirmationGate()
+
     // Pipeline state
     private var pipelineJob: Job? = null
     private var callEventJob: Job? = null
@@ -383,7 +391,8 @@ class JarvisRuntime(
             // records nothing, which matches legacy behaviour.
             actionLedgerProvider = {
                 if (::proactiveEngine.isInitialized) proactiveEngine.ledger else null
-            }
+            },
+            confirmationGate = confirmationGate
         )
         memoryHandler = MemoryActionHandler(profileMemory)
         reminderHandler = ReminderActionHandler(reminderRepo)
@@ -523,6 +532,14 @@ class JarvisRuntime(
             .add(TelephonyEventAdapter(callMonitor, scope))
             .add(DrivingModeEventAdapter(drivingModeManager))
             .add(BatteryEventAdapter(context))
+            .add(NetworkEventAdapter(context))
+            .add(ForegroundAppEventAdapter(context))
+            .add(HomeAssistantEventAdapter(clientProvider = {
+                val base = settings.haBaseUrl
+                val token = settings.haApiToken
+                if (base.isBlank() || token.isBlank()) null
+                else com.jarvis.assistant.tools.smart.HomeAssistantClient(base, token)
+            }))
             .attachAll()
 
         proactiveEngine.start()       // Proactive awareness polling
@@ -1615,6 +1632,45 @@ class JarvisRuntime(
                         }
                     }
 
+                    // ── Confirmation gate handshake ───────────────────────────
+                    // Any pending risky tool from a prior turn gets first bite
+                    // at this utterance. Affirmative → re-dispatch the stashed
+                    // tool with skipConfirmation=true. Declined → drop silently.
+                    when (val verdict = confirmationGate.consume(transcript)) {
+                        is ConfirmationGate.Verdict.Affirmed -> {
+                            val stashed = verdict.pending
+                            val tool = toolRegistry.findByName(stashed.toolName)
+                            if (tool != null) {
+                                val r = toolDispatcher.dispatch(
+                                    tool, stashed.input, sessionSpeaker,
+                                    stashed.originatingTranscript, skipConfirmation = true,
+                                )
+                                when (r) {
+                                    is ToolDispatcher.DispatchResult.Done ->
+                                        if (r.spokenFeedback.isNotBlank()) speakAndRecord(r.spokenFeedback)
+                                    is ToolDispatcher.DispatchResult.Failed -> speakAndRecord(r.message)
+                                    is ToolDispatcher.DispatchResult.Denied -> speakAndRecord(r.message)
+                                    is ToolDispatcher.DispatchResult.SilentExit,
+                                    is ToolDispatcher.DispatchResult.AugmentedLlm,
+                                    is ToolDispatcher.DispatchResult.LlmFollowUp,
+                                    is ToolDispatcher.DispatchResult.NeedsConfirmation -> Unit
+                                }
+                            } else {
+                                speakAndRecord("That tool's gone — skipping it.")
+                            }
+                            machine.transition(JarvisState.Listening)
+                            syncState(JarvisState.Listening)
+                            continue
+                        }
+                        is ConfirmationGate.Verdict.Declined -> {
+                            speakAndRecord("Dropped it.")
+                            machine.transition(JarvisState.Listening)
+                            syncState(JarvisState.Listening)
+                            continue
+                        }
+                        ConfirmationGate.Verdict.None -> Unit
+                    }
+
                     // ── Conversation intent classification ─────────────────────
                     // Classify BEFORE tool matching so casual/personal messages
                     // never reach the tool layer (and never trigger web search).
@@ -1691,6 +1747,12 @@ class JarvisRuntime(
                             is ToolDispatcher.DispatchResult.AugmentedLlm -> {
                                 val response = callLlm(r.augmentedTranscript, isOnline)
                                 speakAndRecord(response)
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                            is ToolDispatcher.DispatchResult.NeedsConfirmation -> {
+                                speakAndRecord(r.prompt)
                                 machine.transition(JarvisState.Listening)
                                 syncState(JarvisState.Listening)
                                 continue

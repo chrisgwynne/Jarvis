@@ -35,20 +35,27 @@ class HomeAssistantClient(
         if (System.currentTimeMillis() - entityCacheTs < CACHE_TTL_MS) {
             return@withLock entityCacheData
         }
-        return@withLock try {
-            val url  = "${baseUrl.trimEnd('/')}/api/states"
-            val body = NetworkClient.get(url, headers)
-            val raw  = NetworkClient.gson.fromJson(body, Array<HaStateRaw>::class.java)
-            val entities = raw.mapNotNull { it.toEntity() }
-                .filter { it.state != "unavailable" }
-            entityCacheTs = System.currentTimeMillis()
-            entityCacheData = entities
-            Log.d(TAG, "Loaded ${entities.size} HA entities")
-            entities
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to fetch HA states: ${e.message}")
-            emptyList()
-        }
+        return@withLock fetchStatesFresh()
+    }
+
+    /**
+     * Bypass the 10 min cache. Used by the inbound HomeAssistantEventAdapter,
+     * which polls every few seconds to detect state changes and shouldn't be
+     * served a stale cached response.
+     */
+    suspend fun fetchStatesFresh(): List<HaEntity> = try {
+        val url  = "${baseUrl.trimEnd('/')}/api/states"
+        val body = NetworkClient.get(url, headers)
+        val raw  = NetworkClient.gson.fromJson(body, Array<HaStateRaw>::class.java)
+        val entities = raw.mapNotNull { it.toEntity() }
+            .filter { it.state != "unavailable" }
+        entityCacheTs = System.currentTimeMillis()
+        entityCacheData = entities
+        Log.d(TAG, "Loaded ${entities.size} HA entities")
+        entities
+    } catch (e: Exception) {
+        Log.w(TAG, "Failed to fetch HA states: ${e.message}")
+        emptyList()
     }
 
     suspend fun getEntityState(entityId: String): HaEntity? = try {

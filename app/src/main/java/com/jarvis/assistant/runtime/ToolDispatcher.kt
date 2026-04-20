@@ -3,6 +3,7 @@ package com.jarvis.assistant.runtime
 import android.content.Context
 import android.util.Log
 import com.jarvis.assistant.core.decisions.ActionLedger
+import com.jarvis.assistant.core.safety.ConfirmationGate
 import com.jarvis.assistant.core.state.DeviceStateStore
 import com.jarvis.assistant.core.state.JarvisState
 import com.jarvis.assistant.core.state.JarvisStateMachine
@@ -45,6 +46,14 @@ class ToolDispatcher(
      * which is the safe legacy behaviour.
      */
     private val actionLedgerProvider: () -> ActionLedger? = { null },
+    /**
+     * Optional confirmation gate. When supplied, destructive tools
+     * (RiskClass MEDIUM / HIGH) are intercepted before execute() — the
+     * dispatcher registers a pending confirmation with the gate and
+     * returns [DispatchResult.NeedsConfirmation] so the runtime can
+     * speak the prompt and await the user's next utterance.
+     */
+    private val confirmationGate: ConfirmationGate? = null,
 ) {
 
     companion object {
@@ -67,6 +76,17 @@ class ToolDispatcher(
         data class LlmFollowUp(val spokenFeedback: String, val hints: BrainHints?) : DispatchResult()
         /** Execution failed — caller speaks the failure message then resumes. */
         data class Failed(val message: String) : DispatchResult()
+        /**
+         * Tool is risk-gated. Caller MUST speak [prompt] and transition
+         * back to listening so the user's next utterance reaches the
+         * [ConfirmationGate]. The runtime re-dispatches via
+         * [dispatch] with `skipConfirmation=true` on affirmative.
+         */
+        data class NeedsConfirmation(
+            val prompt: String,
+            val pendingId: String,
+            val toolName: String,
+        ) : DispatchResult()
     }
 
     /** Carries tool name + input so JarvisRuntime can log brain events. */
@@ -109,7 +129,8 @@ class ToolDispatcher(
         tool: com.jarvis.assistant.tools.framework.Tool,
         input: ToolInput,
         sessionSpeaker: SpeakerSessionContext,
-        transcript: String
+        transcript: String,
+        skipConfirmation: Boolean = false,
     ): DispatchResult {
         val hints = BrainHints(tool.name, input)
 
@@ -135,6 +156,19 @@ class ToolDispatcher(
                 else                              -> "I can't do that right now."
             }
             return DispatchResult.Denied(message)
+        }
+
+        // ── Confirmation gate ─────────────────────────────────────────────────
+        if (!skipConfirmation && confirmationGate != null &&
+            tool.riskClass != com.jarvis.assistant.tools.framework.RiskClass.LOW
+        ) {
+            val registered = confirmationGate.registerPending(tool, input, transcript)
+            Log.d(TAG, "Confirmation required for ${tool.name} (risk=${tool.riskClass}) pending=${registered.pending.id}")
+            return DispatchResult.NeedsConfirmation(
+                prompt = registered.prompt,
+                pendingId = registered.pending.id,
+                toolName = tool.name,
+            )
         }
 
         // ── Execute ───────────────────────────────────────────────────────────

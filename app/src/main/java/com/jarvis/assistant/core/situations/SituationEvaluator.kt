@@ -108,9 +108,8 @@ class SituationEvaluator {
         nowMs: Long,
     ): Situation? {
         val leftHome = candidates.any { it.eventType == ProactiveEventType.LEFT_HOME }
-        val meetingSoon = snapshot.nextMeetingAtMillis?.let {
-            it - nowMs in 0..MEETING_SOON_MS
-        } == true
+        val nextMeeting = snapshot.nextMeetingAtMillis
+        val meetingSoon = nextMeeting != null && (nextMeeting - nowMs) in 0..MEETING_SOON_MS
         if (!leftHome && !meetingSoon) return null
 
         return Situation(
@@ -121,7 +120,9 @@ class SituationEvaluator {
             expiresAtMs = nowMs + DEFAULT_TTL_MS,
             evidence = buildList {
                 if (leftHome) add("event=LEFT_HOME")
-                if (meetingSoon) add("nextMeetingInMin=${(snapshot.nextMeetingAtMillis!! - nowMs) / 60_000L}")
+                if (meetingSoon && nextMeeting != null) {
+                    add("nextMeetingInMin=${(nextMeeting - nowMs) / 60_000L}")
+                }
             },
             sourceSignals = listOf("candidates.LEFT_HOME", "snapshot.nextMeetingAtMillis"),
             summary = "User is leaving or about to leave home.",
@@ -241,9 +242,9 @@ class SituationEvaluator {
         if (snapshot.missedCallsCount <= 0) return null
         if (snapshot.isDriving) return null
         if (presence.activity == ActivityMode.ACTIVE) return null
-        val inMeeting = snapshot.nextMeetingAtMillis != null &&
-            snapshot.nextMeetingEndMillis != null &&
-            nowMs in snapshot.nextMeetingAtMillis!!..snapshot.nextMeetingEndMillis!!
+        val meetingStart = snapshot.nextMeetingAtMillis
+        val meetingEnd = snapshot.nextMeetingEndMillis
+        val inMeeting = meetingStart != null && meetingEnd != null && nowMs in meetingStart..meetingEnd
         if (inMeeting) return null
 
         return Situation(

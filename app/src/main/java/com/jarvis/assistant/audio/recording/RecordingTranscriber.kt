@@ -10,6 +10,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
+import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
 
@@ -77,8 +78,12 @@ class RecordingTranscriber(private val settings: SettingsStore) {
             if (!r.isSuccessful) {
                 throw LlmException("Whisper API error ${r.code}: ${body.take(200)}")
             }
-            JSONObject(body).getString("text").trim()
-                .ifBlank { throw LlmException("Whisper returned an empty transcript.") }
+            val text = try {
+                JSONObject(body).optString("text", "")
+            } catch (e: JSONException) {
+                throw LlmException("Whisper returned malformed JSON: ${body.take(200)}", e)
+            }
+            text.trim().ifBlank { throw LlmException("Whisper returned an empty transcript.") }
         }
     }
 }

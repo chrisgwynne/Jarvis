@@ -100,7 +100,15 @@ class BargeInDetector(
             return
         }
 
-        record.startRecording()
+        try {
+            record.startRecording()
+        } catch (e: IllegalStateException) {
+            // Device denied the record start (mic held by another app, focus lost
+            // mid-init, etc.).  Release the claim so we don't pin the hardware.
+            Log.w(TAG, "AudioRecord.startRecording() threw — releasing", e)
+            record.release()
+            return
+        }
         Log.d(TAG, "Monitoring started (threshold=$energyThreshold, holdMs=$holdMs)")
 
         detectJob = scope.launch {

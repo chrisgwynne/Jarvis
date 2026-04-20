@@ -8,13 +8,18 @@ import androidx.room.PrimaryKey
  * MemoryEntry — one unit of long-term memory.
  *
  * TYPES:
- *   EPISODIC   — summary of a specific past conversation
- *   PREFERENCE — something the user explicitly prefers ("I like concise answers")
- *   CONTACT    — recurring contact info beyond the phone book
- *   TASK       — an unresolved item the user mentioned
- *   ROUTINE    — a recurring action or pattern Jarvis noticed
- *   FACTUAL    — a user-stated fact ("I work at Acme Corp")
- *   SUMMARY    — automated session summary written by MemoryWriter
+ *   EPISODIC           — summary of a specific past conversation
+ *   PREFERENCE         — something the user explicitly prefers ("I like concise answers")
+ *   CONTACT            — recurring contact info beyond the phone book
+ *   TASK               — an unresolved item the user mentioned
+ *   ROUTINE            — a recurring action or pattern Jarvis noticed
+ *   FACTUAL            — a user-stated fact ("I work at Acme Corp")
+ *   SUMMARY            — automated session summary written by MemoryWriter
+ *   SCREEN_OBSERVATION — structured snapshot of what was on-screen when the
+ *                        user said "look at this". Content is JSON (see
+ *                        [com.jarvis.assistant.vision.ScreenObservationRepository]);
+ *                        importance is set low so pruning can evict older
+ *                        observations without touching preferences / facts.
  *
  * RETRIEVAL:
  *   keywords is a comma-separated list of lowercase tokens for fast FTS-lite matching.
@@ -38,5 +43,6 @@ data class MemoryEntry(
 )
 
 enum class MemoryType {
-    EPISODIC, PREFERENCE, CONTACT, TASK, ROUTINE, FACTUAL, SUMMARY
+    EPISODIC, PREFERENCE, CONTACT, TASK, ROUTINE, FACTUAL, SUMMARY,
+    SCREEN_OBSERVATION
 }

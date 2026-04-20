@@ -43,6 +43,10 @@ import com.jarvis.assistant.audio.recording.RecordingTranscriber
 import com.jarvis.assistant.camera.CameraCaptureManager
 import com.jarvis.assistant.camera.VisionClient
 import com.jarvis.assistant.tools.device.AnalyzeCameraViewTool
+import com.jarvis.assistant.tools.device.LookAtThisIntentHandler
+import com.jarvis.assistant.vision.ScreenObservationRepository
+import com.jarvis.assistant.vision.ScreenshotCaptureService
+import com.jarvis.assistant.vision.VisionScreenAnalyzer
 import com.jarvis.assistant.tools.device.DirectionsTool
 import com.jarvis.assistant.tools.device.NavigateTool
 import com.jarvis.assistant.tools.device.NearestPlaceTool
@@ -197,6 +201,17 @@ class ToolRegistry private constructor(
                     // Screen vision + actuation (before generic OpenApp)
                     llmRouter?.let { add(ReadScreenTool(it)) }
                     add(TapScreenTool())
+                    // "look at this" — screen observation.  Must precede
+                    // AnalyzeCameraViewTool so the generic "look at this"
+                    // phrase captures the screen (primary user intent),
+                    // leaving camera-specific phrasings for the camera tool.
+                    // Requires the main LLM pipeline for structured-JSON calls.
+                    if (llmRouter != null) {
+                        val screenshotCapture = ScreenshotCaptureService(context)
+                        val screenAnalyzer    = VisionScreenAnalyzer(visionClient, llmRouter)
+                        val screenRepo        = ScreenObservationRepository(db.memoryDao())
+                        add(LookAtThisIntentHandler(screenshotCapture, screenAnalyzer, screenRepo))
+                    }
                     // Camera + vision tools (before OpenApp to avoid misrouting)
                     add(CameraCaptureTool(context, cameraCapture))
                     add(AnalyzeCameraViewTool(context, cameraCapture, visionClient, llmRouter))

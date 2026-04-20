@@ -19,6 +19,7 @@ import com.jarvis.assistant.call.integration.TelephonyCallMonitor
 import com.jarvis.assistant.context.ContextEngine
 import com.jarvis.assistant.context.Presence
 import com.jarvis.assistant.core.events.EventAdapters
+import com.jarvis.assistant.core.events.RecentEventBuffer
 import com.jarvis.assistant.core.events.adapters.BatteryEventAdapter
 import com.jarvis.assistant.core.events.adapters.DrivingModeEventAdapter
 import com.jarvis.assistant.core.events.adapters.ForegroundAppEventAdapter
@@ -292,6 +293,13 @@ class JarvisRuntime(
     // Owned here so lifecycle matches the runtime; detached in shutdown().
     private val eventAdapters = EventAdapters()
 
+    // Recent-event ring buffer so composite triggers can reason about
+    // cross-stream history ("SSID changed 30s ago AND driving mode on").
+    private val recentEventBuffer = RecentEventBuffer()
+
+    // Durable known-SSID set for UnfamiliarSsidTrigger.
+    private val knownSsidStore = com.jarvis.assistant.core.learning.KnownSsidStore(context)
+
     // Cross-path confirmation layer for destructive tools. LOW-risk tools
     // don't touch it; MEDIUM/HIGH trigger a "are you sure?" handshake.
     private val confirmationGate = ConfirmationGate()
@@ -455,7 +463,9 @@ class JarvisRuntime(
             ),
             isDrivingProvider    = { drivingModeManager.isDriving },
             cooldownDao          = db.proactiveCooldownDao(),
-            traceStore           = DecisionTraceStore(db.decisionTraceDao())
+            traceStore           = DecisionTraceStore(db.decisionTraceDao()),
+            recentEventBuffer    = recentEventBuffer,
+            knownSsidStore       = knownSsidStore
         )
 
         // Conversational follow-up engine
@@ -541,6 +551,7 @@ class JarvisRuntime(
                 else com.jarvis.assistant.tools.smart.HomeAssistantClient(base, token)
             }))
             .attachAll()
+        recentEventBuffer.attach()
 
         proactiveEngine.start()       // Proactive awareness polling
         convProactiveEngine.start()   // Conversational follow-up polling
@@ -762,6 +773,7 @@ class JarvisRuntime(
         toolRegistry.release()
         bluetoothSco.release()   // Phase 4: full teardown
         audioFocus.abandonFocus() // Phase 5
+        recentEventBuffer.detach()
         eventAdapters.detachAll()       // Unwire bus adapters before callMonitor.stop()
         callMonitor.stop()              // Phase 6
         proactiveEngine.stop()          // Proactive awareness

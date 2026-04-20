@@ -3,6 +3,7 @@ package com.jarvis.assistant.proactive
 import com.jarvis.assistant.core.context.AgentContextFactory
 import com.jarvis.assistant.core.decisions.TriggerEngine
 import com.jarvis.assistant.core.decisions.triggers.DefaultTriggers
+import com.jarvis.assistant.core.events.Event
 
 /**
  * EventGenerator — thin compatibility wrapper around the new
@@ -17,9 +18,9 @@ class EventGenerator(
     private val triggerEngine: TriggerEngine = DefaultTriggers.engine(config),
 ) {
 
-    fun generate(snapshot: ContextSnapshot): List<ProactiveEvent> {
+    fun generate(snapshot: ContextSnapshot, recentEvents: List<Event> = emptyList()): List<ProactiveEvent> {
         val ctx = AgentContextFactory.fromSnapshot(snapshot)
-        return triggerEngine.evaluate(ctx, emptyList()).map { it.toProactiveEvent() }
+        return triggerEngine.evaluate(ctx, recentEvents).map { it.toProactiveEvent() }
     }
 
     fun buildDailyBrief(snapshot: ContextSnapshot): Map<DailyBriefBucket, List<ProactiveEvent>> {

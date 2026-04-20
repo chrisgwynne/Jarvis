@@ -87,6 +87,17 @@ class ProactiveEngine(
      * and-forget: never blocks the tick.
      */
     private val traceStore: com.jarvis.assistant.core.telemetry.DecisionTraceStore? = null,
+    /**
+     * Optional recent-event buffer. When supplied, each tick hands its
+     * snapshot to the trigger engine so composite triggers can reason
+     * about cross-stream history (e.g. "SSID changed 30s ago").
+     */
+    private val recentEventBuffer: com.jarvis.assistant.core.events.RecentEventBuffer? = null,
+    /**
+     * Optional known-SSID store so [UnfamiliarSsidTrigger] can be
+     * registered in the trigger engine. Null = trigger skipped.
+     */
+    knownSsidStore: com.jarvis.assistant.core.learning.KnownSsidStore? = null,
 ) {
 
     companion object {
@@ -98,7 +109,10 @@ class ProactiveEngine(
     private val cooldownStore   = CooldownStore(dao = cooldownDao)
     val ledger: com.jarvis.assistant.core.decisions.ActionLedger =
         actionLedger ?: com.jarvis.assistant.core.decisions.ActionLedger(cooldownStore)
-    private val eventGenerator  = EventGenerator(config)
+    private val eventGenerator  = EventGenerator(
+        config = config,
+        triggerEngine = com.jarvis.assistant.core.decisions.triggers.DefaultTriggers.engine(config, knownSsidStore),
+    )
     private val eventScorer     = EventScorer(config, cooldownStore)
     private val decisionEngine  = DecisionEngine(config, cooldownStore)
 
@@ -183,7 +197,8 @@ class ProactiveEngine(
         // Resolve any pending ignore/accept verdict from a previous dispatch.
         resolvePendingVerdict(snapshot)
 
-        val events    = eventGenerator.generate(snapshot)
+        val recent = recentEventBuffer?.snapshot(maxAgeMs = 5 * 60_000L) ?: emptyList()
+        val events = eventGenerator.generate(snapshot, recent)
         ProactiveMetrics.increment(ProactiveMetrics.Counter.EVENTS_GENERATED, events.size.toLong())
 
         if (events.isEmpty()) {

@@ -14,19 +14,26 @@ import com.jarvis.assistant.proactive.ProactiveConfig
  * happens downstream in the policy engine.
  */
 object DefaultTriggers {
-    fun build(config: ProactiveConfig = ProactiveConfig()): List<Trigger> = listOf(
-        LowBatteryTrigger(config),
-        UpcomingReminderTrigger(config),
-        MissedCallTrigger(),
-        UnreadNotificationTrigger(),
-        BehavioralLearningTrigger(),
-        MeetingStartingSoonTrigger(config),
-        UpcomingMeetingTrigger(config),
-        DailyAgendaTrigger(config),
-        LocationTransitionTrigger(config),
-        LowBatteryBeforeTravelTrigger(config),
-    )
+    fun build(
+        config: ProactiveConfig = ProactiveConfig(),
+        knownSsidStore: com.jarvis.assistant.core.learning.KnownSsidStore? = null,
+    ): List<Trigger> = buildList {
+        add(LowBatteryTrigger(config))
+        add(UpcomingReminderTrigger(config))
+        add(MissedCallTrigger())
+        add(UnreadNotificationTrigger())
+        add(BehavioralLearningTrigger())
+        add(MeetingStartingSoonTrigger(config))
+        add(UpcomingMeetingTrigger(config))
+        add(DailyAgendaTrigger(config))
+        add(LocationTransitionTrigger(config))
+        add(LowBatteryBeforeTravelTrigger(config))
+        add(HomeAssistantMotionAwayTrigger())
+        if (knownSsidStore != null) add(UnfamiliarSsidTrigger(knownSsidStore))
+    }
 
-    fun engine(config: ProactiveConfig = ProactiveConfig()): TriggerEngine =
-        TriggerEngine(build(config))
+    fun engine(
+        config: ProactiveConfig = ProactiveConfig(),
+        knownSsidStore: com.jarvis.assistant.core.learning.KnownSsidStore? = null,
+    ): TriggerEngine = TriggerEngine(build(config, knownSsidStore))
 }

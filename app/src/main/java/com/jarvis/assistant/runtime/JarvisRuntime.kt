@@ -300,6 +300,16 @@ class JarvisRuntime(
     // Durable known-SSID set for UnfamiliarSsidTrigger.
     private val knownSsidStore = com.jarvis.assistant.core.learning.KnownSsidStore(context)
 
+    // Shared cooldown so the ledger can be constructed before ProactiveEngine
+    // and handed to both the engine and the tool dispatcher.
+    private val sharedCooldownStore = com.jarvis.assistant.proactive.CooldownStore(
+        dao = com.jarvis.assistant.memory.db.JarvisDatabase.getInstance(context).proactiveCooldownDao()
+    )
+    private val sharedActionLedger = com.jarvis.assistant.core.decisions.ActionLedger(
+        cooldownStore = sharedCooldownStore,
+        prefs = com.jarvis.assistant.core.decisions.ActionLedger.prefsFor(context),
+    )
+
     // Cross-path confirmation layer for destructive tools. LOW-risk tools
     // don't touch it; MEDIUM/HIGH trigger a "are you sure?" handshake.
     private val confirmationGate = ConfirmationGate()
@@ -397,9 +407,7 @@ class JarvisRuntime(
             // Resolves to the engine's ledger once ProactiveEngine is built
             // below. Until then the lambda returns null and the dispatcher
             // records nothing, which matches legacy behaviour.
-            actionLedgerProvider = {
-                if (::proactiveEngine.isInitialized) proactiveEngine.ledger else null
-            },
+            actionLedgerProvider = { sharedActionLedger },
             confirmationGate = confirmationGate
         )
         memoryHandler = MemoryActionHandler(profileMemory)
@@ -465,7 +473,9 @@ class JarvisRuntime(
             cooldownDao          = db.proactiveCooldownDao(),
             traceStore           = DecisionTraceStore(db.decisionTraceDao()),
             recentEventBuffer    = recentEventBuffer,
-            knownSsidStore       = knownSsidStore
+            knownSsidStore       = knownSsidStore,
+            sharedCooldownStore  = sharedCooldownStore,
+            actionLedger         = sharedActionLedger
         )
 
         // Conversational follow-up engine

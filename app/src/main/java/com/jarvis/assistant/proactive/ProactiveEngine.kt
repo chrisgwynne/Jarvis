@@ -75,6 +75,12 @@ class ProactiveEngine(
      */
     private val cooldownDao: ProactiveCooldownDao? = null,
     /**
+     * Optional shared cooldown store. When provided the engine uses it for
+     * scoring + decision gating; the ledger passed alongside must wrap the
+     * same instance. When null, a fresh store is constructed from [cooldownDao].
+     */
+    sharedCooldownStore: CooldownStore? = null,
+    /**
      * Optional shared action ledger. When provided the engine uses it for
      * markSurfaced / markIgnored / markAccepted so reactive tool calls and
      * proactive dispatches share one cooldown view. When null, a fresh
@@ -106,14 +112,14 @@ class ProactiveEngine(
 
     // ── Internals ─────────────────────────────────────────────────────────────
 
-    private val cooldownStore   = CooldownStore(dao = cooldownDao)
+    private val cooldownStore   = sharedCooldownStore ?: CooldownStore(dao = cooldownDao)
     val ledger: com.jarvis.assistant.core.decisions.ActionLedger =
         actionLedger ?: com.jarvis.assistant.core.decisions.ActionLedger(cooldownStore)
     private val eventGenerator  = EventGenerator(
         config = config,
         triggerEngine = com.jarvis.assistant.core.decisions.triggers.DefaultTriggers.engine(config, knownSsidStore),
     )
-    private val eventScorer     = EventScorer(config, cooldownStore)
+    private val eventScorer     = EventScorer(config, cooldownStore, ledger)
     private val decisionEngine  = DecisionEngine(config, cooldownStore)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -126,7 +132,11 @@ class ProactiveEngine(
      * action counts as ignored and future effective cooldowns for [dedupeKey]
      * stretch by [ProactiveConfig.ignoreEscalationFactor].
      */
-    private data class PendingVerdict(val dedupeKey: String, val dispatchedAt: Long)
+    private data class PendingVerdict(
+        val dedupeKey: String,
+        val dispatchedAt: Long,
+        val actionClass: String?,
+    )
     @Volatile private var pendingVerdict: PendingVerdict? = null
     private val verdictLock = Mutex()
 
@@ -262,7 +272,7 @@ class ProactiveEngine(
         val verdict = pendingVerdict ?: return@withLock
         val lastUser = snapshot.lastUserInteractionTimeMillis
         if (lastUser != null && lastUser > verdict.dispatchedAt) {
-            ledger.recordVerdict(verdict.dedupeKey, accepted = true)
+            ledger.recordVerdict(verdict.dedupeKey, accepted = true, actionClass = verdict.actionClass)
             Log.d(TAG, "Accepted verdict for ${verdict.dedupeKey}")
             ProactiveMetrics.increment(ProactiveMetrics.Counter.VERDICT_ACCEPTED)
             pendingVerdict = null
@@ -270,7 +280,7 @@ class ProactiveEngine(
         }
         val age = snapshot.currentTimeMillis - verdict.dispatchedAt
         if (age >= config.ignoreCheckDelayMs) {
-            ledger.recordVerdict(verdict.dedupeKey, accepted = false)
+            ledger.recordVerdict(verdict.dedupeKey, accepted = false, actionClass = verdict.actionClass)
             Log.d(
                 TAG,
                 "Ignored verdict for ${verdict.dedupeKey} " +
@@ -355,13 +365,13 @@ class ProactiveEngine(
         verdictLock.withLock {
             pendingVerdict?.let { prior ->
                 if (prior.dedupeKey != key) {
-                    ledger.recordVerdict(prior.dedupeKey, accepted = false)
+                    ledger.recordVerdict(prior.dedupeKey, accepted = false, actionClass = prior.actionClass)
                     Log.d(TAG, "Displaced verdict ignored: ${prior.dedupeKey}")
                     ProactiveMetrics.increment(ProactiveMetrics.Counter.VERDICT_DISPLACED)
                 }
             }
             ledger.recordProactiveDispatch(key, actionClass)
-            pendingVerdict = PendingVerdict(key, System.currentTimeMillis())
+            pendingVerdict = PendingVerdict(key, System.currentTimeMillis(), actionClass)
         }
 
         try {

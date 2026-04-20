@@ -251,12 +251,12 @@ class ProactiveEngine(
         val outcome = when (action) {
             is ProactiveAction.SpeakAction -> "speak"
             is ProactiveAction.PassiveAction -> "passive"
-            ProactiveAction.NoAction -> "suppressed"
+            is ProactiveAction.NoAction -> "suppressed:${action.reason.name.lowercase()}"
         }
         val dispatchedKey = when (action) {
             is ProactiveAction.SpeakAction -> action.dedupeKey
             is ProactiveAction.PassiveAction -> action.dedupeKey
-            ProactiveAction.NoAction -> null
+            is ProactiveAction.NoAction -> null
         }
         traceStore?.record(
             outcome = outcome,
@@ -268,6 +268,8 @@ class ProactiveEngine(
         if (action !is ProactiveAction.NoAction) {
             ProactiveMetrics.increment(ProactiveMetrics.Counter.ACTIONS_DISPATCHED)
             dispatch(action)
+        } else {
+            Log.v(TAG, "Suppressed: ${action.reason}")
         }
     }
 
@@ -398,7 +400,7 @@ class ProactiveEngine(
         val key = when (action) {
             is ProactiveAction.SpeakAction   -> action.dedupeKey
             is ProactiveAction.PassiveAction -> action.dedupeKey
-            ProactiveAction.NoAction         -> return
+            is ProactiveAction.NoAction      -> return
         }
         // If a prior verdict is still unresolved at dispatch time, the user
         // didn't engage with it — otherwise the accept branch of
@@ -407,7 +409,7 @@ class ProactiveEngine(
         val actionClass = when (action) {
             is ProactiveAction.SpeakAction -> action.sourceType.actionClassKey()
             is ProactiveAction.PassiveAction -> action.sourceType.actionClassKey()
-            ProactiveAction.NoAction -> null
+            is ProactiveAction.NoAction -> null
         }
         verdictLock.withLock {
             pendingVerdict?.let { prior ->
@@ -427,7 +429,7 @@ class ProactiveEngine(
             val sourceType = when (action) {
                 is ProactiveAction.SpeakAction   -> action.sourceType
                 is ProactiveAction.PassiveAction -> action.sourceType
-                ProactiveAction.NoAction         -> null
+                is ProactiveAction.NoAction      -> null
             }
             if (sourceType == ProactiveEventType.UNREAD_NOTIFICATION) notificationSource?.acknowledge()
             if (sourceType == ProactiveEventType.ARRIVED_HOME ||

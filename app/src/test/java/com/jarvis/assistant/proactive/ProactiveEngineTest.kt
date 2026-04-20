@@ -133,10 +133,9 @@ class ProactiveEngineTest {
     fun testLowBatteryGeneratesNoneWhenCharging() {
         val ctx = FakeContext(batteryLevel = 3, isCharging = true)
         val action = scoreAndDecide(ctx)
-        assertEquals(
+        assertTrue(
             "Expected NoAction when battery is low but charging",
-            ProactiveAction.NoAction,
-            action
+            action is ProactiveAction.NoAction
         )
     }
 
@@ -162,10 +161,13 @@ class ProactiveEngineTest {
 
         // Second pass immediately after: global gap + cooldown penalty should suppress
         val secondAction = scoreAndDecide(ctx)
-        assertEquals(
+        assertTrue(
             "Second immediate tick should be NoAction due to global gap",
-            ProactiveAction.NoAction,
-            secondAction
+            secondAction is ProactiveAction.NoAction
+        )
+        assertEquals(
+            com.jarvis.assistant.core.decisions.SuppressionReason.GLOBAL_GAP,
+            (secondAction as ProactiveAction.NoAction).reason
         )
     }
 
@@ -228,10 +230,9 @@ class ProactiveEngineTest {
         cooldownStore.markSurfaced((firstAction as ProactiveAction.SpeakAction).dedupeKey)
 
         val secondAction = scoreAndDecide(ctx)
-        assertEquals(
+        assertTrue(
             "Second tick should be suppressed by cooldown/global gap",
-            ProactiveAction.NoAction,
-            secondAction
+            secondAction is ProactiveAction.NoAction
         )
     }
 
@@ -306,7 +307,7 @@ class ProactiveEngineTest {
             missedCallInfo   = null
         )
         val action = scoreAndDecide(ctx)
-        assertEquals("Should be NoAction when all clear", ProactiveAction.NoAction, action)
+        assertTrue("Should be NoAction when all clear", action is ProactiveAction.NoAction)
     }
 
     /**
@@ -334,10 +335,9 @@ class ProactiveEngineTest {
         val second = scoreAndDecide(ctx2)
 
         // Global gap (60s) is not satisfied → NoAction
-        assertEquals(
+        assertTrue(
             "Second action should be NoAction due to global gap",
-            ProactiveAction.NoAction,
-            second
+            second is ProactiveAction.NoAction
         )
     }
 

@@ -17,6 +17,18 @@ object IntentClassifier {
     fun classify(input: String): ConversationAction {
         val lower = input.lowercase().trim()
 
+        // ── Suppression: "don't tell me about X" ────────────────────────────
+        // Run BEFORE generic memory capture so the mute isn't misread as a
+        // stored preference ("I don't like..." already flows into the
+        // preference path; the mute path is stronger and more specific).
+
+        extractMuteTopic(lower)?.let { topic ->
+            return ConversationAction.MuteSuggestion(topic)
+        }
+        extractUnmuteTopic(lower)?.let { topic ->
+            return ConversationAction.UnmuteSuggestion(topic)
+        }
+
         // ── Memory: store facts ─────────────────────────────────────────────
 
         extractName(lower)?.let { name ->
@@ -268,6 +280,42 @@ object IntentClassifier {
         val hasItemWord   = lower.contains("reminder") || lower.contains("timer") ||
                             lower.contains("alarm")
         return hasCancelWord && hasItemWord
+    }
+
+    // ── Mute / unmute extraction ───────────────────────────────────────────
+
+    private val MUTE_PATTERN = Regex(
+        """^(?:don'?t|do not|stop|quit|never|please stop)\s+(?:telling|tell|mention|suggest|suggesting|notify|notifying|bring up|bringing up)\s+(?:me\s+)?(?:about\s+)?(.+)""",
+        RegexOption.IGNORE_CASE
+    )
+    private val MUTE_PATTERN_ALT = Regex(
+        """^(?:stop|quiet down on|no more)\s+(.+?)\s+(?:alerts?|suggestions?|reminders?|updates?|notifications?)""",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val UNMUTE_PATTERN = Regex(
+        """^(?:you can|go ahead and|please)?\s*(?:tell|mention|suggest|remind)\s+me\s+about\s+(.+)\s+again""",
+        RegexOption.IGNORE_CASE
+    )
+
+    private fun extractMuteTopic(lower: String): String? {
+        MUTE_PATTERN.find(lower)?.let { m ->
+            val topic = m.groupValues[1].trim().trimEnd('.', ',', '!')
+            if (topic.length in 2..60) return topic
+        }
+        MUTE_PATTERN_ALT.find(lower)?.let { m ->
+            val topic = m.groupValues[1].trim().trimEnd('.', ',', '!')
+            if (topic.length in 2..60) return topic
+        }
+        return null
+    }
+
+    private fun extractUnmuteTopic(lower: String): String? {
+        UNMUTE_PATTERN.find(lower)?.let { m ->
+            val topic = m.groupValues[1].trim().trimEnd('.', ',', '!')
+            if (topic.length in 2..60) return topic
+        }
+        return null
     }
 
     // ── Utilities ──────────────────────────────────────────────────────────

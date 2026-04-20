@@ -164,4 +164,34 @@ class IntentClassifierTest {
         assertTrue(result !is ConversationAction.RememberFact ||
                    (result as ConversationAction.RememberFact).key != "user.name")
     }
+
+    // ── Mute / unmute ─────────────────────────────────────────────────────────
+
+    @Test
+    fun `don't tell me about the weather — MuteSuggestion weather`() {
+        val result = IntentClassifier.classify("don't tell me about the weather")
+        assertTrue(result is ConversationAction.MuteSuggestion)
+        assertTrue((result as ConversationAction.MuteSuggestion).topic.contains("weather"))
+    }
+
+    @Test
+    fun `stop telling me about battery — MuteSuggestion battery`() {
+        val result = IntentClassifier.classify("stop telling me about battery")
+        assertTrue(result is ConversationAction.MuteSuggestion)
+        assertTrue((result as ConversationAction.MuteSuggestion).topic.contains("battery"))
+    }
+
+    @Test
+    fun `no more reminder alerts — MuteSuggestion reminder`() {
+        val result = IntentClassifier.classify("no more reminder alerts")
+        assertTrue(result is ConversationAction.MuteSuggestion)
+        assertTrue((result as ConversationAction.MuteSuggestion).topic.contains("reminder"))
+    }
+
+    @Test
+    fun `tell me about the weather again — UnmuteSuggestion weather`() {
+        val result = IntentClassifier.classify("tell me about the weather again")
+        assertTrue(result is ConversationAction.UnmuteSuggestion)
+        assertTrue((result as ConversationAction.UnmuteSuggestion).topic.contains("weather"))
+    }
 }

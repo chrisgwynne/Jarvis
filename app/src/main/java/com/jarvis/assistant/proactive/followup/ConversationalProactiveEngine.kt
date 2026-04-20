@@ -1,6 +1,8 @@
 package com.jarvis.assistant.proactive.followup
 
 import android.util.Log
+import com.jarvis.assistant.core.proactive.ProactiveStrings
+import com.jarvis.assistant.proactive.CooldownStore
 import kotlinx.coroutines.*
 import java.util.Calendar
 
@@ -16,24 +18,29 @@ import java.util.Calendar
  * [onCheckIn] is called on [Dispatchers.Main] so callers can safely update
  * UI state and invoke TTS from within it.
  *
+ * [cooldownStore] is optional. When supplied, the engine consults the
+ * per-key ignore count for `gap_checkin` before firing — matching the same
+ * adaptation that EventScorer applies to proactive events — so a user who
+ * ignores several check-ins in a row stops getting them instead of seeing
+ * the same prompt every 15 minutes.
+ *
  * Call [start]/[stop] alongside the existing ProactiveEngine in JarvisRuntime.
  */
 class ConversationalProactiveEngine(
     private val followUpRepo : FollowUpRepository,
     private val lastSeen     : LastSeenTracker,
-    private val onCheckIn    : suspend (message: String) -> Unit
+    private val onCheckIn    : suspend (message: String) -> Unit,
+    private val cooldownStore: CooldownStore? = null,
 ) {
     companion object {
         private const val TAG              = "ConvProactiveEngine"
         private const val POLL_INTERVAL_MS = 15 * 60 * 1_000L  // 15 minutes
 
-        private val GAP_CHECK_INS = listOf(
-            "You good?",
-            "How's things?",
-            "Been quiet — everything alright?",
-            "Still around?",
-            "How's it going?"
-        )
+        /** Cooldown key used to record ignore verdicts for gap check-ins. */
+        private const val GAP_CHECKIN_KEY  = "gap_checkin"
+
+        /** Past this many ignores, gap check-ins go silent entirely. */
+        private const val GAP_IGNORE_CEILING = 3
     }
 
     private var job: Job? = null
@@ -92,9 +99,17 @@ class ConversationalProactiveEngine(
 
         // 2. Inactivity gap check-in (only when no other follow-up fired)
         if (lastSeen.isInactive()) {
-            val msg = GAP_CHECK_INS.random()
-            Log.d(TAG, "Dispatching gap check-in: '$msg'")
+            val ignoreCount = cooldownStore?.ignoreCount(GAP_CHECKIN_KEY) ?: 0
+            if (ignoreCount >= GAP_IGNORE_CEILING) {
+                Log.v(TAG, "Skipping gap check-in — ignored $ignoreCount times")
+                return
+            }
+            val pool = ProactiveStrings.gapCheckIns
+            if (pool.isEmpty()) return
+            val msg = pool.random()
+            Log.d(TAG, "Dispatching gap check-in (ignoreCount=$ignoreCount): '$msg'")
             dispatch(msg)
+            cooldownStore?.markSurfaced(GAP_CHECKIN_KEY)
         }
     }
 

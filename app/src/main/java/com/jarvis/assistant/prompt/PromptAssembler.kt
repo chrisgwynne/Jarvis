@@ -2,6 +2,7 @@ package com.jarvis.assistant.prompt
 
 import com.jarvis.assistant.context.ContextEngine
 import com.jarvis.assistant.context.Presence
+import com.jarvis.assistant.core.context.SocialContext
 import com.jarvis.assistant.core.safety.Sanitizer
 import com.jarvis.assistant.knowledge.KnowledgeQueryEngine
 import com.jarvis.assistant.llm.Message
@@ -62,7 +63,8 @@ class PromptAssembler(
         conversationHistory : List<Message>,
         maxMemories         : Int = 3,
         speakerContext      : SpeakerSessionContext? = null,
-        presence            : Presence? = null
+        presence            : Presence? = null,
+        social              : SocialContext? = null,
     ): List<Message> {
         val ctx = contextEngine.build()
 
@@ -85,6 +87,7 @@ class PromptAssembler(
             knowledgeFragment = sanitizer?.redactString(knowledgeFrag) ?: knowledgeFrag,
             threadsFragment   = threadsFrag,
             expectationFragment = expectationFrag,
+            socialFragment    = social?.toPromptFragment().orEmpty(),
         )
 
         return buildList {
@@ -118,7 +121,8 @@ class PromptAssembler(
         speakerContext   : SpeakerSessionContext?,
         knowledgeFragment: String = "",
         threadsFragment  : String = "",
-        expectationFragment: String = ""
+        expectationFragment: String = "",
+        socialFragment   : String = "",
     ): String = buildString {
 
         append("""
@@ -233,6 +237,12 @@ State time and date confidently. Never disclaim real-time access or knowledge cu
         // Live device context (always current)
         append("\n\n")
         append(contextFragment)
+
+        // Social context — short tone read derived from the last few turns.
+        if (socialFragment.isNotBlank()) {
+            append("\n\n")
+            append(socialFragment)
+        }
 
         // Structured user profile — only when speaker is identified at high confidence
         if (profileFragment.isNotBlank()) {

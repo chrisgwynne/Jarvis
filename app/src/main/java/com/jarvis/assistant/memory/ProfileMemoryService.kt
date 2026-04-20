@@ -33,6 +33,46 @@ class ProfileMemoryService(private val dao: MemoryFactDao) {
 
     suspend fun forgetFact(key: String) = dao.deleteByKey(key)
 
+    // ── Dislikes ──────────────────────────────────────────────────────────────
+    //
+    // "Don't tell me about X" / "stop suggesting X" is recorded as a PREFERENCE
+    // fact with a `dislike.<topic>` key so it survives restart and is visible
+    // next to the user's other stated preferences. The proactive layer reads
+    // these via [MemoryPolicy] to decide whether to suppress suggestions.
+
+    /**
+     * Persist a new dislike for [topic]. Overwrites any previous entry for
+     * the same topic so repeated mutes don't accumulate duplicate rows.
+     */
+    suspend fun addDislike(topic: String) {
+        val normalized = topic.lowercase().trim()
+        if (normalized.isBlank()) return
+        setFact(
+            key = "dislike.$normalized",
+            value = normalized,
+            category = FactCategory.PREFERENCE,
+        )
+    }
+
+    /** Remove a previously-stored dislike; no-op if it isn't set. */
+    suspend fun removeDislike(topic: String) {
+        val normalized = topic.lowercase().trim()
+        if (normalized.isBlank()) return
+        dao.deleteByKey("dislike.$normalized")
+    }
+
+    /**
+     * Every dislike topic the user has asked to mute. Returned as lowercase
+     * topic strings without the `dislike.` prefix so callers can pattern-match
+     * directly. Empty when the user has made no mute requests.
+     */
+    suspend fun dislikes(): List<String> =
+        dao.getByCategory(FactCategory.PREFERENCE)
+            .asSequence()
+            .filter { it.factKey.startsWith("dislike.") }
+            .map { it.factKey.removePrefix("dislike.") }
+            .toList()
+
     // ── Prompt injection ──────────────────────────────────────────────────────
 
     /**

@@ -2,6 +2,7 @@ package com.jarvis.assistant.proactive
 
 import android.util.Log
 import com.jarvis.assistant.context.Presence
+import com.jarvis.assistant.core.decisions.SuppressionReason
 import java.time.Instant
 import java.time.ZoneId
 
@@ -88,7 +89,7 @@ class DecisionEngine(
         if (valid.isEmpty()) {
             Log.d(TAG, "No actionable candidates this tick")
             ProactiveMetrics.increment(ProactiveMetrics.Counter.SUPPRESSED_EMPTY)
-            return ProactiveAction.NoAction
+            return ProactiveAction.NoAction(SuppressionReason.EMPTY_CANDIDATES)
         }
 
         // Step 3 — global gap check
@@ -99,7 +100,7 @@ class DecisionEngine(
                 "Global gap not satisfied: ${msSinceGlobal}ms < ${config.minGlobalGapMs}ms — suppressing"
             )
             ProactiveMetrics.increment(ProactiveMetrics.Counter.SUPPRESSED_GLOBAL_GAP)
-            return ProactiveAction.NoAction
+            return ProactiveAction.NoAction(SuppressionReason.GLOBAL_GAP)
         }
 
         // Step 3b — quiet hours: suppress everything except critical events.
@@ -124,7 +125,7 @@ class DecisionEngine(
                 "Quiet hours — suppressing ${top.event.type} / ${top.event.dedupeKey}"
             )
             ProactiveMetrics.increment(ProactiveMetrics.Counter.SUPPRESSED_QUIET_HOURS)
-            return ProactiveAction.NoAction
+            return ProactiveAction.NoAction(SuppressionReason.QUIET_HOURS)
         }
 
         // Step 3c — presence gate: soft suggestions (PASSIVE level) defer when
@@ -146,7 +147,11 @@ class DecisionEngine(
                 )
                 ProactiveMetrics.increment(ProactiveMetrics.Counter.SUPPRESSED_PRESENCE)
                 lastDeferredByPresence = top
-                return ProactiveAction.NoAction
+                val reason = if (presence.activity == com.jarvis.assistant.context.ActivityMode.DRIVING)
+                    SuppressionReason.DRIVING
+                else
+                    SuppressionReason.PRESENCE_BLOCKS
+                return ProactiveAction.NoAction(reason)
             }
         }
 
@@ -193,7 +198,7 @@ class DecisionEngine(
             InterruptLevel.NONE -> {
                 // Defensive: should have been filtered in step 1
                 Log.w(TAG, "Top candidate has NONE level after filter — returning NoAction")
-                ProactiveAction.NoAction
+                ProactiveAction.NoAction(SuppressionReason.LEVEL_NONE)
             }
         }
     }

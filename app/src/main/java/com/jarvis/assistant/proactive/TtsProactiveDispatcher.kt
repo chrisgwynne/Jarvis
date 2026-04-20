@@ -72,9 +72,9 @@ class TtsProactiveDispatcher(
                 )
             }
 
-            ProactiveAction.NoAction -> {
+            is ProactiveAction.NoAction -> {
                 // Nothing to do — should not normally reach the dispatcher
-                Log.v(TAG, "NoAction received — ignoring")
+                Log.v(TAG, "NoAction received (${action.reason}) — ignoring")
             }
         }
     }

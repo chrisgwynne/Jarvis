@@ -205,6 +205,7 @@ class JarvisRuntime(
     private lateinit var toolRegistry : ToolRegistry
     private lateinit var toolDispatcher  : ToolDispatcher
     private lateinit var memoryHandler     : MemoryActionHandler
+    private lateinit var memoryPolicy      : com.jarvis.assistant.core.decisions.MemoryPolicy
     private lateinit var reminderHandler   : ReminderActionHandler
 
     // Agentic plan runner — confirms multi-step tool calls, journals each step
@@ -459,7 +460,11 @@ class JarvisRuntime(
             confirmationGate = confirmationGate,
             recentToolCallBuffer = recentToolCallBuffer
         )
-        memoryHandler = MemoryActionHandler(profileMemory)
+        memoryPolicy = com.jarvis.assistant.core.decisions.MemoryPolicy(
+            profileMemory = profileMemory,
+            ledger        = sharedActionLedger,
+        )
+        memoryHandler = MemoryActionHandler(profileMemory, memoryPolicy)
         reminderHandler = ReminderActionHandler(reminderRepo)
         planRunner = com.jarvis.assistant.runtime.plan.PlanRunner(
             context        = context,
@@ -532,9 +537,10 @@ class JarvisRuntime(
         lastSeenTracker    = LastSeenTracker(context)
         followUpRepo       = FollowUpRepository(db.pendingFollowUpDao())
         convProactiveEngine = ConversationalProactiveEngine(
-            followUpRepo = followUpRepo,
-            lastSeen     = lastSeenTracker,
-            onCheckIn    = ::dispatchConversationalCheckIn
+            followUpRepo  = followUpRepo,
+            lastSeen      = lastSeenTracker,
+            onCheckIn     = ::dispatchConversationalCheckIn,
+            cooldownStore = sharedCooldownStore,
         )
 
         // Phase 6 — Incoming call handling
@@ -583,6 +589,15 @@ class JarvisRuntime(
             anyoneEnrolled   = speakerStore.anyoneEnrolled()
         }
         scope.launch(Dispatchers.IO) { locationProvider.refresh() }
+
+        // Rehydrate action-class suppressions from persisted dislike facts.
+        // [ActionLedger] already restores its own SharedPreferences snapshot on
+        // construct; this second pass guarantees any dislike written before a
+        // previous process crash still reaches the in-memory suppressed set.
+        scope.launch(Dispatchers.IO) {
+            try { memoryPolicy.hydrateSuppressionsFromMemory() }
+            catch (e: Exception) { Log.w(TAG, "MemoryPolicy hydrate failed", e) }
+        }
 
         // When a headset connects or disconnects while we're in wake-word mode,
         // restart the detector so it picks up (or drops) the SCO mic immediately.
@@ -1706,6 +1721,10 @@ class JarvisRuntime(
                                 is ConversationAction.RememberFact   -> memoryHandler.handleStore(action)
                                     .also { promptAssembler.invalidateProfileCache() }
                                 is ConversationAction.RecallFact     -> memoryHandler.handleRecall(action)
+                                is ConversationAction.MuteSuggestion -> memoryHandler.handleMute(action)
+                                    .also { promptAssembler.invalidateProfileCache() }
+                                is ConversationAction.UnmuteSuggestion -> memoryHandler.handleUnmute(action)
+                                    .also { promptAssembler.invalidateProfileCache() }
                                 is ConversationAction.CreateReminder -> reminderHandler.handleCreate(action)
                                 is ConversationAction.CreateTimer    -> reminderHandler.handleTimer(action)
                                 ConversationAction.ListReminders     -> reminderHandler.handleList(ConversationAction.ListReminders)

@@ -1,15 +1,21 @@
 package com.jarvis.assistant.orchestration
 
 import android.util.Log
+import com.jarvis.assistant.core.decisions.MemoryPolicy
 import com.jarvis.assistant.memory.ProfileMemoryService
 import com.jarvis.assistant.memory.db.entity.FactCategory
 
 /**
  * MemoryActionHandler — executes [ConversationAction.RememberFact] and
  * [ConversationAction.RecallFact] actions and returns a spoken response.
+ *
+ * [memoryPolicy] is optional: when provided, [MuteSuggestion] / [UnmuteSuggestion]
+ * actions are routed through it so both memory *and* the action ledger stay in
+ * sync. When null those actions degrade to memory-only writes.
  */
 class MemoryActionHandler(
-    private val profileMemory: ProfileMemoryService
+    private val profileMemory: ProfileMemoryService,
+    private val memoryPolicy: MemoryPolicy? = null,
 ) {
 
     companion object {
@@ -50,6 +56,36 @@ class MemoryActionHandler(
             "user.profession" -> "Noted."
             else              -> "Noted."
         }
+    }
+
+    /**
+     * Handle "don't tell me about X" — persist the dislike and (when a policy
+     * is wired) hard-suppress the matching proactive class.
+     */
+    suspend fun handleMute(action: ConversationAction.MuteSuggestion): String {
+        val topic = action.topic.trim().lowercase()
+        if (topic.isBlank()) return "I'll leave that alone."
+        val policy = memoryPolicy
+        val suppressedClass = if (policy != null) {
+            policy.registerDislike(topic)
+        } else {
+            profileMemory.addDislike(topic)
+            null
+        }
+        Log.d(TAG, "Mute: topic=$topic actionClass=$suppressedClass")
+        return if (suppressedClass != null)
+            "Got it — no more $topic."
+        else
+            "Noted — I'll skip $topic."
+    }
+
+    /** Inverse of [handleMute]. */
+    suspend fun handleUnmute(action: ConversationAction.UnmuteSuggestion): String {
+        val topic = action.topic.trim().lowercase()
+        if (topic.isBlank()) return "Sure."
+        memoryPolicy?.lift(topic) ?: profileMemory.removeDislike(topic)
+        Log.d(TAG, "Unmute: topic=$topic")
+        return "Okay — $topic is back on."
     }
 
     suspend fun handleRecall(action: ConversationAction.RecallFact): String {

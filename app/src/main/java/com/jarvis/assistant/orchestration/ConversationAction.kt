@@ -35,6 +35,20 @@ sealed class ConversationAction {
     /** "Cancel my reminder" / "Cancel the timer" */
     data class CancelReminder(val rawInput: String) : ConversationAction()
 
+    // ── Suppression / preference actions ──────────────────────────────────────
+
+    /**
+     * "Don't tell me about X" / "stop suggesting X" / "never mention X again".
+     *
+     * Recorded in memory as a PREFERENCE fact and reflected in the
+     * [com.jarvis.assistant.core.decisions.ActionLedger] so the proactive
+     * scorer hard-suppresses the matching class on subsequent ticks.
+     */
+    data class MuteSuggestion(val topic: String) : ConversationAction()
+
+    /** "Tell me about X again" / "you can mention X again" — inverse of [MuteSuggestion]. */
+    data class UnmuteSuggestion(val topic: String) : ConversationAction()
+
     // ── Fall-through ──────────────────────────────────────────────────────────
 
     /** Not handled here — pass to ToolRegistry then the LLM. */

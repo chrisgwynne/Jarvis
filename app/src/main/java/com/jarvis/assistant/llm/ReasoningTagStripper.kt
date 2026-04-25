@@ -2,7 +2,14 @@ package com.jarvis.assistant.llm
 
 /**
  * ReasoningTagStripper — filters chain-of-thought blocks out of a token stream
- * as it arrives, so the TTS never speaks `<think>…</think>` content.
+ * as it arrives, so the TTS never speaks reasoning content.
+ *
+ * Recognised opener / closer pairs ([RECOGNISED_TAGS]) cover the common
+ * markup families shipped by reasoning-tuned models: `<think>` (DeepSeek,
+ * Kimi, MiniMax), `<thinking>` (Anthropic-style), `<reasoning>`,
+ * `<reflection>`, `<scratchpad>`, `<analysis>`, `<plan>`.  When a new
+ * provider lands a different tag, add it here in one place — the rest of
+ * the state machine adapts automatically.
  *
  * WHY A STATE MACHINE?
  *   The reasoning tag can be split across tokens: a stream may emit "<th",
@@ -13,20 +20,21 @@ package com.jarvis.assistant.llm
  * ALGORITHM:
  *   OUT           — normal text; emit immediately, BUT when '<' arrives,
  *                   buffer it and switch to PENDING_TAG.
- *   PENDING_TAG   — buffering a potential "<think" / "<thinking" opener.  If
- *                   the buffer completes the tag → IN_THINK (drop buffer).
- *                   If it diverges from any known opener → emit the buffer
+ *   PENDING_TAG   — buffering a potential reasoning opener.  If the buffer
+ *                   completes any known opener → IN_THINK (drop buffer).
+ *                   If it diverges from every known opener → emit the buffer
  *                   verbatim and return to OUT.  A trailing '<' inside
  *                   PENDING_TAG also resets the buffer to just that '<'.
- *   IN_THINK      — drop every character until we see the closing tag.
- *                   A rolling tail keeps the last ~12 chars so we can match
- *                   "</think>" / "</thinking>" when it lands across tokens.
+ *   IN_THINK      — drop every character until we see ANY known closer.
+ *                   A rolling tail keeps the last N chars (length of the
+ *                   longest known closer) so cross-token close tags still
+ *                   match.
  *
  *   [flush] handles stream end with a half-open tag or half-open close — we
  *   emit any held-back PENDING_TAG text to avoid losing real content.
  *
  *   Matching is case-insensitive to handle `<Think>` etc., mirroring the
- *   existing post-hoc regex in [LlmRouter.stripReasoningTags].
+ *   post-hoc regex in [LlmRouter.stripReasoningTags].
  */
 class ReasoningTagStripper {
 
@@ -56,17 +64,17 @@ class ReasoningTagStripper {
                     pendingOpen.append(ch)
                     val s = pendingOpen.toString().lowercase()
                     when {
-                        // Completed opening tag
-                        s == "<think>" || s == "<thinking>" -> {
+                        // Completed opening tag for any recognised family
+                        s in OPENERS -> {
                             mode = Mode.IN_THINK
                             pendingOpen.setLength(0)
                             closeTail.setLength(0)
                         }
-                        // Still a possible prefix of <think> or <thinking>
-                        "<think>".startsWith(s) || "<thinking>".startsWith(s) -> {
+                        // Still a possible prefix of any recognised opener
+                        OPENERS.any { it.startsWith(s) } -> {
                             // keep buffering
                         }
-                        // Lost its prefix-ness — was a real '<' followed by other text.
+                        // Lost prefix-ness — was a real '<' followed by other text.
                         // Emit what we have, but if a new '<' appears inside, reset
                         // the buffer to it so "a<think>b" doesn't miss the tag.
                         else -> {
@@ -88,12 +96,11 @@ class ReasoningTagStripper {
                 Mode.IN_THINK -> {
                     closeTail.append(ch)
                     // Keep only enough tail to match the longest close tag
-                    val maxTail = "</thinking>".length
-                    if (closeTail.length > maxTail) {
-                        closeTail.delete(0, closeTail.length - maxTail)
+                    if (closeTail.length > MAX_CLOSER_LEN) {
+                        closeTail.delete(0, closeTail.length - MAX_CLOSER_LEN)
                     }
                     val t = closeTail.toString().lowercase()
-                    if (t.endsWith("</think>") || t.endsWith("</thinking>")) {
+                    if (CLOSERS.any { t.endsWith(it) }) {
                         mode = Mode.OUT
                         closeTail.setLength(0)
                     }
@@ -107,7 +114,7 @@ class ReasoningTagStripper {
     /**
      * Called after the stream ends.  If we were mid-partial-tag the buffered
      * text was held back — flush it so real content isn't lost.  If we were
-     * inside an unclosed `<think>` block, drop it (it was chain-of-thought).
+     * inside an unclosed reasoning block, drop it (it was chain-of-thought).
      */
     fun flush(): String {
         val out = when (mode) {
@@ -126,5 +133,21 @@ class ReasoningTagStripper {
         mode = Mode.OUT
         pendingOpen.setLength(0)
         closeTail.setLength(0)
+    }
+
+    companion object {
+        /**
+         * Tag families recognised as chain-of-thought.  Keep openers and
+         * closers in lock-step — adding a new family means appending to BOTH
+         * lists.
+         */
+        private val RECOGNISED_TAGS = listOf(
+            "think", "thinking", "reasoning", "reflection",
+            "scratchpad", "analysis", "plan",
+        )
+
+        internal val OPENERS: List<String> = RECOGNISED_TAGS.map { "<$it>" }
+        internal val CLOSERS: List<String> = RECOGNISED_TAGS.map { "</$it>" }
+        private val MAX_CLOSER_LEN: Int    = CLOSERS.maxOf { it.length }
     }
 }

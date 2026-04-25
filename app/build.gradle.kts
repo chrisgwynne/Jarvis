@@ -137,6 +137,10 @@ dependencies {
     testImplementation(libs.mockito.kotlin)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.androidx.test.core)
+    // org.json is provided by the Android platform at runtime but absent on
+    // the JVM unit-test classpath. Pull it in so tests that round-trip JSON
+    // (e.g. ScreenObservationRepositoryTest) don't hit "Method not mocked".
+    testImplementation("org.json:json:20240303")
 
     // Instrumented tests
     androidTestImplementation(libs.androidx.test.runner)

@@ -13,6 +13,7 @@ import com.jarvis.assistant.speaker.SpeakerIdentityResult
 import com.jarvis.assistant.speaker.SpeakerSessionContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * PromptAssembler — builds the full message list sent to the LLM on every call.
@@ -48,6 +49,11 @@ class PromptAssembler(
     @Volatile private var profileCachedAt: Long = 0L
     private val PROFILE_CACHE_TTL_MS = 30_000L
 
+    // Each side-query (memory / profile / knowledge / expectation) is bounded
+    // so a slow consumer can't block the user's reply. 1.5 s is generous for
+    // a local SQLite read and still unnoticeable if it trips.
+    private val ASSEMBLY_TIMEOUT_MS = 1_500L
+
     /**
      * Assemble the complete message list for one LLM call.
      *
@@ -70,13 +76,28 @@ class PromptAssembler(
     ): List<Message> {
         val ctx = contextEngine.build()
 
+        // Prompt assembly is on the hot path for every LLM call — a slow
+        // DB / retriever must not block the user waiting for a reply.
+        // Each side-query is bounded; a timeout falls back to an empty
+        // fragment (and an empty memory list), which is always safe.
         val (memories, profileFrag, knowledgeFrag, expectationFrag) = coroutineScope {
-            val memoriesJob  = async { memoryRetriever.retrieveRelevant(userQuery, limit = maxMemories) }
+            val memoriesJob  = async {
+                withTimeoutOrNull(ASSEMBLY_TIMEOUT_MS) {
+                    memoryRetriever.retrieveRelevant(userQuery, limit = maxMemories)
+                } ?: emptyList()
+            }
             // Only hit the DB for the profile when we will actually use it.
             val useProfile   = shouldInjectProfile(speakerContext)
-            val profileJob   = async { if (useProfile) getCachedProfileFragment() else "" }
-            val knowledgeJob = async { knowledgeEngine?.retrieveContext(userQuery) ?: "" }
-            val expectationJob = async { expectationStore?.toPromptFragment() ?: "" }
+            val profileJob   = async {
+                if (!useProfile) ""
+                else withTimeoutOrNull(ASSEMBLY_TIMEOUT_MS) { getCachedProfileFragment() } ?: ""
+            }
+            val knowledgeJob = async {
+                withTimeoutOrNull(ASSEMBLY_TIMEOUT_MS) { knowledgeEngine?.retrieveContext(userQuery) } ?: ""
+            }
+            val expectationJob = async {
+                withTimeoutOrNull(ASSEMBLY_TIMEOUT_MS) { expectationStore?.toPromptFragment() } ?: ""
+            }
             Quad(memoriesJob.await(), profileJob.await(), knowledgeJob.await(), expectationJob.await())
         }
         val threadsFrag = conversationThreads?.toPromptFragment().orEmpty()

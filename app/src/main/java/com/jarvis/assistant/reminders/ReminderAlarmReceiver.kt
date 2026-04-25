@@ -32,6 +32,14 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
             action = JarvisService.ACTION_REMINDER_TRIGGER
             putExtra(JarvisService.EXTRA_REMINDER_ID, itemId)
         }
-        context.startForegroundService(serviceIntent)
+        try {
+            context.startForegroundService(serviceIntent)
+        } catch (e: Exception) {
+            // Android 12+ can deny a FG start from a receiver when the app is
+            // in a restricted state (ForegroundServiceStartNotAllowedException,
+            // SecurityException on some OEMs). A missed chime is far better
+            // than a process-wide crash — the alarm system will retry.
+            Log.e(TAG, "startForegroundService denied for reminder id=$itemId", e)
+        }
     }
 }

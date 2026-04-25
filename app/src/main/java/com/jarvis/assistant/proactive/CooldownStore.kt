@@ -109,14 +109,18 @@ class CooldownStore(
     }
 
     fun markIgnored(dedupeKey: String) {
-        val newCount = ignoreCountByKey.merge(dedupeKey, 1) { old, _ -> old + 1 } ?: 1
+        // Guard: a verdict only makes sense for a dispatch we actually surfaced.
+        // Incrementing the counter before the surface call leaves stale state
+        // that markSurfaced will later persist with a fresh timestamp — so
+        // a future, unrelated surface would inherit someone else's ignore count.
         val last = lastSurfacedMs[dedupeKey] ?: return
+        val newCount = ignoreCountByKey.merge(dedupeKey, 1) { old, _ -> old + 1 } ?: 1
         persist(dedupeKey, last, newCount)
     }
 
     fun markAccepted(dedupeKey: String) {
-        ignoreCountByKey.remove(dedupeKey)
         val last = lastSurfacedMs[dedupeKey] ?: return
+        ignoreCountByKey.remove(dedupeKey)
         persist(dedupeKey, last, 0)
     }
 

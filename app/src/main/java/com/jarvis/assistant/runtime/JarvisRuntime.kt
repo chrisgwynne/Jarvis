@@ -2109,9 +2109,15 @@ class JarvisRuntime(
                         fcResult == null -> break   // provider has no FC — fall through to streaming
 
                         fcResult is LlmResult.Text -> {
-                            if (fcResult.content.isNotBlank()) {
-                                llmRouter.conversationStore.addMessage("assistant", fcResult.content)
-                                speakAndRecord(fcResult.content)
+                            // Function-calling text replies skip the streaming
+                            // ReasoningTagStripper, so route them through the
+                            // same post-hoc strip that complete()/completeSilent()
+                            // use — otherwise <thinking> blocks would slip into
+                            // TTS on the FC path.
+                            val cleaned = llmRouter.stripReasoningTags(fcResult.content)
+                            if (cleaned.isNotBlank()) {
+                                llmRouter.conversationStore.addMessage("assistant", cleaned)
+                                speakAndRecord(cleaned)
                                 fcHandled = true
                             }
                             break

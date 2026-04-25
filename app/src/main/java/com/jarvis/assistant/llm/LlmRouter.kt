@@ -55,6 +55,17 @@ class LlmRouter(context: Context) {
          * natural sentence endings without false-positives for decimal numbers.
          */
         private val SENTENCE_BOUNDARY = Regex("""[.!?]\s""")
+
+        /**
+         * XML-style chain-of-thought tag families recognised by
+         * [stripReasoningTags]. Mirrors the streaming
+         * [ReasoningTagStripper.RECOGNISED_TAGS] list so both paths drop the
+         * same set; if you add a tag in one place, add it in the other.
+         */
+        internal val REASONING_TAGS = listOf(
+            "think", "thinking", "reasoning", "reflection",
+            "scratchpad", "analysis", "plan",
+        )
     }
 
     private val settings = SettingsStore(context)
@@ -376,21 +387,40 @@ class LlmRouter(context: Context) {
 
     /**
      * Strip chain-of-thought blocks that reasoning models emit before their answer.
-     * Handles <think>…</think> (MiniMax, DeepSeek) and <thinking>…</thinking>.
-     * Also collapses any leading/trailing whitespace left behind.
      *
-     * Previous behaviour: if the whole response was inside think tags we
-     * returned the raw text — which meant the user's TTS spoke the model's
-     * chain-of-thought verbatim. That's worse than saying nothing, because
-     * the reasoning is often verbose and off-voice. Return a short, safe
-     * fallback string instead and let the caller treat it as an error line
-     * (isErrorResponse already flags this constant).
+     * Handles every tag family in [REASONING_TAGS] (think, thinking,
+     * reasoning, reflection, scratchpad, analysis, plan) — same set the
+     * streaming [ReasoningTagStripper] understands, kept in sync so the
+     * non-streaming and streaming paths agree.  Also strips a leading
+     * markdown "Thinking:" / "Thought:" / "Reasoning:" preamble paragraph
+     * that some non-tagging reasoning models emit, and collapses leftover
+     * whitespace.
+     *
+     * If the whole response was reasoning content we return a short, safe
+     * fallback string instead of the original — speaking the chain-of-thought
+     * verbatim is worse than saying nothing.  `isErrorResponse` already flags
+     * this constant so it isn't stored to history.
      */
-    private fun stripReasoningTags(text: String): String {
-        val stripped = text
-            .replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("<thinking>[\\s\\S]*?</thinking>", RegexOption.IGNORE_CASE), "")
-            .trim()
+    internal fun stripReasoningTags(text: String): String {
+        var stripped = text
+        for (tag in REASONING_TAGS) {
+            stripped = stripped.replace(
+                Regex("<$tag>[\\s\\S]*?</$tag>", RegexOption.IGNORE_CASE),
+                ""
+            )
+        }
+        // Leading markdown preamble (e.g. "**Thinking:**\n...\n\n<answer>").
+        // Anchored to start-of-text so a mid-answer mention of "Thinking:"
+        // (legitimate prose) is left alone.
+        stripped = stripped.replace(
+            Regex(
+                """^\s*(?:\*{0,2})(?:thinking|thought|reasoning|analysis|plan|reflection)""" +
+                """\s*(?:\*{0,2})\s*[:\-—]\s*[\s\S]*?(?:\n\s*\n|\.\s+\n)""",
+                RegexOption.IGNORE_CASE
+            ),
+            ""
+        )
+        stripped = stripped.trim()
         return stripped.ifBlank { "Something went wrong." }
     }
 

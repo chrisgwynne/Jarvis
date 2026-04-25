@@ -64,4 +64,49 @@ class ResponseFormatterTest {
         val result = ResponseFormatter.format("Hello   world.  How   are   you.")
         assertFalse(result.contains("  "))
     }
+
+    // ── Chain-of-thought stripping ───────────────────────────────────────────
+
+    @Test fun `strips thinking tag block`() {
+        val raw = "<thinking>The user is asking about X. Let me consider...</thinking>The answer is 42."
+        val result = ResponseFormatter.format(raw)
+        assertFalse("Output still contains thinking content: $result", result.contains("user is asking", ignoreCase = true))
+        assertTrue("Real answer was lost: $result", result.contains("42"))
+    }
+
+    @Test fun `strips think tag block (DeepSeek style)`() {
+        val raw = "<think>Considering the options...</think>Take the second exit."
+        val result = ResponseFormatter.format(raw)
+        assertFalse(result.contains("Considering"))
+        assertTrue(result.contains("Take the second exit"))
+    }
+
+    @Test fun `strips reasoning tag family`() {
+        val raw = "<reasoning>Step 1: parse. Step 2: compute.</reasoning>It's sunny."
+        val result = ResponseFormatter.format(raw)
+        assertFalse(result.contains("Step 1"))
+        assertTrue(result.contains("sunny"))
+    }
+
+    @Test fun `strips leading bold thinking preamble`() {
+        val raw = "**Thinking:** I need to recall the user's location.\n\nYou're in Wrexham."
+        val result = ResponseFormatter.format(raw)
+        assertFalse("preamble leaked: $result", result.contains("recall", ignoreCase = true))
+        assertTrue("answer missing: $result", result.contains("Wrexham"))
+    }
+
+    @Test fun `strips leading Thought- preamble`() {
+        val raw = "Thought: Let me work through this.\n\nThe meeting is at 3 pm."
+        val result = ResponseFormatter.format(raw)
+        assertFalse(result.contains("work through", ignoreCase = true))
+        assertTrue(result.contains("3 pm"))
+    }
+
+    @Test fun `does not strip mid-answer mention of thinking`() {
+        // Anchored regex must not eat legitimate prose.
+        val raw = "I was thinking about the trip to Paris."
+        val result = ResponseFormatter.format(raw)
+        assertTrue(result.contains("Paris"))
+        assertTrue(result.contains("thinking"))
+    }
 }

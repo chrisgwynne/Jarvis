@@ -26,8 +26,44 @@ object ResponseFormatter {
     private const val MAX_SENTENCES = 3
     private const val MAX_CHARS = 320
 
+    /**
+     * XML chain-of-thought tag families also stripped here as a safety net.
+     * Kept identical to [com.jarvis.assistant.llm.LlmRouter.REASONING_TAGS] /
+     * the streaming `ReasoningTagStripper`; if you add one, add it everywhere.
+     */
+    private val REASONING_TAGS = listOf(
+        "think", "thinking", "reasoning", "reflection",
+        "scratchpad", "analysis", "plan",
+    )
+
     fun format(raw: String): String {
         var text = raw.trim()
+
+        // Strip chain-of-thought markup BEFORE markdown, so a "**Thinking:**"
+        // preamble is recognised before its bold markers are removed.  Covers
+        // the same XML tag families as ReasoningTagStripper plus the common
+        // "Thinking:" / "Thought:" labelled paragraph some non-tagging models
+        // emit. This is the final safety net — even if upstream missed it,
+        // nothing reasoning-flavoured reaches TTS.
+        for (tag in REASONING_TAGS) {
+            text = text.replace(
+                Regex("<$tag>[\\s\\S]*?</$tag>", RegexOption.IGNORE_CASE),
+                ""
+            )
+        }
+        text = text.replace(
+            Regex(
+                """^\s*(?:\*{0,2})(?:thinking|thought|reasoning|analysis|plan|reflection)""" +
+                """\s*(?:\*{0,2})\s*[:\-—]\s*[\s\S]*?(?:\n\s*\n|\.\s+\n)""",
+                RegexOption.IGNORE_CASE
+            ),
+            ""
+        )
+        // If the entire response was reasoning content, the markdown-fallback
+        // below would re-emit raw — which means TTS would speak chain-of-
+        // thought verbatim. Suppress it instead; the dialog layer treats this
+        // as an error line and stays quiet.
+        if (text.isBlank()) return ""
 
         // Strip markdown
         text = text

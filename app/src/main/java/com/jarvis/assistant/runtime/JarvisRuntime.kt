@@ -101,7 +101,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import com.jarvis.assistant.speaker.SpeakerEnrollmentManager
@@ -2492,30 +2494,41 @@ class JarvisRuntime(
         if (!sessionOpen) return
         sessionOpen = false
         val id = sessionId
-        runBlocking(Dispatchers.IO) {
+        // NonCancellable so a stop() called from a cancelled scope still
+        // completes the DB writes, and a 2 s ceiling so a stuck IO threadpool
+        // can never turn this into an ANR.  The previous unbounded
+        // runBlocking deadlocked the caller if every IO thread was busy.
+        runBlocking(NonCancellable + Dispatchers.IO) {
             try {
-                // Build a heuristic summary from in-memory user turns so this
-                // session produces a retrievable MemoryEntry even without LLM access.
-                // closeSession() only writes a SUMMARY MemoryEntry when summary != null,
-                // so passing null here means the session is forever invisible to retrieval.
-                val userTurns = llmRouter.conversationStore.getContextMessages()
-                    .filter { it.role == "user" }
-                val heuristicSummary = if (userTurns.isNotEmpty()) {
-                    userTurns.joinToString(". ") { it.content.take(120) }.take(400)
-                } else null
-                memoryWriter.closeSession(id, summary = heuristicSummary)
-            } catch (e: Exception) {
-                Log.w(TAG, "flushSession: closeSession failed: ${e.message}")
-            }
-            try {
-                val turns = llmRouter.conversationStore.getContextMessages()
-                val sessionText = turns.joinToString("\n") { "${it.role}: ${it.content}" }
-                if (sessionText.isNotBlank()) {
-                    knowledgeCompiler.ingest(sessionText, KnowledgeSource.VOICE_TRANSCRIPT)
-                    // compilePending() involves LLM calls — deferred to next startup
+                withTimeout(2_000L) {
+                    try {
+                        // Build a heuristic summary from in-memory user turns so this
+                        // session produces a retrievable MemoryEntry even without LLM access.
+                        // closeSession() only writes a SUMMARY MemoryEntry when summary != null,
+                        // so passing null here means the session is forever invisible to retrieval.
+                        val userTurns = llmRouter.conversationStore.getContextMessages()
+                            .filter { it.role == "user" }
+                        val heuristicSummary = if (userTurns.isNotEmpty()) {
+                            userTurns.joinToString(". ") { it.content.take(120) }.take(400)
+                        } else null
+                        memoryWriter.closeSession(id, summary = heuristicSummary)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "flushSession: closeSession failed: ${e.message}")
+                    }
+                    try {
+                        val turns = llmRouter.conversationStore.getContextMessages()
+                        val sessionText = turns.joinToString("\n") { "${it.role}: ${it.content}" }
+                        if (sessionText.isNotBlank()) {
+                            knowledgeCompiler.ingest(sessionText, KnowledgeSource.VOICE_TRANSCRIPT)
+                            // compilePending() involves LLM calls — deferred to next startup
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "flushSession: ingest failed: ${e.message}")
+                    }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "flushSession: ingest failed: ${e.message}")
+                // Timeout — surface but don't crash the shutdown path.
+                Log.w(TAG, "flushSession: timed out after 2s, partial flush — ${e.message}")
             }
         }
     }

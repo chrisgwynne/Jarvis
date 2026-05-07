@@ -67,6 +67,10 @@ class GoogleWakeWordDetector(
         Log.d(TAG, "Stopping wake-word detection")
         job?.cancel()
         job = null
+        // Cancel the scope itself so the SupervisorJob releases its
+        // bookkeeping and any future launch on this detector instance is a
+        // no-op rather than silently spinning a new loop after stop().
+        scope.cancel()
     }
 
     // ── Detection loop ────────────────────────────────────────────────────────

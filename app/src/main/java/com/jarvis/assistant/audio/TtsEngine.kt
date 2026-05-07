@@ -72,11 +72,22 @@ class TtsEngine(context: Context) : TextToSpeech.OnInitListener {
                     if (cont.isActive) cont.resume(Unit)
                 }
                 override fun onError(id: String?) {
-                    Log.w(TAG, "TTS utterance error for $id")
+                    Log.w(TAG, "TTS utterance error for $id (no error code)")
                     if (cont.isActive) cont.resume(Unit)
                 }
                 @Suppress("DEPRECATION")
                 override fun onError(utteranceId: String?, errorCode: Int) {
+                    val reason = when (errorCode) {
+                        TextToSpeech.ERROR_SYNTHESIS    -> "ERROR_SYNTHESIS"
+                        TextToSpeech.ERROR_SERVICE      -> "ERROR_SERVICE"
+                        TextToSpeech.ERROR_OUTPUT       -> "ERROR_OUTPUT"
+                        TextToSpeech.ERROR_NETWORK      -> "ERROR_NETWORK"
+                        TextToSpeech.ERROR_NETWORK_TIMEOUT -> "ERROR_NETWORK_TIMEOUT"
+                        TextToSpeech.ERROR_INVALID_REQUEST -> "ERROR_INVALID_REQUEST"
+                        TextToSpeech.ERROR_NOT_INSTALLED_YET -> "ERROR_NOT_INSTALLED_YET"
+                        else                            -> "unknown ($errorCode)"
+                    }
+                    Log.w(TAG, "TTS utterance error for $utteranceId — $reason")
                     if (cont.isActive) cont.resume(Unit)
                 }
                 override fun onStop(utteranceId: String?, interrupted: Boolean) {

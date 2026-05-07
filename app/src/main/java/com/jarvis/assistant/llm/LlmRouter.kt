@@ -255,8 +255,47 @@ class LlmRouter(context: Context) {
     }
 
     // ── Provider selection ─────────────────────────────────────────────────────
+    //
+    // Cached on the (providerName, apiKey, ollamaUrl, maxTokens) tuple — the
+    // four inputs providerByName actually reads. activeProvider() used to
+    // construct a fresh provider on every call (one EncryptedSharedPreferences
+    // read + one allocation per LLM turn); that adds ~2–5 ms and creates
+    // unnecessary garbage on rapid follow-ups.
 
-    private fun activeProvider(): LlmProvider = providerByName(settings.llmProvider)
+    private data class ProviderKey(
+        val name: String,
+        val apiKey: String,
+        val ollamaUrl: String,
+        val maxTokens: Int,
+        val miniMaxBaseUrl: String,
+        val miniMaxModel: String,
+        val openAiOAuthEnabled: Boolean,
+        val openAiAccessToken: String,
+    )
+
+    @Volatile private var cachedProviderKey: ProviderKey? = null
+    @Volatile private var cachedProvider: LlmProvider? = null
+
+    private fun currentProviderKey(): ProviderKey = ProviderKey(
+        name               = settings.llmProvider,
+        apiKey             = settings.apiKey,
+        ollamaUrl          = settings.ollamaBaseUrl,
+        maxTokens          = settings.maxTokens,
+        miniMaxBaseUrl     = settings.miniMaxBaseUrl,
+        miniMaxModel       = settings.miniMaxModel,
+        openAiOAuthEnabled = settings.openAiOAuthEnabled,
+        openAiAccessToken  = settings.openAiAccessToken,
+    )
+
+    private fun activeProvider(): LlmProvider {
+        val key = currentProviderKey()
+        val current = cachedProvider
+        if (current != null && cachedProviderKey == key) return current
+        val fresh = providerByName(key.name)
+        cachedProvider = fresh
+        cachedProviderKey = key
+        return fresh
+    }
 
     internal fun providerByName(providerName: String): LlmProvider {
         val apiKey    = settings.apiKey

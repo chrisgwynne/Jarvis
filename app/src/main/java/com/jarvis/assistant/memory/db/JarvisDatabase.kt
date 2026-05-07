@@ -584,6 +584,14 @@ abstract class JarvisDatabase : RoomDatabase() {
                                    MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
                                    MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
                                    MIGRATION_15_16)
+                    // WAL journal mode lets readers and a single writer run
+                    // concurrently — important here because JarvisRuntime has
+                    // many overlapping writers (memory, knowledge, telemetry,
+                    // goals, brain events) competing with the UI's reader.
+                    // Default rollback journal serialises all of this and
+                    // adds visible latency on the foreground notification
+                    // and conversation panel.
+                    .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
                     .build()
                     .also { INSTANCE = it }
             }

@@ -839,7 +839,19 @@ class JarvisRuntime(
         // No extra work needed here.
     }
 
+    @Volatile private var stopped = false
+
     fun stop() {
+        // Idempotent — JarvisService.onDestroy() and ACTION_STOP both end up
+        // calling stop(), and the OS may interleave them when a stop request
+        // races a process death.  Without this guard ttsEngine.shutdown(),
+        // bluetoothSco.release() and friends ran twice and a second
+        // scope.cancel() races the in-flight flushSessionToDb() coroutine.
+        if (stopped) {
+            Log.d(TAG, "Stop ignored — already stopped")
+            return
+        }
+        stopped = true
         Log.d(TAG, "Stop requested")
         flushSessionToDb()  // synchronous — must complete before scope.cancel()
         pipelineJob?.cancel()

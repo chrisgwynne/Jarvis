@@ -85,13 +85,15 @@ dependencies {
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
 
-    // Networking (for LLM API calls).  OkHttp + Gson only — Retrofit and the
-    // OkHttp logging interceptor were declared historically but never wired in
-    // (NetworkClient builds requests against OkHttp directly).  Dropping them
-    // shrinks the release APK by ~1.2 MB and avoids logging-interceptor
-    // accidentally leaking bodies into logcat.
+    // Networking (for LLM API calls).  OkHttp + Gson only — NetworkClient builds
+    // requests against OkHttp directly, so Retrofit and the logging-interceptor
+    // are intentionally absent (kept the APK ~1.2 MB smaller and avoids the
+    // interceptor accidentally leaking bodies into logcat).
     implementation(libs.okhttp)
     implementation(libs.gson)
+
+    // LeakCanary — debug-only memory leak detector. Not packaged into release.
+    debugImplementation(libs.leakcanary.android)
 
     // Runtime permission handling in Compose
     implementation(libs.accompanist.permissions)

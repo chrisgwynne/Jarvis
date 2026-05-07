@@ -90,8 +90,12 @@
     <!-- Audio ducking / routing -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
-    <!-- BT output (future TTS) -->
-    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <!-- BT output (future TTS).  Legacy BLUETOOTH is a no-op on API 31+ (where
+         the runtime grant moved to BLUETOOTH_CONNECT); cap it at 30 so Play
+         Store and lint don't flag a permission with no effect on modern OS
+         versions. -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <!-- POST_NOTIFICATIONS required on Android 13+ to show the foreground notification -->
@@ -125,13 +129,17 @@
     <!-- Answer / decline incoming calls via TelecomManager -->
     <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
 
-    <!-- Internal reminders & timers via AlarmManager -->
-    <!-- SCHEDULE_EXACT_ALARM (API 31+): shown to the user in Settings; they must grant it.
-         USE_EXACT_ALARM (API 33+): auto-granted only for clock/calendar/alarm-clock apps —
-         review before publishing to Play Store; remove if app category does not qualify.
-         ReminderScheduler falls back to inexact alarms if neither is granted. -->
+    <!-- Internal reminders & timers via AlarmManager.
+         SCHEDULE_EXACT_ALARM (API 31+): shown to the user in Settings; they
+         must grant it.  ReminderScheduler falls back to inexact alarms if it
+         isn't granted.
+
+         USE_EXACT_ALARM (API 33+) was removed: that permission is auto-granted
+         only for apps in the clock / calendar / alarm-clock category, and a
+         general-purpose assistant does not qualify.  Including it risked Play
+         Store rejection without delivering any benefit, since the Play
+         Console enforces category eligibility regardless of the manifest. -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <!-- ═══════════════════════════════════════════
          APPLICATION

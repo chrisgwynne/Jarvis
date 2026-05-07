@@ -16,6 +16,7 @@ import com.jarvis.assistant.runtime.JarvisRuntime
 import com.jarvis.assistant.ui.MainActivity
 import com.jarvis.assistant.util.SettingsStore
 import kotlinx.coroutines.*
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * JarvisService — the persistent foreground service that owns JarvisRuntime.
@@ -151,14 +152,16 @@ class JarvisService : Service() {
          * Returns true if JarvisService is currently running.
          * Used by MainScreen to initialise the start/stop button state correctly
          * when the user reopens the app without the service having been stopped.
+         *
+         * Backed by a process-wide AtomicBoolean rather than
+         * ActivityManager.getRunningServices() — the latter is deprecated
+         * since API 26 and throws SecurityException on some OEM ROM builds.
+         * The flag is set in onCreate / cleared in onDestroy, so it is
+         * accurate for the live process and trivially zero-cost to read.
          */
-        @Suppress("DEPRECATION")
-        fun isRunning(context: Context): Boolean {
-            val am = context.getSystemService(android.app.ActivityManager::class.java)
-                ?: return false
-            return am.getRunningServices(Int.MAX_VALUE)
-                .any { it.service.className == JarvisService::class.java.name }
-        }
+        private val running = AtomicBoolean(false)
+
+        fun isRunning(@Suppress("UNUSED_PARAMETER") context: Context): Boolean = running.get()
     }
 
     // Legacy state enum — kept so MainScreen.kt continues to work unchanged
@@ -173,6 +176,7 @@ class JarvisService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        running.set(true)
         val t0 = System.currentTimeMillis()
         Log.d(TAG, "onCreate")
         // NOTE: no PARTIAL_WAKE_LOCK here.  The foreground-service with
@@ -289,8 +293,9 @@ class JarvisService : Service() {
     override fun onDestroy() {
         Log.d(TAG, "onDestroy")
         serviceScope.cancel()
-        runtime?.stop()
+        runtime?.stop()  // stop() is idempotent; safe even if ACTION_STOP path already fired
         runtime = null
+        running.set(false)
         broadcast(BROADCAST_SERVICE_STOPPED)
         super.onDestroy()
     }

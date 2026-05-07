@@ -1,41 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Default stance: cleartext (HTTP) is DENIED.  Public LLM / Places / Maps /
-    Distance-Matrix APIs all use HTTPS — OkHttp picks the scheme from the URL,
-    so this tighter default has no effect on those flows.
+    Cleartext is permitted by default.
 
-    Exceptions (cleartextTrafficPermitted="true") are scoped to the hosts the
-    app actually talks to in plaintext: self-hosted LLM / OpenClaw / Home
-    Assistant endpoints on the LAN and on Tailscale.  A MITM on a public
-    Wi-Fi can no longer see or modify any Jarvis API traffic, which was
-    possible under the previous globally-permissive base-config.
+    A previous iteration of this file tried to deny cleartext globally and
+    re-allow it for RFC-1918 / Tailscale IP ranges.  That approach is broken:
+    Android's <domain> matcher is suffix-based hostname matching, NOT
+    CIDR/subnet matching, so an entry like "192.168.0.0" only matches the
+    literal hostname "192.168.0.0" — it does not match 192.168.1.5.  In
+    practice that meant cleartext was denied for every real LAN host (Ollama,
+    OpenClaw, Home Assistant) the user might configure.
+
+    Re-permitting cleartext globally is safe in this app's threat model
+    because:
+      • Every public LLM provider URL hardcoded in /llm/providers/ is HTTPS.
+        OkHttp picks the scheme from the URL, so this config has no effect on
+        those calls.
+      • The only cleartext flows are user-configured self-hosted services on
+        their own LAN / VPN, where the user has explicitly opted in by
+        entering an http:// URL in Settings.
+      • User-installed CAs are trusted so users running their own HTTPS with
+        a private CA can still benefit from TLS without bundling certs.
+
+    Future work: when Android exposes proper IP-range matching in NSC, switch
+    back to deny-by-default with explicit RFC-1918 / 100.64/10 ranges allowed.
 -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false">
+    <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
-            <!-- User-installed certs trusted so self-signed TLS on private
-                 networks (OpenClaw, Home Assistant with a local CA) still
-                 works without the app bundling a pinned cert set. -->
             <certificates src="user" />
         </trust-anchors>
     </base-config>
-
-    <!-- Private / local-network hosts — cleartext allowed here only. -->
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">localhost</domain>
-        <domain includeSubdomains="true">127.0.0.1</domain>
-        <!-- RFC-1918 boundary literals.  Android's host matcher treats these
-             as suffix tests, so "10.0.0.0" matches every 10.x.y.z; same for
-             172.16.x.x and 192.168.x.x (the common home-network subnet). -->
-        <domain includeSubdomains="true">10.0.0.0</domain>
-        <domain includeSubdomains="true">172.16.0.0</domain>
-        <domain includeSubdomains="true">192.168.0.0</domain>
-        <domain includeSubdomains="true">169.254.0.0</domain>
-        <!-- Tailscale CGNAT block (100.64.0.0/10). -->
-        <domain includeSubdomains="true">100.64.0.0</domain>
-        <domain includeSubdomains="true">100.127.0.0</domain>
-        <!-- Tailscale MagicDNS. -->
-        <domain includeSubdomains="true">ts.net</domain>
-    </domain-config>
 </network-security-config>

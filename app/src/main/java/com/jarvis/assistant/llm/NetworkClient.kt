@@ -11,8 +11,11 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.ConnectionPool
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
@@ -49,6 +52,21 @@ object NetworkClient {
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
+        // Explicit HTTP/2 + HTTP/1.1 preference order. OkHttp picks this by
+        // default, but stating it makes the assumption visible — every public
+        // LLM provider supports HTTP/2 today, which materially reduces TLS
+        // handshake count under back-to-back streamed turns.
+        .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
+        // Connection pool tuned for a small set of long-lived hosts (one
+        // active LLM provider, optionally an Ollama / OpenClaw on the LAN
+        // and Home Assistant).  Default 5 connections kept alive for 5 min
+        // is fine for browsers but discards reusable connections too quickly
+        // for an always-on assistant — bump idle keep-alive so back-to-back
+        // turns reuse the same TLS session.
+        .connectionPool(ConnectionPool(maxIdleConnections = 8, keepAliveDuration = 10, TimeUnit.MINUTES))
+        // Retry transparently on the rare cases OkHttp can recover from
+        // (HTTP/2 GOAWAY, idle connection closed mid-request).
+        .retryOnConnectionFailure(true)
         .build()
 
     /**
@@ -206,4 +224,36 @@ object NetworkClient {
             if (!call.isCanceled()) call.cancel()
         }
     }.flowOn(Dispatchers.IO)
+
+    /**
+     * Establish a warm TLS / HTTP/2 connection to [url] without sending a
+     * real request.  Used by JarvisRuntime at startup to pay the DNS +
+     * TLS-handshake cost up-front (~150–400 ms) so the first user turn
+     * doesn't.
+     *
+     * Implementation: HEAD against the origin.  Failures are silent —
+     * a pre-warm that fails has zero functional impact, and providers
+     * that 405 on HEAD still leave us a warm socket in the pool.
+     */
+    suspend fun prewarm(url: String) {
+        val parsed = url.toHttpUrlOrNull() ?: return
+        // Strip any path so we hit the origin and get a reusable connection
+        // for whatever endpoint the real call will use.
+        val origin = parsed.newBuilder().encodedPath("/").build().toString()
+        suspendCancellableCoroutine<Unit> { cont ->
+            val req = Request.Builder().url(origin).head().build()
+            val call = http.newCall(req)
+            cont.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onResponse(call: Call, response: Response) {
+                    response.close()
+                    if (cont.isActive) cont.resume(Unit)
+                }
+                override fun onFailure(call: Call, e: IOException) {
+                    // Silent — pre-warm best-effort.
+                    if (cont.isActive) cont.resume(Unit)
+                }
+            })
+        }
+    }
 }

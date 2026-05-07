@@ -322,6 +322,42 @@ class LlmRouter(context: Context) {
     val currentProviderName: String get() = activeProvider().name
 
     /**
+     * Resolve the origin URL the active provider talks to.  Used by [prewarm]
+     * so we don't ship a stale base-URL list inside this class.
+     *
+     * The provider classes themselves don't expose their endpoints, so the
+     * mapping lives here — kept in sync with each provider's hardcoded base
+     * URL.  When a new provider is added, add it here too.
+     */
+    private fun activeProviderOrigin(): String? = when (settings.llmProvider) {
+        "Anthropic"  -> "https://api.anthropic.com"
+        "Gemini"     -> "https://generativelanguage.googleapis.com"
+        "Ollama"     -> settings.ollamaBaseUrl
+        "OpenRouter" -> "https://openrouter.ai"
+        "Kimi"       -> "https://api.moonshot.cn"
+        "MiniMax"    -> settings.miniMaxBaseUrl
+        "OpenAI"     -> "https://api.openai.com"
+        else         -> "https://api.openai.com"
+    }
+
+    /**
+     * Pay the DNS + TLS-handshake cost for the active provider up-front so
+     * the first user turn doesn't.  Best-effort — failures are silent.
+     *
+     * Typical saving on a cold network: ~150–400 ms off first-token latency.
+     * Should be invoked from JarvisRuntime.start() on Dispatchers.IO.
+     */
+    suspend fun prewarmActiveProvider() {
+        val url = activeProviderOrigin() ?: return
+        try {
+            NetworkClient.prewarm(url)
+            Log.d(TAG, "Pre-warmed connection to $url")
+        } catch (e: Exception) {
+            Log.d(TAG, "Pre-warm to $url failed (${e.message}) — ignoring")
+        }
+    }
+
+    /**
      * Call the provider with function-calling tools.
      *
      * Returns [LlmResult.ToolCall] or [LlmResult.Text] when a function-calling-capable

@@ -592,6 +592,13 @@ class JarvisRuntime(
             anyoneEnrolled   = speakerStore.anyoneEnrolled()
         }
         scope.launch(Dispatchers.IO) { locationProvider.refresh() }
+        // Pre-warm the active LLM provider's TLS connection so the first
+        // turn after a cold start doesn't pay the DNS + handshake cost
+        // (~150–400 ms on a cold radio).  Best-effort, never blocks.
+        scope.launch(Dispatchers.IO) {
+            try { llmRouter.prewarmActiveProvider() }
+            catch (e: Exception) { Log.d(TAG, "LLM prewarm failed: ${e.message}") }
+        }
 
         // Rehydrate action-class suppressions from persisted dislike facts.
         // [ActionLedger] already restores its own SharedPreferences snapshot on

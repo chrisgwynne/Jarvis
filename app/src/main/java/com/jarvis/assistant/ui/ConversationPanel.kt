@@ -137,12 +137,18 @@ private fun TurnBubble(turn: ConversationTurn) {
                 letterSpacing = 1.sp
             )
             Spacer(Modifier.height(2.dp))
+            // Render inline Markdown — assistant replies frequently use **bold**
+            // and `code` fragments; rendering them as raw asterisks/backticks
+            // looked tonally off and added visual noise.  User turns never
+            // contain Markdown (they're STT transcripts) so this is a no-op
+            // for them.
             Text(
-                text      = turn.content,
-                color     = TextBody,
-                fontSize  = 12.sp,
+                text       = if (isUser) androidx.compose.ui.text.AnnotatedString(turn.content)
+                             else renderMarkdownInline(turn.content, codeColor = TextCyan),
+                color      = TextBody,
+                fontSize   = 12.sp,
                 lineHeight = 17.sp,
-                fontFamily = FontFamily.Monospace
+                fontFamily = FontFamily.Monospace,
             )
         }
     }

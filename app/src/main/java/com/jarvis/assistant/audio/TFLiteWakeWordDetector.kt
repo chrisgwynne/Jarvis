@@ -59,7 +59,10 @@ class TFLiteWakeWordDetector(
         private const val COOLDOWN_MS     = 1_500L      // ignore re-triggers for 1.5 s after detection
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            com.jarvis.assistant.reporting.github.autoReporting("wake-tflite")
+    )
     private var job: Job? = null
 
     /** Returns true if the model asset is present and the detector can be used. */

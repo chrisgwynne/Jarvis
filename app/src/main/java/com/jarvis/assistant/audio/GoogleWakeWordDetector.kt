@@ -54,7 +54,10 @@ class GoogleWakeWordDetector(
         private const val WAKE_WORD = "jarvis"
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main +
+            com.jarvis.assistant.reporting.github.autoReporting("wake-google")
+    )
     private var job: Job? = null
 
     override fun start() {

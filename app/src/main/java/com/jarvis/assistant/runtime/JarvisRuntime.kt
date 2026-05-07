@@ -270,8 +270,14 @@ class JarvisRuntime(
     // Phase 4 — Bluetooth SCO for headset audio routing
     private val bluetoothSco   = BluetoothScoManager(context)
 
-    // Coroutine scope — SupervisorJob so a child failure does not cancel the whole scope
-    private val scope          = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    // Coroutine scope — SupervisorJob so a child failure does not cancel the
+    // whole scope.  autoReporting funnels any uncaught coroutine exception
+    // through IssueReporter.reportHigh — without it, supervisor children
+    // log to System.err and never reach the JarvisUncaughtHandler.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main +
+            com.jarvis.assistant.reporting.github.autoReporting("runtime")
+    )
 
     // Phase 5 — Audio focus.
     private val audioFocus     = AudioFocusManager(context) { isTransient ->

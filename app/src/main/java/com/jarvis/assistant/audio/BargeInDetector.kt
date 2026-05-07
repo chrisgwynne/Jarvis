@@ -66,7 +66,10 @@ class BargeInDetector(
         private const val SAMPLE_RATE = 16_000
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            com.jarvis.assistant.reporting.github.autoReporting("barge-in")
+    )
     private var detectJob: Job? = null
 
     /**

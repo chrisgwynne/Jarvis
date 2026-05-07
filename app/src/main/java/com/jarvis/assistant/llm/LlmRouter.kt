@@ -465,16 +465,37 @@ class LlmRouter(context: Context) {
 
     private suspend fun tryFallbackProvider(messages: List<Message>, originalError: Exception): String {
         val fallback = settings.fallbackProvider.takeIf { it.isNotBlank() }
-            ?: throw if (originalError is LlmException) originalError
-                     else LlmException("Network error: ${originalError.javaClass.simpleName}")
+            ?: run {
+                // No fallback configured — surface the persistent failure to
+                // IssueReporter (HIGH; the rate limiter will collapse a tight
+                // failure loop into one issue per cooldown window).
+                reportProviderFailure(settings.llmProvider, originalError)
+                throw if (originalError is LlmException) originalError
+                      else LlmException("Network error: ${originalError.javaClass.simpleName}")
+            }
 
         Log.w(TAG, "Primary provider failed — trying fallback: $fallback")
         return try {
             withTimeoutOrNull(LLM_TIMEOUT_MS) { providerByName(fallback).complete(messages) }
                 ?: throw LlmException("Fallback ($fallback) timed out")
         } catch (e: Exception) {
+            // Both primary and fallback dead — escalate.
+            reportProviderFailure("${settings.llmProvider}+$fallback", e)
             throw LlmException("Both primary and fallback ($fallback) failed")
         }
+    }
+
+    private fun reportProviderFailure(providerName: String, throwable: Throwable) {
+        com.jarvis.assistant.reporting.github.IssueReporter.get()?.reportHigh(
+            subsystem = "llm",
+            category  = "PROVIDER_FAILED",
+            message   = "Provider [$providerName] failed: ${throwable.javaClass.simpleName}: ${throwable.message?.take(200)}",
+            throwable = throwable,
+            metadata  = mapOf(
+                "provider" to providerName,
+                "error"    to throwable.javaClass.simpleName,
+            ),
+        )
     }
 
     /** 500 ms base + up to 100 ms jitter (≤ 600 ms). */

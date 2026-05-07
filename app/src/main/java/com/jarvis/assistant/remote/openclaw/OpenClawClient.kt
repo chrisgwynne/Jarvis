@@ -61,12 +61,22 @@ class OpenClawClient {
 
             } catch (e: LlmException) {
                 Log.w(TAG, "OpenClaw HTTP error: ${e.message}")
-                when {
-                    e.message?.contains("401") == true ||
-                    e.message?.contains("403") == true ->
-                        OpenClawExecutionResult.Failure(OpenClawError.AuthFailed)
-                    else ->
-                        OpenClawExecutionResult.Failure(OpenClawError.Unreachable(e.message ?: ""))
+                val isAuth = e.message?.contains("401") == true ||
+                             e.message?.contains("403") == true
+                if (isAuth) {
+                    // Auth failure on a self-hosted endpoint is almost always
+                    // a config drift the operator wants to know about — surface
+                    // it as a HIGH non-fatal so the rate-limited issue lands
+                    // after the third occurrence inside the cooldown window.
+                    com.jarvis.assistant.reporting.github.IssueReporter.get()?.reportHigh(
+                        subsystem = "openclaw",
+                        category  = "AUTH_FAILED",
+                        message   = "OpenClaw rejected the bearer token (${e.message?.take(80)}).",
+                        throwable = e,
+                    )
+                    OpenClawExecutionResult.Failure(OpenClawError.AuthFailed)
+                } else {
+                    OpenClawExecutionResult.Failure(OpenClawError.Unreachable(e.message ?: ""))
                 }
             } catch (e: IOException) {
                 Log.w(TAG, "OpenClaw IO error: ${e.message}")

@@ -124,7 +124,10 @@ class ProactiveEngine(
     private val eventScorer     = EventScorer(config, cooldownStore, ledger)
     private val decisionEngine  = DecisionEngine(config, cooldownStore)
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            com.jarvis.assistant.reporting.github.autoReporting("proactive")
+    )
     private var loopJob: Job? = null
 
     /**

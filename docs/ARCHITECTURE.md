@@ -110,6 +110,13 @@ Conversation history in Room is **not** encrypted at rest.  Users with
 threat models that require it should disable conversation persistence in
 Settings → Privacy.
 
+## Auto-issue reporting
+
+Crashes and uncaught coroutine failures in the major subsystems are
+auto-reported to GitHub by `IssueReporter` (rate-limited + scrubbed for
+secrets).  See [`AUTO_REPORTING.md`](AUTO_REPORTING.md) for the source
+table, gates, and how to add a new reporter.
+
 ## Service-killed detection
 
 `MainScreen` shows a `ServiceHealthBanner` above the conversation when

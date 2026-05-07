@@ -97,8 +97,20 @@ class HermesJobsClient {
             } catch (e: LlmException) {
                 val auth = e.message?.contains("HTTP 401") == true ||
                            e.message?.contains("HTTP 403") == true
-                if (auth) HermesResult.AuthFailed
-                else HermesResult.HttpError(e.message ?: "HTTP error")
+                if (auth) {
+                    // Same logic as OpenClawClient — escalate misconfigured
+                    // bearer tokens so the operator gets a single coalesced
+                    // GitHub issue instead of debugging blindly.
+                    com.jarvis.assistant.reporting.github.IssueReporter.get()?.reportHigh(
+                        subsystem = "hermes",
+                        category  = "AUTH_FAILED",
+                        message   = "Hermes rejected the bearer token (${e.message?.take(80)}).",
+                        throwable = e,
+                    )
+                    HermesResult.AuthFailed
+                } else {
+                    HermesResult.HttpError(e.message ?: "HTTP error")
+                }
             } catch (e: IOException) {
                 HermesResult.NetworkError(e.message ?: e.javaClass.simpleName)
             } catch (e: Exception) {

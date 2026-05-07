@@ -169,7 +169,10 @@ class JarvisService : Service() {
 
     private var runtime: JarvisRuntime? = null
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val serviceScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main +
+            com.jarvis.assistant.reporting.github.autoReporting("service")
+    )
     private val runtimeDeferred = CompletableDeferred<JarvisRuntime>()
 
     // ── Service lifecycle ─────────────────────────────────────────────────────

@@ -15,6 +15,7 @@ import com.jarvis.assistant.core.state.JarvisState
 import com.jarvis.assistant.runtime.JarvisRuntime
 import com.jarvis.assistant.ui.MainActivity
 import com.jarvis.assistant.util.SettingsStore
+import com.jarvis.assistant.reporting.github.autoReporting
 import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -170,8 +171,7 @@ class JarvisService : Service() {
     private var runtime: JarvisRuntime? = null
 
     private val serviceScope = CoroutineScope(
-        SupervisorJob() + Dispatchers.Main +
-            com.jarvis.assistant.reporting.github.autoReporting("service")
+        SupervisorJob() + Dispatchers.Main + autoReporting("service")
     )
     private val runtimeDeferred = CompletableDeferred<JarvisRuntime>()
 

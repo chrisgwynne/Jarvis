@@ -11,10 +11,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,23 +34,20 @@ import com.jarvis.assistant.ui.theme.jarvisExtras
 import kotlinx.coroutines.delay
 
 /**
- * Surfaces an actionable warning when the OS or OEM has put the foreground
- * service at risk of being killed.
+ * Surfaces an actionable warning when battery optimisation is NOT
+ * exempted.  On aggressive OEMs (Samsung, Xiaomi, Huawei) this is the
+ * single biggest reason an always-on foreground service ends up killed
+ * mid-conversation.
  *
- * Two checks today:
- *   1. Battery optimisation is NOT exempted — the foreground service can
- *      still be killed in Doze on aggressive OEMs.
- *   2. The service was running in the recent past but isn't now (a kill
- *      indicator) — surfaces a one-tap link to dontkillmyapp.com guidance
- *      tailored to the user's manufacturer.
- *
- * Composable, no side-effects beyond reading PowerManager.  The actual
- * service kill detection is a process-lifetime AtomicLong written by
- * [com.jarvis.assistant.service.JarvisService] in onCreate / onDestroy
- * — this composable polls it every few seconds.
+ * Scope is deliberately narrow — this composable only checks battery
+ * optimisation; it does NOT detect a service that has actually been
+ * killed (that requires a persisted last-seen timestamp + a
+ * cross-process heartbeat which we don't have today).  The misleading
+ * `ServiceHealthBanner` name is kept as an alias for one release so
+ * existing callers don't break.
  */
 @Composable
-fun ServiceHealthBanner(
+fun BatteryOptimisationBanner(
     isRunning: Boolean,
 ) {
     val context = LocalContext.current
@@ -57,6 +56,10 @@ fun ServiceHealthBanner(
     var batteryOptimised by remember {
         mutableStateOf(pm?.isIgnoringBatteryOptimizations(context.packageName) == false)
     }
+    // Allow the user to dismiss the banner for the rest of the session —
+    // a permanent dismissal would need a SettingsStore key and is more
+    // properly a Settings → Notifications toggle.
+    var dismissed by remember { mutableStateOf(false) }
     LaunchedEffect(isRunning) {
         // Re-check on each run/stop event — the user may have just granted it.
         while (true) {
@@ -65,7 +68,7 @@ fun ServiceHealthBanner(
         }
     }
 
-    if (!batteryOptimised) return
+    if (!batteryOptimised || dismissed) return
 
     val extras = MaterialTheme.jarvisExtras
     val brandColour = extras.statusAmber
@@ -117,5 +120,24 @@ fun ServiceHealthBanner(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        IconButton(
+            onClick  = { dismissed = true },
+            modifier = Modifier.size(JarvisTokens.Touch.minTarget),
+        ) {
+            Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = "Dismiss banner",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
+
+/**
+ * Backwards-compatibility alias.  Existing call sites use
+ * `ServiceHealthBanner(isRunning = …)`; this lets them keep compiling
+ * while the rename rolls out — call sites should migrate to
+ * [BatteryOptimisationBanner] over time.
+ */
+@Composable
+fun ServiceHealthBanner(isRunning: Boolean) = BatteryOptimisationBanner(isRunning)

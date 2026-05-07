@@ -32,20 +32,23 @@ jobs:
           java-version: 17
 
       - name: Set up Gradle
-        # Caches ~/.gradle/caches and ~/.gradle/wrapper between runs.
-        uses: gradle/actions/setup-gradle@v3
-
-      - name: Validate Gradle wrapper
-        uses: gradle/wrapper-validation-action@v3
+        # Caches ~/.gradle/caches between runs and pins the Gradle version
+        # to whatever is in gradle/wrapper/gradle-wrapper.properties.  We
+        # don't ship the gradlew wrapper script in this repo (intentional —
+        # one less binary in version control), so the action installs the
+        # Gradle distribution itself and exposes it on PATH.
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: wrapper
 
       - name: Lint
-        run: ./gradlew --no-daemon lintDebug
+        run: gradle --no-daemon lintDebug
 
       - name: Unit tests
-        run: ./gradlew --no-daemon testDebugUnitTest
+        run: gradle --no-daemon testDebugUnitTest
 
       - name: Assemble release APK
-        run: ./gradlew --no-daemon assembleRelease
+        run: gradle --no-daemon assembleRelease
 
       - name: Upload release APK
         uses: actions/upload-artifact@v4

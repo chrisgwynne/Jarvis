@@ -12,6 +12,17 @@ import androidx.compose.ui.unit.dp
  *
  * Kept separate from [com.jarvis.assistant.ui.SettingsScreen] so sub-screens
  * can share a single source of truth for look-and-feel.
+ *
+ * KNOWN LIMITATION (Phase 2): these colours are static and dark-only.
+ * The newer [com.jarvis.assistant.ui.theme.JarvisTheme] supports
+ * light / dark / AMOLED / dynamic colour, but every settings screen still
+ * reads from this object directly so picking AMOLED in
+ * [com.jarvis.assistant.ui.settings.screens.AppearanceSettingsScreen]
+ * affects [com.jarvis.assistant.ui.MainScreen] but not the settings
+ * screens themselves.  Migration is per-screen (~20 files) and is
+ * deliberately deferred — new screens should consume
+ * `MaterialTheme.colorScheme` + `MaterialTheme.jarvisExtras` instead of
+ * this object.
  */
 internal object SettingsTheme {
     val BgDark        = Color(0xFF0D0D0D)

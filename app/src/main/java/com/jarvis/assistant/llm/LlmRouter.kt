@@ -272,6 +272,16 @@ class LlmRouter(context: Context) {
         val miniMaxModel: String,
         val openAiOAuthEnabled: Boolean,
         val openAiAccessToken: String,
+        // Hermes Agent settings — must be in the cache key so a host /
+        // port / token / profile change in Settings invalidates the
+        // cached HermesAgentProvider on the next turn.  Without this,
+        // editing the Hermes endpoint silently keeps using the previous
+        // host until the process restarts.
+        val hermesHost: String,
+        val hermesPort: Int,
+        val hermesSecure: Boolean,
+        val hermesApiKey: String,
+        val hermesProfile: String,
     )
 
     @Volatile private var cachedProviderKey: ProviderKey? = null
@@ -286,6 +296,11 @@ class LlmRouter(context: Context) {
         miniMaxModel       = settings.miniMaxModel,
         openAiOAuthEnabled = settings.openAiOAuthEnabled,
         openAiAccessToken  = settings.openAiAccessToken,
+        hermesHost         = settings.hermesHost,
+        hermesPort         = settings.hermesPort,
+        hermesSecure       = settings.hermesSecure,
+        hermesApiKey       = settings.hermesApiKey,
+        hermesProfile      = settings.hermesProfile,
     )
 
     private fun activeProvider(): LlmProvider {

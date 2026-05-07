@@ -19,6 +19,7 @@ import com.jarvis.assistant.call.integration.TelecomCallActionExecutor
 import com.jarvis.assistant.call.integration.TelephonyCallMonitor
 import com.jarvis.assistant.context.ContextEngine
 import com.jarvis.assistant.context.Presence
+import com.jarvis.assistant.reporting.github.autoReporting
 import com.jarvis.assistant.core.events.EventAdapters
 import com.jarvis.assistant.core.events.RecentEventBuffer
 import com.jarvis.assistant.core.events.adapters.BatteryEventAdapter
@@ -275,8 +276,7 @@ class JarvisRuntime(
     // through IssueReporter.reportHigh — without it, supervisor children
     // log to System.err and never reach the JarvisUncaughtHandler.
     private val scope = CoroutineScope(
-        SupervisorJob() + Dispatchers.Main +
-            com.jarvis.assistant.reporting.github.autoReporting("runtime")
+        SupervisorJob() + Dispatchers.Main + autoReporting("runtime")
     )
 
     // Phase 5 — Audio focus.
@@ -855,7 +855,7 @@ class JarvisRuntime(
         // No extra work needed here.
     }
 
-    @Volatile private var stopped = false
+    private val stopped = java.util.concurrent.atomic.AtomicBoolean(false)
 
     fun stop() {
         // Idempotent — JarvisService.onDestroy() and ACTION_STOP both end up
@@ -863,11 +863,15 @@ class JarvisRuntime(
         // races a process death.  Without this guard ttsEngine.shutdown(),
         // bluetoothSco.release() and friends ran twice and a second
         // scope.cancel() races the in-flight flushSessionToDb() coroutine.
-        if (stopped) {
+        //
+        // compareAndSet rather than a @Volatile read+write so two threads
+        // entering stop() at the same instant only let one through — the
+        // earlier @Volatile version had a check-then-act window where both
+        // could pass the guard before either flipped the flag.
+        if (!stopped.compareAndSet(false, true)) {
             Log.d(TAG, "Stop ignored — already stopped")
             return
         }
-        stopped = true
         Log.d(TAG, "Stop requested")
         flushSessionToDb()  // synchronous — must complete before scope.cancel()
         pipelineJob?.cancel()

@@ -79,12 +79,18 @@ internal fun parseInlineMarkdown(text: String, codeColor: Color?): AnnotatedStri
                     }
                 }
 
-                // ── Italic: *…* or _…_ (single marker, no preceding word char
-                //    for `_` to avoid eating intra-word underscores).        ──
+                // ── Italic: *…* or _…_ (single marker, with intra-word
+                //    underscore protection for `_`: both the opener and the
+                //    closer must sit on a non-word boundary so that
+                //    `snake_case_word` parses as plain text, not as
+                //    `snake<i>case</i>word`.                                 ──
                 (c == '*' || (c == '_' && (i == 0 || !text[i - 1].isLetterOrDigit()))) -> {
                     val end = text.indexOf(c, i + 1)
-                    // Reject if no closer or next char is the same marker (would be bold).
-                    if (end < 0 || (end + 1 < n && text[end + 1] == c)) {
+                    val nextChar = if (end + 1 < n) text[end + 1] else null
+                    val isBoldMarker = end >= 0 && nextChar == c
+                    val isInWordUnderscore = c == '_' &&
+                        end >= 0 && nextChar != null && nextChar.isLetterOrDigit()
+                    if (end < 0 || isBoldMarker || isInWordUnderscore) {
                         append(c); i++
                     } else {
                         pushStyle(SpanStyle(fontStyle = FontStyle.Italic))

@@ -122,9 +122,21 @@ class HermesJobsClient {
     }
 
     /**
-     * Path-segment URL encoder — Hermes job IDs may contain slashes or
-     * URL-reserved characters depending on operator naming conventions.
+     * Path-segment encoder.  `URLEncoder.encode` is the wrong tool here —
+     * it's a form encoder (replaces space with `+`, leaves `/` unescaped
+     * once you `replace("%2F", "/")`), which would hand Hermes the wrong
+     * job id when the operator names a job with a space or slash.
+     *
+     * OkHttp's HttpUrl.Builder.addPathSegment performs RFC-3986 path
+     * encoding — exactly what we want — so route through that.  Origin
+     * is irrelevant; we throw it away and keep only the encoded segment.
      */
-    private fun encode(segment: String): String =
-        java.net.URLEncoder.encode(segment, Charsets.UTF_8.name())
+    private fun encode(segment: String): String {
+        val builder = okhttp3.HttpUrl.Builder()
+            .scheme("http")
+            .host("h")          // any non-empty placeholder
+            .addPathSegment(segment)
+        // build().encodedPath() yields "/<encoded>" — strip the leading slash.
+        return builder.build().encodedPath.removePrefix("/")
+    }
 }

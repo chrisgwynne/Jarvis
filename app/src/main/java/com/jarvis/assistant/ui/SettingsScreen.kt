@@ -74,7 +74,7 @@ fun SettingsScreen(
             PrivacySettingsScreen(vm = vm, onBack = popToRoot, onClose = onBack)
         }
         composable(SettingsCategory.Appearance.route) {
-            AppearanceSettingsScreen(onBack = popToRoot, onClose = onBack)
+            AppearanceSettingsScreen(vm = vm, onBack = popToRoot, onClose = onBack)
         }
         composable(SettingsCategory.Advanced.route) {
             AdvancedSettingsScreen(vm = vm, onBack = popToRoot, onClose = onBack)

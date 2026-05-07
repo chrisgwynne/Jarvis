@@ -322,6 +322,16 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Safety / lifecycle ────────────────────────────────────────────────
 
+    // ── Appearance (Phase 2) ──────────────────────────────────────────────
+    private val _themeMode = MutableStateFlow(store.themeMode)
+    val themeMode: StateFlow<String> = _themeMode.asStateFlow()
+
+    private val _dynamicColor = MutableStateFlow(store.dynamicColor)
+    val dynamicColor: StateFlow<Boolean> = _dynamicColor.asStateFlow()
+
+    fun setThemeMode(v: String)     { _themeMode.value = v;    store.themeMode = v }
+    fun setDynamicColor(v: Boolean) { _dynamicColor.value = v; store.dynamicColor = v }
+
     private val _toolExecutionDisabled = MutableStateFlow(store.toolExecutionDisabled)
     val toolExecutionDisabled: StateFlow<Boolean> = _toolExecutionDisabled.asStateFlow()
 

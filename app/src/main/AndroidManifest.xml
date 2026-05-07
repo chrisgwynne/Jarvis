@@ -101,6 +101,11 @@
     <!-- POST_NOTIFICATIONS required on Android 13+ to show the foreground notification -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Short haptic tick when the wake word is detected — auto-granted
+         (normal protection level) and silently a no-op on devices without
+         a vibrator (some tablets). -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <!-- Phone & contacts tools -->
     <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />

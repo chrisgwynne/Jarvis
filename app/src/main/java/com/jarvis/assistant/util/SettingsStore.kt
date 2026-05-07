@@ -88,6 +88,13 @@ class SettingsStore(context: Context) {
         /** When false, BootReceiver skips auto-starting JarvisService on boot. */
         const val KEY_AUTO_START_ON_BOOT      = "auto_start_on_boot"
 
+        // ── Appearance (Phase 2) ──────────────────────────────────────────────
+        /** Theme mode key — values: "system" | "light" | "dark" | "amoled". */
+        const val KEY_THEME_MODE       = "theme_mode"
+        /** When true and Android 12+, derive scheme from wallpaper. */
+        const val KEY_DYNAMIC_COLOR    = "dynamic_color"
+        const val DEFAULT_THEME_MODE   = "system"
+
         // ── App lock (Phase 4b) ───────────────────────────────────────────────
         const val KEY_APP_LOCK_ENABLED    = "app_lock_enabled"
         const val KEY_APP_LOCK_BIOMETRIC  = "app_lock_biometric_enabled"
@@ -382,6 +389,25 @@ class SettingsStore(context: Context) {
     var autoStartOnBoot: Boolean
         get() = prefs.getBoolean(KEY_AUTO_START_ON_BOOT, true)
         set(v) = prefs.edit().putBoolean(KEY_AUTO_START_ON_BOOT, v).apply()
+
+    // ── Appearance (Phase 2) ────────────────────────────────────────────────
+
+    /**
+     * Theme mode: "system" | "light" | "dark" | "amoled".
+     * AMOLED is a strict-black variant for OLED battery savings on this
+     * always-on app — never selected implicitly even when SYSTEM is set.
+     */
+    var themeMode: String
+        get() = prefs.getString(KEY_THEME_MODE, DEFAULT_THEME_MODE) ?: DEFAULT_THEME_MODE
+        set(v) = prefs.edit().putString(KEY_THEME_MODE, v).apply()
+
+    /**
+     * When true and the device is Android 12+, derives the colour scheme
+     * from the user's wallpaper.  AMOLED mode ignores this.
+     */
+    var dynamicColor: Boolean
+        get() = prefs.getBoolean(KEY_DYNAMIC_COLOR, false)
+        set(v) = prefs.edit().putBoolean(KEY_DYNAMIC_COLOR, v).apply()
 
     // ── App lock (Phase 4b) ──────────────────────────────────────────────────
 

@@ -1,6 +1,7 @@
 package com.jarvis.assistant.runtime
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import com.jarvis.assistant.audio.AudioFocusManager
 import com.jarvis.assistant.audio.BargeInDetector
@@ -1082,6 +1083,33 @@ class JarvisRuntime(
     private fun onWakeWordDetected() {
         pipelineJob?.cancel()
         LatencyTracker.pipelineStart()
+
+        // Tactile confirmation that Jarvis heard you — fired before the
+        // pipeline runs so it lands within the same frame as detection
+        // rather than after the 800 ms mic-handoff delay.  Failure is
+        // silent because Vibrator is optional (some tablets, watch screens).
+        runCatching {
+            val vib = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (context.getSystemService(android.os.VibratorManager::class.java))
+                    ?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                context.getSystemService(android.os.Vibrator::class.java)
+            }
+            if (vib?.hasVibrator() == true) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vib.vibrate(
+                        android.os.VibrationEffect.createOneShot(
+                            20L,
+                            android.os.VibrationEffect.DEFAULT_AMPLITUDE
+                        )
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    vib.vibrate(20L)
+                }
+            }
+        }
 
         pipelineJob = scope.launch {
             try {

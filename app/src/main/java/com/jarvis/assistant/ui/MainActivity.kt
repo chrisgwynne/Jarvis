@@ -25,6 +25,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
+import com.jarvis.assistant.ui.theme.JarvisTheme
+import com.jarvis.assistant.ui.theme.JarvisThemeMode
+import com.jarvis.assistant.util.SettingsStore
 
 /**
  * MainActivity — the single Activity in the app.
@@ -46,7 +49,24 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         setContent {
-            JarvisTheme {
+            // Theme preferences are stored in EncryptedSharedPreferences and
+            // read once per composition.  Switching the radio in Settings
+            // recreates the Activity (handled by SettingsViewModel) so this
+            // doesn't need to observe; a flow-backed read can land in a
+            // future pass once the rest of settings move to DataStore.
+            val settings = remember { SettingsStore(this@MainActivity) }
+            val themeMode = remember(settings.themeMode) {
+                when (settings.themeMode.lowercase()) {
+                    "light"  -> JarvisThemeMode.LIGHT
+                    "dark"   -> JarvisThemeMode.DARK
+                    "amoled" -> JarvisThemeMode.AMOLED
+                    else     -> JarvisThemeMode.SYSTEM
+                }
+            }
+            JarvisTheme(
+                mode         = themeMode,
+                dynamicColor = settings.dynamicColor,
+            ) {
                 // ── Permission gating ─────────────────────────────────────
                 // Build the list of permissions we need at runtime.
                 // Some are only required on newer API levels.
@@ -237,18 +257,5 @@ private fun BatteryOptimisationDialog(onConfirm: () -> Unit, onDismiss: () -> Un
     )
 }
 
-// ── Theme ──────────────────────────────────────────────────────────────────────
-
-@Composable
-private fun JarvisTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            background    = Color(0xFF0D0D0D),
-            surface       = Color(0xFF1A1A2E),
-            primary       = Color(0xFF00BCD4),
-            onBackground  = Color(0xFFE0E0E0),
-            onSurface     = Color(0xFFE0E0E0)
-        ),
-        content = content
-    )
-}
+// JarvisTheme moved to com.jarvis.assistant.ui.theme.JarvisTheme — supports
+// system/light/dark/AMOLED variants and dynamic colour on Android 12+.

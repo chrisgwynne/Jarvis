@@ -173,6 +173,10 @@ fun MainScreen(onOpenSettings: () -> Unit) {
             modifier      = Modifier.padding(horizontal = 32.dp)
         )
 
+        // ── Service-health banner — shown only when the service is at risk
+        // of being killed by the OS (battery optimisation not exempted).
+        ServiceHealthBanner(isRunning = isRunning)
+
         // ── Conversation history panel ────────────────────────────────────────
         Spacer(Modifier.height(12.dp))
         ConversationPanel(turns = turns)

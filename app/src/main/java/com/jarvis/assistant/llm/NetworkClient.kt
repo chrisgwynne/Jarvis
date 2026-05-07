@@ -186,6 +186,62 @@ object NetworkClient {
     }
 
     /**
+     * PATCH [body] (a JSON string) to [url].  Used for partial updates to
+     * REST resources (Hermes /api/jobs/{id} PATCH).
+     */
+    suspend fun patch(
+        url: String,
+        headers: Map<String, String>,
+        body: String,
+    ): String = suspendCancellableCoroutine { cont ->
+        val request = Request.Builder()
+            .url(url)
+            .apply { headers.forEach { (k, v) -> addHeader(k, v) } }
+            .patch(body.toRequestBody(JSON_MEDIA))
+            .build()
+        val call = http.newCall(request)
+        cont.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onResponse(call: Call, response: Response) {
+                response.use { r ->
+                    val responseBody = r.body?.string() ?: ""
+                    if (r.isSuccessful) cont.resume(responseBody)
+                    else cont.resumeWithException(LlmException("HTTP ${r.code}: ${responseBody.take(200)}"))
+                }
+            }
+            override fun onFailure(call: Call, e: IOException) {
+                cont.resumeWithException(e)
+            }
+        })
+    }
+
+    /** DELETE [url] (no body).  Returns the response body if any. */
+    suspend fun delete(
+        url: String,
+        headers: Map<String, String>,
+    ): String = suspendCancellableCoroutine { cont ->
+        val request = Request.Builder()
+            .url(url)
+            .apply { headers.forEach { (k, v) -> addHeader(k, v) } }
+            .delete()
+            .build()
+        val call = http.newCall(request)
+        cont.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onResponse(call: Call, response: Response) {
+                response.use { r ->
+                    val responseBody = r.body?.string() ?: ""
+                    if (r.isSuccessful) cont.resume(responseBody)
+                    else cont.resumeWithException(LlmException("HTTP ${r.code}: ${responseBody.take(200)}"))
+                }
+            }
+            override fun onFailure(call: Call, e: IOException) {
+                cont.resumeWithException(e)
+            }
+        })
+    }
+
+    /**
      * POST [body] to [url] and read the Server-Sent Events (SSE) response as a
      * [Flow] of raw data values (the JSON string after "data: " on each line).
      *

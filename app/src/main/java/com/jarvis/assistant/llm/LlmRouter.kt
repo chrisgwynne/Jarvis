@@ -5,6 +5,7 @@ import android.util.Log
 import com.jarvis.assistant.data.ConversationStore
 import com.jarvis.assistant.llm.providers.AnthropicProvider
 import com.jarvis.assistant.llm.providers.GeminiProvider
+import com.jarvis.assistant.llm.providers.HermesAgentProvider
 import com.jarvis.assistant.llm.providers.KimiProvider
 import com.jarvis.assistant.llm.providers.MiniMaxProvider
 import com.jarvis.assistant.llm.providers.OllamaProvider
@@ -309,6 +310,12 @@ class LlmRouter(context: Context) {
             "OpenRouter" -> OpenRouterProvider(apiKey, mt)
             "Kimi"       -> KimiProvider(apiKey, mt)
             "MiniMax"    -> MiniMaxProvider(apiKey, settings.miniMaxBaseUrl, settings.miniMaxModel, mt)
+            "Hermes"     -> HermesAgentProvider(
+                apiKey     = settings.hermesApiKey,
+                rawBaseUrl = hermesBaseOrigin(),
+                model      = settings.hermesProfile,
+                maxTokens  = mt,
+            )
             else         -> {
                 val openAiToken = if (settings.openAiOAuthEnabled && settings.openAiAccessToken.isNotBlank())
                     settings.openAiAccessToken
@@ -336,8 +343,21 @@ class LlmRouter(context: Context) {
         "OpenRouter" -> "https://openrouter.ai"
         "Kimi"       -> "https://api.moonshot.cn"
         "MiniMax"    -> settings.miniMaxBaseUrl
+        "Hermes"     -> hermesBaseOrigin().takeIf { it.isNotBlank() }
         "OpenAI"     -> "https://api.openai.com"
         else         -> "https://api.openai.com"
+    }
+
+    /**
+     * Compose the user-configured Hermes origin (no /v1 suffix) — used both
+     * by [providerByName] (where HermesAgentProvider re-appends /v1) and by
+     * [activeProviderOrigin] for TLS pre-warming.
+     */
+    private fun hermesBaseOrigin(): String {
+        val host = settings.hermesHost
+        if (host.isBlank()) return ""
+        val scheme = if (settings.hermesSecure) "https" else "http"
+        return "$scheme://$host:${settings.hermesPort}"
     }
 
     /**

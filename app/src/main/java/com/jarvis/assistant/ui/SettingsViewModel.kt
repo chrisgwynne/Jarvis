@@ -42,7 +42,7 @@ data class TtsVoiceInfo(
  */
 class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
-    val providers = listOf("OpenAI", "Anthropic", "Gemini", "Ollama", "OpenRouter", "Kimi", "MiniMax")
+    val providers = listOf("OpenAI", "Anthropic", "Gemini", "Ollama", "OpenRouter", "Kimi", "MiniMax", "Hermes")
 
     private val store         = SettingsStore(app)
     private val openClawRepo  = OpenClawSettingsRepository(store)

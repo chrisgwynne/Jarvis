@@ -105,6 +105,22 @@ class SettingsStore(context: Context) {
         /** Window during which a successful unlock suppresses further prompts. */
         const val APP_LOCK_SESSION_MS     = 5L * 60_000L   // 5 minutes
 
+        // ── HermesAgent (Phase 6) ─────────────────────────────────────────────
+        // Self-hosted LAN/Tailscale Hermes Agent
+        // (https://github.com/NousResearch/hermes-agent).  The chat-completions
+        // endpoint is OpenAI-compatible so reuse of LlmRouter is the cheap path;
+        // the /api/jobs CRUD surface gets its own client (HermesJobsClient).
+        const val KEY_HERMES_ENABLED      = "hermes_enabled"
+        const val KEY_HERMES_HOST         = "hermes_host"
+        const val KEY_HERMES_PORT         = "hermes_port"
+        const val KEY_HERMES_SECURE       = "hermes_secure"
+        const val KEY_HERMES_API_KEY      = "hermes_api_key"
+        const val KEY_HERMES_PROFILE      = "hermes_profile"
+        const val KEY_HERMES_TIMEOUT_MS   = "hermes_timeout_ms"
+        const val DEFAULT_HERMES_PORT     = 8000
+        const val DEFAULT_HERMES_PROFILE  = "hermes-agent"
+        const val DEFAULT_HERMES_TIMEOUT  = 30_000L
+
         // OpenClaw remote routing keys
         const val KEY_OPENCLAW_ENABLED    = "openclaw_enabled"
         const val KEY_OPENCLAW_HOST       = "openclaw_host"
@@ -264,6 +280,38 @@ class SettingsStore(context: Context) {
     var openAiOAuthEnabled: Boolean
         get() = prefs.getBoolean(KEY_OPENAI_OAUTH_ENABLED, false)
         set(v) = prefs.edit().putBoolean(KEY_OPENAI_OAUTH_ENABLED, v).apply()
+
+    // ── HermesAgent (Phase 6) ───────────────────────────────────────────────
+
+    var hermesEnabled: Boolean
+        get() = prefs.getBoolean(KEY_HERMES_ENABLED, false)
+        set(v) = prefs.edit().putBoolean(KEY_HERMES_ENABLED, v).apply()
+
+    var hermesHost: String
+        get() = prefs.getString(KEY_HERMES_HOST, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_HERMES_HOST, v).apply()
+
+    var hermesPort: Int
+        get() = prefs.getInt(KEY_HERMES_PORT, DEFAULT_HERMES_PORT)
+        set(v) = prefs.edit().putInt(KEY_HERMES_PORT, v).apply()
+
+    var hermesSecure: Boolean
+        get() = prefs.getBoolean(KEY_HERMES_SECURE, false)
+        set(v) = prefs.edit().putBoolean(KEY_HERMES_SECURE, v).apply()
+
+    /** API_SERVER_KEY for the Hermes /v1 + /api/jobs endpoints. */
+    var hermesApiKey: String
+        get() = prefs.getString(KEY_HERMES_API_KEY, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_HERMES_API_KEY, v).apply()
+
+    /** Hermes profile / advertised model name (defaults to "hermes-agent"). */
+    var hermesProfile: String
+        get() = prefs.getString(KEY_HERMES_PROFILE, DEFAULT_HERMES_PROFILE) ?: DEFAULT_HERMES_PROFILE
+        set(v) = prefs.edit().putString(KEY_HERMES_PROFILE, v).apply()
+
+    var hermesTimeoutMs: Long
+        get() = prefs.getLong(KEY_HERMES_TIMEOUT_MS, DEFAULT_HERMES_TIMEOUT)
+        set(v) = prefs.edit().putLong(KEY_HERMES_TIMEOUT_MS, v).apply()
 
     // ── OpenClaw ───────────────────────────────────────────────────────────
 

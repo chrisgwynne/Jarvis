@@ -45,7 +45,10 @@ class ConversationalProactiveEngine(
 
     private var job: Job? = null
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            com.jarvis.assistant.reporting.github.autoReporting("conv-proactive")
+    )
 
     fun start() {
         if (job?.isActive == true) return

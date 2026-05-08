@@ -5,6 +5,7 @@ import android.util.Log
 import com.jarvis.assistant.data.ConversationStore
 import com.jarvis.assistant.llm.providers.AnthropicProvider
 import com.jarvis.assistant.llm.providers.GeminiProvider
+import com.jarvis.assistant.llm.providers.HermesAgentProvider
 import com.jarvis.assistant.llm.providers.KimiProvider
 import com.jarvis.assistant.llm.providers.MiniMaxProvider
 import com.jarvis.assistant.llm.providers.OllamaProvider
@@ -255,8 +256,62 @@ class LlmRouter(context: Context) {
     }
 
     // ── Provider selection ─────────────────────────────────────────────────────
+    //
+    // Cached on the (providerName, apiKey, ollamaUrl, maxTokens) tuple — the
+    // four inputs providerByName actually reads. activeProvider() used to
+    // construct a fresh provider on every call (one EncryptedSharedPreferences
+    // read + one allocation per LLM turn); that adds ~2–5 ms and creates
+    // unnecessary garbage on rapid follow-ups.
 
-    private fun activeProvider(): LlmProvider = providerByName(settings.llmProvider)
+    private data class ProviderKey(
+        val name: String,
+        val apiKey: String,
+        val ollamaUrl: String,
+        val maxTokens: Int,
+        val miniMaxBaseUrl: String,
+        val miniMaxModel: String,
+        val openAiOAuthEnabled: Boolean,
+        val openAiAccessToken: String,
+        // Hermes Agent settings — must be in the cache key so a host /
+        // port / token / profile change in Settings invalidates the
+        // cached HermesAgentProvider on the next turn.  Without this,
+        // editing the Hermes endpoint silently keeps using the previous
+        // host until the process restarts.
+        val hermesHost: String,
+        val hermesPort: Int,
+        val hermesSecure: Boolean,
+        val hermesApiKey: String,
+        val hermesProfile: String,
+    )
+
+    @Volatile private var cachedProviderKey: ProviderKey? = null
+    @Volatile private var cachedProvider: LlmProvider? = null
+
+    private fun currentProviderKey(): ProviderKey = ProviderKey(
+        name               = settings.llmProvider,
+        apiKey             = settings.apiKey,
+        ollamaUrl          = settings.ollamaBaseUrl,
+        maxTokens          = settings.maxTokens,
+        miniMaxBaseUrl     = settings.miniMaxBaseUrl,
+        miniMaxModel       = settings.miniMaxModel,
+        openAiOAuthEnabled = settings.openAiOAuthEnabled,
+        openAiAccessToken  = settings.openAiAccessToken,
+        hermesHost         = settings.hermesHost,
+        hermesPort         = settings.hermesPort,
+        hermesSecure       = settings.hermesSecure,
+        hermesApiKey       = settings.hermesApiKey,
+        hermesProfile      = settings.hermesProfile,
+    )
+
+    private fun activeProvider(): LlmProvider {
+        val key = currentProviderKey()
+        val current = cachedProvider
+        if (current != null && cachedProviderKey == key) return current
+        val fresh = providerByName(key.name)
+        cachedProvider = fresh
+        cachedProviderKey = key
+        return fresh
+    }
 
     internal fun providerByName(providerName: String): LlmProvider {
         val apiKey    = settings.apiKey
@@ -270,6 +325,12 @@ class LlmRouter(context: Context) {
             "OpenRouter" -> OpenRouterProvider(apiKey, mt)
             "Kimi"       -> KimiProvider(apiKey, mt)
             "MiniMax"    -> MiniMaxProvider(apiKey, settings.miniMaxBaseUrl, settings.miniMaxModel, mt)
+            "Hermes"     -> HermesAgentProvider(
+                apiKey     = settings.hermesApiKey,
+                rawBaseUrl = hermesBaseOrigin(),
+                model      = settings.hermesProfile,
+                maxTokens  = mt,
+            )
             else         -> {
                 val openAiToken = if (settings.openAiOAuthEnabled && settings.openAiAccessToken.isNotBlank())
                     settings.openAiAccessToken
@@ -281,6 +342,55 @@ class LlmRouter(context: Context) {
     }
 
     val currentProviderName: String get() = activeProvider().name
+
+    /**
+     * Resolve the origin URL the active provider talks to.  Used by [prewarm]
+     * so we don't ship a stale base-URL list inside this class.
+     *
+     * The provider classes themselves don't expose their endpoints, so the
+     * mapping lives here — kept in sync with each provider's hardcoded base
+     * URL.  When a new provider is added, add it here too.
+     */
+    private fun activeProviderOrigin(): String? = when (settings.llmProvider) {
+        "Anthropic"  -> "https://api.anthropic.com"
+        "Gemini"     -> "https://generativelanguage.googleapis.com"
+        "Ollama"     -> settings.ollamaBaseUrl
+        "OpenRouter" -> "https://openrouter.ai"
+        "Kimi"       -> "https://api.moonshot.cn"
+        "MiniMax"    -> settings.miniMaxBaseUrl
+        "Hermes"     -> hermesBaseOrigin().takeIf { it.isNotBlank() }
+        "OpenAI"     -> "https://api.openai.com"
+        else         -> "https://api.openai.com"
+    }
+
+    /**
+     * Compose the user-configured Hermes origin (no /v1 suffix) — used both
+     * by [providerByName] (where HermesAgentProvider re-appends /v1) and by
+     * [activeProviderOrigin] for TLS pre-warming.
+     */
+    private fun hermesBaseOrigin(): String {
+        val host = settings.hermesHost
+        if (host.isBlank()) return ""
+        val scheme = if (settings.hermesSecure) "https" else "http"
+        return "$scheme://$host:${settings.hermesPort}"
+    }
+
+    /**
+     * Pay the DNS + TLS-handshake cost for the active provider up-front so
+     * the first user turn doesn't.  Best-effort — failures are silent.
+     *
+     * Typical saving on a cold network: ~150–400 ms off first-token latency.
+     * Should be invoked from JarvisRuntime.start() on Dispatchers.IO.
+     */
+    suspend fun prewarmActiveProvider() {
+        val url = activeProviderOrigin() ?: return
+        try {
+            NetworkClient.prewarm(url)
+            Log.d(TAG, "Pre-warmed connection to $url")
+        } catch (e: Exception) {
+            Log.d(TAG, "Pre-warm to $url failed (${e.message}) — ignoring")
+        }
+    }
 
     /**
      * Call the provider with function-calling tools.
@@ -370,16 +480,37 @@ class LlmRouter(context: Context) {
 
     private suspend fun tryFallbackProvider(messages: List<Message>, originalError: Exception): String {
         val fallback = settings.fallbackProvider.takeIf { it.isNotBlank() }
-            ?: throw if (originalError is LlmException) originalError
-                     else LlmException("Network error: ${originalError.javaClass.simpleName}")
+            ?: run {
+                // No fallback configured — surface the persistent failure to
+                // IssueReporter (HIGH; the rate limiter will collapse a tight
+                // failure loop into one issue per cooldown window).
+                reportProviderFailure(settings.llmProvider, originalError)
+                throw if (originalError is LlmException) originalError
+                      else LlmException("Network error: ${originalError.javaClass.simpleName}")
+            }
 
         Log.w(TAG, "Primary provider failed — trying fallback: $fallback")
         return try {
             withTimeoutOrNull(LLM_TIMEOUT_MS) { providerByName(fallback).complete(messages) }
                 ?: throw LlmException("Fallback ($fallback) timed out")
         } catch (e: Exception) {
+            // Both primary and fallback dead — escalate.
+            reportProviderFailure("${settings.llmProvider}+$fallback", e)
             throw LlmException("Both primary and fallback ($fallback) failed")
         }
+    }
+
+    private fun reportProviderFailure(providerName: String, throwable: Throwable) {
+        com.jarvis.assistant.reporting.github.IssueReporter.get()?.reportHigh(
+            subsystem = "llm",
+            category  = "PROVIDER_FAILED",
+            message   = "Provider [$providerName] failed: ${throwable.javaClass.simpleName}: ${throwable.message?.take(200)}",
+            throwable = throwable,
+            metadata  = mapOf(
+                "provider" to providerName,
+                "error"    to throwable.javaClass.simpleName,
+            ),
+        )
     }
 
     /** 500 ms base + up to 100 ms jitter (≤ 600 ms). */

@@ -54,7 +54,10 @@ class GoogleWakeWordDetector(
         private const val WAKE_WORD = "jarvis"
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main +
+            com.jarvis.assistant.reporting.github.autoReporting("wake-google")
+    )
     private var job: Job? = null
 
     override fun start() {
@@ -67,6 +70,10 @@ class GoogleWakeWordDetector(
         Log.d(TAG, "Stopping wake-word detection")
         job?.cancel()
         job = null
+        // Cancel the scope itself so the SupervisorJob releases its
+        // bookkeeping and any future launch on this detector instance is a
+        // no-op rather than silently spinning a new loop after stop().
+        scope.cancel()
     }
 
     // ── Detection loop ────────────────────────────────────────────────────────

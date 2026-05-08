@@ -1,6 +1,7 @@
 package com.jarvis.assistant.runtime
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import com.jarvis.assistant.audio.AudioFocusManager
 import com.jarvis.assistant.audio.BargeInDetector
@@ -18,6 +19,7 @@ import com.jarvis.assistant.call.integration.TelecomCallActionExecutor
 import com.jarvis.assistant.call.integration.TelephonyCallMonitor
 import com.jarvis.assistant.context.ContextEngine
 import com.jarvis.assistant.context.Presence
+import com.jarvis.assistant.reporting.github.autoReporting
 import com.jarvis.assistant.core.events.EventAdapters
 import com.jarvis.assistant.core.events.RecentEventBuffer
 import com.jarvis.assistant.core.events.adapters.BatteryEventAdapter
@@ -101,7 +103,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import com.jarvis.assistant.speaker.SpeakerEnrollmentManager
@@ -267,8 +271,13 @@ class JarvisRuntime(
     // Phase 4 — Bluetooth SCO for headset audio routing
     private val bluetoothSco   = BluetoothScoManager(context)
 
-    // Coroutine scope — SupervisorJob so a child failure does not cancel the whole scope
-    private val scope          = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    // Coroutine scope — SupervisorJob so a child failure does not cancel the
+    // whole scope.  autoReporting funnels any uncaught coroutine exception
+    // through IssueReporter.reportHigh — without it, supervisor children
+    // log to System.err and never reach the JarvisUncaughtHandler.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main + autoReporting("runtime")
+    )
 
     // Phase 5 — Audio focus.
     private val audioFocus     = AudioFocusManager(context) { isTransient ->
@@ -589,6 +598,13 @@ class JarvisRuntime(
             anyoneEnrolled   = speakerStore.anyoneEnrolled()
         }
         scope.launch(Dispatchers.IO) { locationProvider.refresh() }
+        // Pre-warm the active LLM provider's TLS connection so the first
+        // turn after a cold start doesn't pay the DNS + handshake cost
+        // (~150–400 ms on a cold radio).  Best-effort, never blocks.
+        scope.launch(Dispatchers.IO) {
+            try { llmRouter.prewarmActiveProvider() }
+            catch (e: Exception) { Log.d(TAG, "LLM prewarm failed: ${e.message}") }
+        }
 
         // Rehydrate action-class suppressions from persisted dislike facts.
         // [ActionLedger] already restores its own SharedPreferences snapshot on
@@ -839,7 +855,23 @@ class JarvisRuntime(
         // No extra work needed here.
     }
 
+    private val stopped = java.util.concurrent.atomic.AtomicBoolean(false)
+
     fun stop() {
+        // Idempotent — JarvisService.onDestroy() and ACTION_STOP both end up
+        // calling stop(), and the OS may interleave them when a stop request
+        // races a process death.  Without this guard ttsEngine.shutdown(),
+        // bluetoothSco.release() and friends ran twice and a second
+        // scope.cancel() races the in-flight flushSessionToDb() coroutine.
+        //
+        // compareAndSet rather than a @Volatile read+write so two threads
+        // entering stop() at the same instant only let one through — the
+        // earlier @Volatile version had a check-then-act window where both
+        // could pass the guard before either flipped the flag.
+        if (!stopped.compareAndSet(false, true)) {
+            Log.d(TAG, "Stop ignored — already stopped")
+            return
+        }
         Log.d(TAG, "Stop requested")
         flushSessionToDb()  // synchronous — must complete before scope.cancel()
         pipelineJob?.cancel()
@@ -1068,6 +1100,33 @@ class JarvisRuntime(
     private fun onWakeWordDetected() {
         pipelineJob?.cancel()
         LatencyTracker.pipelineStart()
+
+        // Tactile confirmation that Jarvis heard you — fired before the
+        // pipeline runs so it lands within the same frame as detection
+        // rather than after the 800 ms mic-handoff delay.  Failure is
+        // silent because Vibrator is optional (some tablets, watch screens).
+        runCatching {
+            val vib = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (context.getSystemService(android.os.VibratorManager::class.java))
+                    ?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                context.getSystemService(android.os.Vibrator::class.java)
+            }
+            if (vib?.hasVibrator() == true) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vib.vibrate(
+                        android.os.VibrationEffect.createOneShot(
+                            20L,
+                            android.os.VibrationEffect.DEFAULT_AMPLITUDE
+                        )
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    vib.vibrate(20L)
+                }
+            }
+        }
 
         pipelineJob = scope.launch {
             try {
@@ -2480,30 +2539,41 @@ class JarvisRuntime(
         if (!sessionOpen) return
         sessionOpen = false
         val id = sessionId
-        runBlocking(Dispatchers.IO) {
+        // NonCancellable so a stop() called from a cancelled scope still
+        // completes the DB writes, and a 2 s ceiling so a stuck IO threadpool
+        // can never turn this into an ANR.  The previous unbounded
+        // runBlocking deadlocked the caller if every IO thread was busy.
+        runBlocking(NonCancellable + Dispatchers.IO) {
             try {
-                // Build a heuristic summary from in-memory user turns so this
-                // session produces a retrievable MemoryEntry even without LLM access.
-                // closeSession() only writes a SUMMARY MemoryEntry when summary != null,
-                // so passing null here means the session is forever invisible to retrieval.
-                val userTurns = llmRouter.conversationStore.getContextMessages()
-                    .filter { it.role == "user" }
-                val heuristicSummary = if (userTurns.isNotEmpty()) {
-                    userTurns.joinToString(". ") { it.content.take(120) }.take(400)
-                } else null
-                memoryWriter.closeSession(id, summary = heuristicSummary)
-            } catch (e: Exception) {
-                Log.w(TAG, "flushSession: closeSession failed: ${e.message}")
-            }
-            try {
-                val turns = llmRouter.conversationStore.getContextMessages()
-                val sessionText = turns.joinToString("\n") { "${it.role}: ${it.content}" }
-                if (sessionText.isNotBlank()) {
-                    knowledgeCompiler.ingest(sessionText, KnowledgeSource.VOICE_TRANSCRIPT)
-                    // compilePending() involves LLM calls — deferred to next startup
+                withTimeout(2_000L) {
+                    try {
+                        // Build a heuristic summary from in-memory user turns so this
+                        // session produces a retrievable MemoryEntry even without LLM access.
+                        // closeSession() only writes a SUMMARY MemoryEntry when summary != null,
+                        // so passing null here means the session is forever invisible to retrieval.
+                        val userTurns = llmRouter.conversationStore.getContextMessages()
+                            .filter { it.role == "user" }
+                        val heuristicSummary = if (userTurns.isNotEmpty()) {
+                            userTurns.joinToString(". ") { it.content.take(120) }.take(400)
+                        } else null
+                        memoryWriter.closeSession(id, summary = heuristicSummary)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "flushSession: closeSession failed: ${e.message}")
+                    }
+                    try {
+                        val turns = llmRouter.conversationStore.getContextMessages()
+                        val sessionText = turns.joinToString("\n") { "${it.role}: ${it.content}" }
+                        if (sessionText.isNotBlank()) {
+                            knowledgeCompiler.ingest(sessionText, KnowledgeSource.VOICE_TRANSCRIPT)
+                            // compilePending() involves LLM calls — deferred to next startup
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "flushSession: ingest failed: ${e.message}")
+                    }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "flushSession: ingest failed: ${e.message}")
+                // Timeout — surface but don't crash the shutdown path.
+                Log.w(TAG, "flushSession: timed out after 2s, partial flush — ${e.message}")
             }
         }
     }

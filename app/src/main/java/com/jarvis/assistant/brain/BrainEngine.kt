@@ -77,7 +77,10 @@ class BrainEngine(
     private val predictor   = PredictionEngine(patternDao, eventDao)
     private val policy      = InitiativePolicy(patternDao)
 
-    private val scope       = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope       = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            com.jarvis.assistant.reporting.github.autoReporting("brain")
+    )
     private var fastJob: Job? = null
     private var slowJob: Job? = null
 

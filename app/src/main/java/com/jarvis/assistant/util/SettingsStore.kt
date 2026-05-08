@@ -88,6 +88,13 @@ class SettingsStore(context: Context) {
         /** When false, BootReceiver skips auto-starting JarvisService on boot. */
         const val KEY_AUTO_START_ON_BOOT      = "auto_start_on_boot"
 
+        // ── Appearance (Phase 2) ──────────────────────────────────────────────
+        /** Theme mode key — values: "system" | "light" | "dark" | "amoled". */
+        const val KEY_THEME_MODE       = "theme_mode"
+        /** When true and Android 12+, derive scheme from wallpaper. */
+        const val KEY_DYNAMIC_COLOR    = "dynamic_color"
+        const val DEFAULT_THEME_MODE   = "system"
+
         // ── App lock (Phase 4b) ───────────────────────────────────────────────
         const val KEY_APP_LOCK_ENABLED    = "app_lock_enabled"
         const val KEY_APP_LOCK_BIOMETRIC  = "app_lock_biometric_enabled"
@@ -97,6 +104,22 @@ class SettingsStore(context: Context) {
         const val KEY_APP_LOCK_LAST_UNLOCK = "app_lock_last_unlock_ms"
         /** Window during which a successful unlock suppresses further prompts. */
         const val APP_LOCK_SESSION_MS     = 5L * 60_000L   // 5 minutes
+
+        // ── HermesAgent (Phase 6) ─────────────────────────────────────────────
+        // Self-hosted LAN/Tailscale Hermes Agent
+        // (https://github.com/NousResearch/hermes-agent).  The chat-completions
+        // endpoint is OpenAI-compatible so reuse of LlmRouter is the cheap path;
+        // the /api/jobs CRUD surface gets its own client (HermesJobsClient).
+        const val KEY_HERMES_ENABLED      = "hermes_enabled"
+        const val KEY_HERMES_HOST         = "hermes_host"
+        const val KEY_HERMES_PORT         = "hermes_port"
+        const val KEY_HERMES_SECURE       = "hermes_secure"
+        const val KEY_HERMES_API_KEY      = "hermes_api_key"
+        const val KEY_HERMES_PROFILE      = "hermes_profile"
+        const val KEY_HERMES_TIMEOUT_MS   = "hermes_timeout_ms"
+        const val DEFAULT_HERMES_PORT     = 8000
+        const val DEFAULT_HERMES_PROFILE  = "hermes-agent"
+        const val DEFAULT_HERMES_TIMEOUT  = 30_000L
 
         // OpenClaw remote routing keys
         const val KEY_OPENCLAW_ENABLED    = "openclaw_enabled"
@@ -258,6 +281,38 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_OPENAI_OAUTH_ENABLED, false)
         set(v) = prefs.edit().putBoolean(KEY_OPENAI_OAUTH_ENABLED, v).apply()
 
+    // ── HermesAgent (Phase 6) ───────────────────────────────────────────────
+
+    var hermesEnabled: Boolean
+        get() = prefs.getBoolean(KEY_HERMES_ENABLED, false)
+        set(v) = prefs.edit().putBoolean(KEY_HERMES_ENABLED, v).apply()
+
+    var hermesHost: String
+        get() = prefs.getString(KEY_HERMES_HOST, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_HERMES_HOST, v).apply()
+
+    var hermesPort: Int
+        get() = prefs.getInt(KEY_HERMES_PORT, DEFAULT_HERMES_PORT)
+        set(v) = prefs.edit().putInt(KEY_HERMES_PORT, v).apply()
+
+    var hermesSecure: Boolean
+        get() = prefs.getBoolean(KEY_HERMES_SECURE, false)
+        set(v) = prefs.edit().putBoolean(KEY_HERMES_SECURE, v).apply()
+
+    /** API_SERVER_KEY for the Hermes /v1 + /api/jobs endpoints. */
+    var hermesApiKey: String
+        get() = prefs.getString(KEY_HERMES_API_KEY, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_HERMES_API_KEY, v).apply()
+
+    /** Hermes profile / advertised model name (defaults to "hermes-agent"). */
+    var hermesProfile: String
+        get() = prefs.getString(KEY_HERMES_PROFILE, DEFAULT_HERMES_PROFILE) ?: DEFAULT_HERMES_PROFILE
+        set(v) = prefs.edit().putString(KEY_HERMES_PROFILE, v).apply()
+
+    var hermesTimeoutMs: Long
+        get() = prefs.getLong(KEY_HERMES_TIMEOUT_MS, DEFAULT_HERMES_TIMEOUT)
+        set(v) = prefs.edit().putLong(KEY_HERMES_TIMEOUT_MS, v).apply()
+
     // ── OpenClaw ───────────────────────────────────────────────────────────
 
     var openClawEnabled: Boolean
@@ -382,6 +437,25 @@ class SettingsStore(context: Context) {
     var autoStartOnBoot: Boolean
         get() = prefs.getBoolean(KEY_AUTO_START_ON_BOOT, true)
         set(v) = prefs.edit().putBoolean(KEY_AUTO_START_ON_BOOT, v).apply()
+
+    // ── Appearance (Phase 2) ────────────────────────────────────────────────
+
+    /**
+     * Theme mode: "system" | "light" | "dark" | "amoled".
+     * AMOLED is a strict-black variant for OLED battery savings on this
+     * always-on app — never selected implicitly even when SYSTEM is set.
+     */
+    var themeMode: String
+        get() = prefs.getString(KEY_THEME_MODE, DEFAULT_THEME_MODE) ?: DEFAULT_THEME_MODE
+        set(v) = prefs.edit().putString(KEY_THEME_MODE, v).apply()
+
+    /**
+     * When true and the device is Android 12+, derives the colour scheme
+     * from the user's wallpaper.  AMOLED mode ignores this.
+     */
+    var dynamicColor: Boolean
+        get() = prefs.getBoolean(KEY_DYNAMIC_COLOR, false)
+        set(v) = prefs.edit().putBoolean(KEY_DYNAMIC_COLOR, v).apply()
 
     // ── App lock (Phase 4b) ──────────────────────────────────────────────────
 

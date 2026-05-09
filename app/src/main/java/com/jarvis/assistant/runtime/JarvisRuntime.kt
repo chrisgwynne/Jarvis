@@ -1972,6 +1972,13 @@ class JarvisRuntime(
                     if (openClawRouter.shouldRoute()) {
                         val route = openClawRouter.classify(transcript)
 
+                        // Track whether the user explicitly invoked OpenClaw via keyword.
+                        // Keyword-triggered failures are surfaced to the user; auto-routed
+                        // REMOTE_LONG failures silently fall through to local LLM instead.
+                        val ocKeyword = openClawRepo.snapshot().keyword.trim()
+                        val keywordTriggered = ocKeyword.isNotBlank() &&
+                            transcript.trim().lowercase().startsWith(ocKeyword.lowercase())
+
                         // REMOTE_LONG: speak acknowledgement first so there's no silence
                         if (route == com.jarvis.assistant.remote.openclaw.RouteType.REMOTE_LONG) {
                             ttsEngine.speak("Looking into that.")
@@ -1993,16 +2000,18 @@ class JarvisRuntime(
                             }
                             is OpenClawExecutionResult.Failure -> {
                                 Log.w(TAG, "OpenClaw failed: ${clawResult.error.spokenMessage}")
-                                // Fall through to local LLM — do not speak the error unless
-                                // it was an explicit configuration problem
-                                if (clawResult.error is com.jarvis.assistant.remote.openclaw.OpenClawError.AuthFailed ||
-                                    clawResult.error is com.jarvis.assistant.remote.openclaw.OpenClawError.NotConfigured) {
+                                val isConfigError =
+                                    clawResult.error is com.jarvis.assistant.remote.openclaw.OpenClawError.AuthFailed ||
+                                    clawResult.error is com.jarvis.assistant.remote.openclaw.OpenClawError.NotConfigured
+                                if (isConfigError || keywordTriggered) {
+                                    // User explicitly routed this to OpenClaw — tell them it failed.
+                                    // Don't silently answer locally; that's confusing and misleading.
                                     speakAndRecord(clawResult.error.spokenMessage)
                                     machine.transition(JarvisState.Listening)
                                     syncState(JarvisState.Listening)
                                     continue
                                 }
-                                // Transient failures (timeout, unreachable, dropped): fall through silently
+                                // Auto-routed REMOTE_LONG failure — fall through to local LLM
                             }
                             OpenClawExecutionResult.Bypassed -> { /* LOCAL_FAST or disabled — fall through */ }
                         }

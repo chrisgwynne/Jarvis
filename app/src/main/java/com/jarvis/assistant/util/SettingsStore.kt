@@ -340,7 +340,7 @@ class SettingsStore(context: Context) {
         set(v) = prefs.edit().putString(KEY_OPENCLAW_AUTH_TOKEN, v).apply()
 
     var openClawTimeoutMs: Long
-        get() = prefs.getLong(KEY_OPENCLAW_TIMEOUT_MS, 30_000L)
+        get() = prefs.getLong(KEY_OPENCLAW_TIMEOUT_MS, 90_000L)
         set(v) = prefs.edit().putLong(KEY_OPENCLAW_TIMEOUT_MS, v).apply()
 
     var openClawModel: String

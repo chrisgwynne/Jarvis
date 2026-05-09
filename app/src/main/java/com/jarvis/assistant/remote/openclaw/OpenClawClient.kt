@@ -4,16 +4,32 @@ import android.util.Log
 import com.jarvis.assistant.llm.LlmException
 import com.jarvis.assistant.llm.NetworkClient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import java.io.IOException
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * HTTP transport for OpenClaw.
  *
  * Sends requests to the OpenAI-compatible [OpenClawConnectionBuilder.buildChatEndpoint]
- * via a standard POST to /v1/chat/completions.  Reuses the shared [NetworkClient.http]
- * OkHttp instance — no dedicated client or WebSocket needed.
+ * via a standard POST to /v1/chat/completions.
+ *
+ * Uses a dedicated OkHttp client with no read timeout — the coroutine
+ * [withTimeoutOrNull] wrapper in [send] is the sole timeout controller.
+ * This prevents the shared 45 s NetworkClient read timeout from silently
+ * cutting off slow tool-call responses (e.g. wiki retrieval) before the
+ * user-configured OpenClaw timeout fires.
  *
  * Never throws — all outcomes are expressed as [OpenClawExecutionResult].
  */
@@ -21,7 +37,39 @@ class OpenClawClient {
 
     companion object {
         private const val TAG = "OpenClawClient"
+        private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     }
+
+    // Inherits connection pool, protocols, and retry settings from NetworkClient.http
+    // but removes the read timeout — withTimeoutOrNull handles cancellation instead.
+    private val httpClient: OkHttpClient = NetworkClient.http.newBuilder()
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .build()
+
+    private suspend fun post(url: String, headers: Map<String, String>, body: String): String =
+        suspendCancellableCoroutine { cont ->
+            val request = Request.Builder()
+                .url(url)
+                .apply { headers.forEach { (k, v) -> addHeader(k, v) } }
+                .post(body.toRequestBody(JSON_MEDIA))
+                .build()
+            val call = httpClient.newCall(request)
+            cont.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onResponse(call: Call, response: Response) {
+                    response.use { r ->
+                        val responseBody = r.body?.string() ?: ""
+                        if (r.isSuccessful) cont.resume(responseBody)
+                        else cont.resumeWithException(
+                            LlmException("HTTP ${r.code}: ${responseBody.take(300)}")
+                        )
+                    }
+                }
+                override fun onFailure(call: Call, e: IOException) {
+                    cont.resumeWithException(e)
+                }
+            })
+        }
 
     /**
      * POST [request] to the OpenClaw chat completions endpoint and return the result.
@@ -44,7 +92,7 @@ class OpenClawClient {
 
         val result = withTimeoutOrNull(settings.timeoutMs) {
             try {
-                val responseBody = NetworkClient.post(url, headers, body)
+                val responseBody = post(url, headers, body)
                 val parsed = OpenClawResponse.fromJson(responseBody)
                     ?: return@withTimeoutOrNull OpenClawExecutionResult.Failure(OpenClawError.MalformedResponse)
 

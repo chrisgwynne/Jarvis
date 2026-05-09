@@ -47,7 +47,11 @@ class OpenClawRouter(
             Regex("""^(?:explain|describe|summarise|summarize)\s+(?:in detail|everything|how|why|what)\b""", RegexOption.IGNORE_CASE),
             Regex("""^(?:find out|research|look into|investigate|analyse|analyze)\b""", RegexOption.IGNORE_CASE),
             Regex("""^(?:plan|outline|generate|build me|give me a list of|list all)\b""", RegexOption.IGNORE_CASE),
-            Regex("""^(?:what(?:'s| is) the (?:best|difference|meaning|history|background))\b""", RegexOption.IGNORE_CASE)
+            Regex("""^(?:what(?:'s| is) the (?:best|difference|meaning|history|background))\b""", RegexOption.IGNORE_CASE),
+            // Queries referencing personal/stored knowledge — local LLM can't answer these.
+            // "what's in my wiki", "check the wiki", "my notes on X", "search my docs"
+            Regex("""(?:my|the)\s+wiki\b""", RegexOption.IGNORE_CASE),
+            Regex("""(?:in|on|from|about|check|search)\s+my\s+(?:notes?|knowledge\s*base|docs?|documents?|files?|obsidian|notion|confluence)\b""", RegexOption.IGNORE_CASE),
         )
     }
 

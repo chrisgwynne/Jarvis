@@ -17,7 +17,7 @@ sealed class OpenClawError(val spokenMessage: String) {
      * message to avoid reciting raw socket / exception text to the user.
      */
     class Unreachable(val cause: String = "") : OpenClawError(
-        "I couldn't reach your computer. Check the host and that it's on the same network."
+        "Couldn't reach OpenClaw. Check the host and port in Settings, and that the server is running."
     ) {
         init {
             // Structured log so operators can grep for connectivity failures

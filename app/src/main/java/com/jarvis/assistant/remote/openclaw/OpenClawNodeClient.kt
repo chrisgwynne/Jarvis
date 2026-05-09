@@ -12,11 +12,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import kotlin.coroutines.resume
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -105,13 +107,46 @@ class OpenClawNodeClient(
         }
     }
 
-    private fun connect(settings: OpenClawSettings) {
-        val url = OpenClawConnectionBuilder.buildWsEndpoint(settings)
-        Log.d(TAG, "Connecting node to $url")
+    // Suspends until the WebSocket session ends (closed or failed).
+    // connectLoop calls this and only retries after it returns, preventing
+    // multiple overlapping connections from being opened simultaneously.
+    private suspend fun connect(settings: OpenClawSettings) =
+        suspendCancellableCoroutine<Unit> { cont ->
+            val url = OpenClawConnectionBuilder.buildWsEndpoint(settings)
+            Log.d(TAG, "Connecting node to $url")
+            val request = Request.Builder().url(url).build()
 
-        val request = Request.Builder().url(url).build()
-        ws = httpClient.newWebSocket(request, Listener(settings))
-    }
+            ws = httpClient.newWebSocket(request, object : WebSocketListener() {
+
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    Log.d(TAG, "WebSocket open")
+                    // challenge event arrives next; connect req is sent in handleEvent
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    handleMessage(text, settings)
+                }
+
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    Log.d(TAG, "WebSocket closing: $code $reason")
+                    webSocket.close(1000, null)
+                }
+
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    Log.w(TAG, "WebSocket failure: ${t.javaClass.simpleName}: ${t.message}")
+                    if (running.get()) setStatus(OpenClawNodeStatus.RECONNECTING)
+                    if (cont.isActive) cont.resume(Unit)
+                }
+
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    Log.d(TAG, "WebSocket closed: $code")
+                    if (running.get()) setStatus(OpenClawNodeStatus.RECONNECTING)
+                    if (cont.isActive) cont.resume(Unit)
+                }
+            })
+
+            cont.invokeOnCancellation { ws?.close(1000, "Service stopping") }
+        }
 
     // ── Outbound frame helpers ────────────────────────────────────────────────
 
@@ -261,35 +296,6 @@ class OpenClawNodeClient(
                 Log.w(TAG, "Invoke $command failed: ${e.message}")
                 sendError(requestId, "INVOKE_FAILED", e.message ?: "unknown error")
             }
-        }
-    }
-
-    // ── WebSocket listener ────────────────────────────────────────────────────
-
-    private inner class Listener(private val settings: OpenClawSettings) : WebSocketListener() {
-
-        override fun onOpen(webSocket: WebSocket, response: Response) {
-            Log.d(TAG, "WebSocket open")
-            // challenge event arrives next; connect req is sent in handleEvent
-        }
-
-        override fun onMessage(webSocket: WebSocket, text: String) {
-            handleMessage(text, settings)
-        }
-
-        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-            Log.d(TAG, "WebSocket closing: $code $reason")
-            webSocket.close(1000, null)
-        }
-
-        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            Log.w(TAG, "WebSocket failure: ${t.javaClass.simpleName}: ${t.message}")
-            if (running.get()) setStatus(OpenClawNodeStatus.RECONNECTING)
-        }
-
-        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            Log.d(TAG, "WebSocket closed: $code")
-            if (running.get()) setStatus(OpenClawNodeStatus.RECONNECTING)
         }
     }
 

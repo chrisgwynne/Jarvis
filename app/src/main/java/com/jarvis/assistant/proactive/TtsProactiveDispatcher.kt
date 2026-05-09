@@ -68,12 +68,15 @@ class TtsProactiveDispatcher(
                 Log.d(TAG, "PassiveAction: title=\"${action.title}\" body=\"${action.body}\"")
                 // Invoke the optional hook (e.g. update UI state, logging in tests)
                 onPassiveAction(action)
-                // Post the real notification so the user actually sees the alert
-                JarvisNotificationHelper.postProactiveAlert(
-                    context = context,
-                    title   = action.title,
-                    body    = action.body ?: action.title
-                )
+                // Phone notifications already appear on the device — posting a Jarvis copy
+                // just creates a duplicate in the notification shade.  Skip the re-post.
+                if (action.sourceType != ProactiveEventType.UNREAD_NOTIFICATION) {
+                    JarvisNotificationHelper.postProactiveAlert(
+                        context = context,
+                        title   = action.title,
+                        body    = action.body ?: action.title
+                    )
+                }
             }
 
             is ProactiveAction.NoAction -> {

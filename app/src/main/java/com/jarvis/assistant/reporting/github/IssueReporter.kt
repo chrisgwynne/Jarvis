@@ -92,6 +92,44 @@ class IssueReporter private constructor(
     )
 
     /**
+     * Report a MEDIUM-severity recoverable failure (e.g. latency spike,
+     * misunderstood command, tool returned empty result). Files after the
+     * repetition threshold like HIGH — so a one-off fluke stays local but
+     * a recurring pattern creates an issue.
+     */
+    fun reportMedium(
+        subsystem: String,
+        category: String,
+        message: String,
+        metadata: Map<String, String> = emptyMap()
+    ) = submit(IssueReport(ErrorSeverity.MEDIUM, subsystem, category, message,
+                           metadata = scrub(metadata)))
+
+    /**
+     * Explicitly user-triggered report.  Bypasses the repetition threshold
+     * and rate limiter — fires immediately if the feature flag + token are set.
+     * [onResult] is called on the IO thread with the outcome so the tool can
+     * echo the issue URL back to the user.
+     */
+    fun reportUserFeedback(
+        description: String,
+        metadata: Map<String, String> = emptyMap(),
+        onResult: (SubmitOutcome) -> Unit = {}
+    ) {
+        val report = IssueReport(
+            severity  = ErrorSeverity.USER_FEEDBACK,
+            subsystem = "user",
+            category  = "USER_REPORTED",
+            message   = description,
+            metadata  = scrub(metadata)
+        )
+        scope.launch {
+            val outcome = submitImmediate(report, bypassRateLimit = true)
+            onResult(outcome)
+        }
+    }
+
+    /**
      * Low / medium severity reports — always local-only.  Exposed so
      * subsystems have one reporter to call for everything and the severity
      * gate lives in one place.

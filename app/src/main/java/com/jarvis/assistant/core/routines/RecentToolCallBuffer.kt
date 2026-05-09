@@ -50,7 +50,7 @@ class RecentToolCallBuffer(
         evictStale()
         if (buffer.isEmpty()) return emptyList()
         val take = n.coerceAtMost(buffer.size)
-        buffer.takeLast(take)
+        buffer.toList().takeLast(take)
     }
 
     fun clear() = synchronized(lock) { buffer.clear() }

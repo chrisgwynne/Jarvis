@@ -13,6 +13,7 @@ import com.jarvis.assistant.ui.settings.SettingsGroup
 import com.jarvis.assistant.ui.settings.SettingsInfoCard
 import com.jarvis.assistant.ui.settings.SettingsRowDivider
 import com.jarvis.assistant.ui.settings.SettingsScaffold
+import com.jarvis.assistant.ui.settings.SettingsTextFieldRow
 import com.jarvis.assistant.ui.settings.SettingsToggleRow
 
 @Composable
@@ -22,9 +23,14 @@ internal fun PrivacySettingsScreen(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
-    val signedIn by vm.openAiSignedIn.collectAsStateWithLifecycle()
+    val signedIn   by vm.openAiSignedIn.collectAsStateWithLifecycle()
     val killSwitch by vm.toolExecutionDisabled.collectAsStateWithLifecycle()
     val autoStart  by vm.autoStartOnBoot.collectAsStateWithLifecycle()
+
+    val ghEnabled   by vm.githubReportingEnabled.collectAsStateWithLifecycle()
+    val ghToken     by vm.githubToken.collectAsStateWithLifecycle()
+    val ghOwner     by vm.githubRepoOwner.collectAsStateWithLifecycle()
+    val ghRepo      by vm.githubRepoName.collectAsStateWithLifecycle()
 
     SettingsScaffold(title = "Privacy", onBack = onBack, onClose = onClose) {
 
@@ -86,6 +92,45 @@ internal fun PrivacySettingsScreen(
                 SettingsInfoCard(
                     title = "OpenAI account",
                     body  = "Not signed in. Sign in from Advanced → LLM provider.",
+                )
+            }
+        }
+
+        SettingsGroup(
+            title  = "GitHub issue reporting",
+            footer = "When enabled, runtime errors are automatically filed as GitHub issues " +
+                     "using your PAT. Only HIGH/FATAL severity events are submitted. " +
+                     "The token is stored encrypted and never logged.",
+        ) {
+            SettingsToggleRow(
+                title           = "Enable auto-reporting",
+                description     = "Submit crash/error reports to your GitHub repo.",
+                checked         = ghEnabled,
+                onCheckedChange = vm::setGithubReportingEnabled,
+            )
+            if (ghEnabled) {
+                SettingsRowDivider()
+                SettingsTextFieldRow(
+                    title         = "Personal access token (PAT)",
+                    description   = "Needs 'issues: write' scope on the target repo.",
+                    value         = ghToken,
+                    onValueChange = vm::setGithubToken,
+                    placeholder   = "github_pat_…",
+                    isSecret      = true,
+                )
+                SettingsRowDivider()
+                SettingsTextFieldRow(
+                    title         = "Repo owner",
+                    value         = ghOwner,
+                    onValueChange = vm::setGithubRepoOwner,
+                    placeholder   = "chrisgwynne",
+                )
+                SettingsRowDivider()
+                SettingsTextFieldRow(
+                    title         = "Repo name",
+                    value         = ghRepo,
+                    onValueChange = vm::setGithubRepoName,
+                    placeholder   = "Jarvis",
                 )
             }
         }

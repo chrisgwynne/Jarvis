@@ -283,7 +283,7 @@ class ProactiveEngine(
      */
     private fun drainDeferred(now: Long): List<ProactiveEvent> = synchronized(deferredLock) {
         val cutoff = now - presenceDeferralTtlMs
-        while (deferredQueue.isNotEmpty() && deferredQueue.peekFirst().queuedAt < cutoff) {
+        while (deferredQueue.isNotEmpty() && deferredQueue.first().queuedAt < cutoff) {
             deferredQueue.removeFirst()
         }
         if (deferredQueue.isEmpty()) emptyList() else deferredQueue.map { it.event }.also { deferredQueue.clear() }

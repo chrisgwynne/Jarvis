@@ -344,7 +344,7 @@ class SettingsStore(context: Context) {
         set(v) = prefs.edit().putLong(KEY_OPENCLAW_TIMEOUT_MS, v).apply()
 
     var openClawModel: String
-        get() = prefs.getString(KEY_OPENCLAW_MODEL, "openclaw") ?: "openclaw"
+        get() = prefs.getString(KEY_OPENCLAW_MODEL, "openclaw/default") ?: "openclaw/default"
         set(v) = prefs.edit().putString(KEY_OPENCLAW_MODEL, v).apply()
 
     /** Trigger keyword that forces routing to OpenClaw (default: "computer"). */

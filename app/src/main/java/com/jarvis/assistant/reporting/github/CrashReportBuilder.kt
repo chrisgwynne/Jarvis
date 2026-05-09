@@ -42,7 +42,13 @@ object CrashReportBuilder {
 
     /** Label set — includes generic markers + subsystem-specific. */
     fun buildLabels(report: IssueReport): List<String> {
-        val labels = mutableListOf("bug", "auto-reported")
+        val labels = mutableListOf<String>()
+        if (report.severity == ErrorSeverity.USER_FEEDBACK) {
+            labels += "user-report"
+        } else {
+            labels += "bug"
+            labels += "auto-reported"
+        }
         if (report.isCrash) labels += "crash"
         when (report.subsystem.lowercase()) {
             "tts"                -> labels += "tts"
@@ -53,6 +59,7 @@ object CrashReportBuilder {
             "voice"              -> labels += "voice"
             "llm"                -> labels += "llm"
             "proactive"          -> labels += "proactive"
+            "user"               -> labels += "feedback"
         }
         return labels
     }

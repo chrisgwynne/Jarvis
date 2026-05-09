@@ -22,7 +22,7 @@ class SmartHomeTool(private val settings: SettingsStore) : Tool {
     override val name             = "smart_home"
     override val description      = "Control smart home devices via Home Assistant"
     override val requiresNetwork  = true
-    override val riskClass        = com.jarvis.assistant.tools.framework.RiskClass.MEDIUM
+    override val riskClass        = com.jarvis.assistant.tools.framework.RiskClass.LOW
 
     override fun schema() = ToolSchema(
         name        = name,
@@ -85,7 +85,14 @@ class SmartHomeTool(private val settings: SettingsStore) : Tool {
         if (!hasAction) return null
 
         val m = ACTION_REGEX.find(t) ?: return null
+        // Strip leading action words that bleed into the capture group
+        // e.g. "turn on kitchen light" → regex captures "on kitchen light" → strip "on" → "kitchen light"
+        val leadingActionWords = setOf("on", "off", "to", "the", "a", "an")
         val entityName = m.groupValues[1].trim()
+            .split(" ")
+            .dropWhile { it.lowercase() in leadingActionWords }
+            .joinToString(" ")
+            .trim()
         if (entityName.isBlank()) return null
 
         val action = when {
@@ -249,9 +256,22 @@ class SmartHomeTool(private val settings: SettingsStore) : Tool {
             entities.filter { it.domain == domainHint }.takeIf { it.isNotEmpty() } ?: entities
         } else entities
         val q = query.lowercase()
+
+        // 1. Exact substring match
         pool.firstOrNull { q in it.friendlyName.lowercase() }?.let { return it }
+
+        // 2. All meaningful query words appear in the entity name (e.g. "kitchen light" → "Kitchen Light")
+        val qWords = q.split(Regex("\\s+")).filter { it.length > 2 }
+        if (qWords.isNotEmpty()) {
+            pool.firstOrNull { entity ->
+                val name = entity.friendlyName.lowercase()
+                qWords.all { word -> word in name }
+            }?.let { return it }
+        }
+
+        // 3. Jaro-Winkler fallback — raised threshold to reduce false positives
         return pool.maxByOrNull { jaroWinkler(q, it.friendlyName.lowercase()) }
-            ?.takeIf { jaroWinkler(q, it.friendlyName.lowercase()) > 0.7 }
+            ?.takeIf { jaroWinkler(q, it.friendlyName.lowercase()) > 0.82 }
     }
 
     // ── Jaro-Winkler string similarity ────────────────────────────────────────

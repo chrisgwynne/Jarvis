@@ -22,9 +22,12 @@ enum class ErrorSeverity {
     LOW,
     MEDIUM,
     HIGH,
-    FATAL;
+    FATAL,
+    /** Explicitly requested by the user via voice — always files immediately, no threshold. */
+    USER_FEEDBACK;
 
-    val createsIssueImmediately: Boolean get() = this == FATAL
-    val createsIssueAfterRepeats: Boolean get() = this == HIGH
-    val eligibleForGitHub: Boolean get() = this == FATAL || this == HIGH
+    val createsIssueImmediately: Boolean get() = this == FATAL || this == USER_FEEDBACK
+    val createsIssueAfterRepeats: Boolean get() = this == HIGH || this == MEDIUM
+    /** LOW never files. Everything else is eligible. */
+    val eligibleForGitHub: Boolean get() = this != LOW
 }

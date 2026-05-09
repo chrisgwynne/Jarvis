@@ -130,28 +130,30 @@ class LocationReminderTool(private val context: Context) : Tool {
 
     // ── Geocoding ─────────────────────────────────────────────────────────────
 
-    private fun geocode(placeName: String): Pair<Double, Double>? = try {
+    private fun geocode(placeName: String): Pair<Double, Double>? {
         if (!Geocoder.isPresent()) return null
-        val geocoder = Geocoder(context, Locale.getDefault())
+        return try {
+            val geocoder = Geocoder(context, Locale.getDefault())
 
-        val addresses = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            var result: List<android.location.Address>? = null
-            val latch = CountDownLatch(1)
-            geocoder.getFromLocationName(placeName, 1) { addrs ->
-                result = addrs
-                latch.countDown()
+            val addresses = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                var result: List<android.location.Address>? = null
+                val latch = CountDownLatch(1)
+                geocoder.getFromLocationName(placeName, 1) { addrs ->
+                    result = addrs
+                    latch.countDown()
+                }
+                latch.await(5, TimeUnit.SECONDS)
+                result
+            } else {
+                @Suppress("DEPRECATION")
+                geocoder.getFromLocationName(placeName, 1)
             }
-            latch.await(5, TimeUnit.SECONDS)
-            result
-        } else {
-            @Suppress("DEPRECATION")
-            geocoder.getFromLocationName(placeName, 1)
-        }
 
-        val addr = addresses?.firstOrNull()
-        if (addr != null) Pair(addr.latitude, addr.longitude) else null
-    } catch (e: Exception) {
-        Log.w(TAG, "Geocoding failed for '$placeName': ${e.message}")
-        null
+            val addr = addresses?.firstOrNull()
+            if (addr != null) Pair(addr.latitude, addr.longitude) else null
+        } catch (e: Exception) {
+            Log.w(TAG, "Geocoding failed for '$placeName': ${e.message}")
+            null
+        }
     }
 }

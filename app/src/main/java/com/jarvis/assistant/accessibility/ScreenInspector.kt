@@ -124,22 +124,29 @@ object ScreenInspector {
                 try {
                     service.takeScreenshot(
                         Display.DEFAULT_DISPLAY,
-                        screenshotExecutor
-                    ) { result ->
-                        try {
-                            val hardware = result.hardwareBuffer
-                            val color    = result.colorSpace
-                            val bmp      = Bitmap.wrapHardwareBuffer(hardware, color)
-                            // Copy to a software bitmap so we can compress; close the buffer either way.
-                            val sw = bmp?.copy(Bitmap.Config.ARGB_8888, false)
-                            try { hardware.close() } catch (_: Throwable) {}
-                            try { bmp?.recycle() }   catch (_: Throwable) {}
-                            if (cont.isActive) cont.resume(sw)
-                        } catch (e: Throwable) {
-                            Log.w(TAG, "takeScreenshot callback failed: ${e.message}")
-                            if (cont.isActive) cont.resume(null)
+                        screenshotExecutor,
+                        object : AccessibilityService.TakeScreenshotCallback {
+                            override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
+                                try {
+                                    val hardware = result.hardwareBuffer
+                                    val color    = result.colorSpace
+                                    val bmp      = Bitmap.wrapHardwareBuffer(hardware, color)
+                                    // Copy to a software bitmap so we can compress; close the buffer either way.
+                                    val sw = bmp?.copy(Bitmap.Config.ARGB_8888, false)
+                                    try { hardware.close() } catch (_: Throwable) {}
+                                    try { bmp?.recycle() }   catch (_: Throwable) {}
+                                    if (cont.isActive) cont.resume(sw)
+                                } catch (e: Throwable) {
+                                    Log.w(TAG, "takeScreenshot callback failed: ${e.message}")
+                                    if (cont.isActive) cont.resume(null)
+                                }
+                            }
+                            override fun onFailure(errorCode: Int) {
+                                Log.w(TAG, "takeScreenshot failed with errorCode: $errorCode")
+                                if (cont.isActive) cont.resume(null)
+                            }
                         }
-                    }
+                    )
                 } catch (e: Throwable) {
                     Log.w(TAG, "takeScreenshot threw: ${e.message}")
                     if (cont.isActive) cont.resume(null)

@@ -374,7 +374,7 @@ internal fun AdvancedSettingsScreen(
                     title         = "Model name",
                     value         = openClawModel,
                     onValueChange = vm::setOpenClawModel,
-                    placeholder   = "openclaw",
+                    placeholder   = "openclaw/default",
                 )
                 SettingsRowDivider()
                 Column(

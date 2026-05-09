@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import androidx.camera.lifecycle.awaitInstance
 import java.io.File
 import kotlin.coroutines.resume
 
@@ -78,64 +79,56 @@ class CameraCaptureManager(private val context: Context) {
             // Hard timeout — prevents the coroutine hanging forever if the
             // camera hardware or locked-screen policy never responds.
             val opResult = withTimeoutOrNull(CAPTURE_TIMEOUT_MS) {
-                suspendCancellableCoroutine<CaptureResult> { cont ->
-                    val lifecycleOwner = ServiceLifecycleOwner()
-                    val executor       = ContextCompat.getMainExecutor(appContext)
-                    val future         = ProcessCameraProvider.getInstance(appContext)
+                val lifecycleOwner = ServiceLifecycleOwner()
+                var provider: ProcessCameraProvider? = null
+                try {
+                    // awaitInstance() is a suspend fun — no ListenableFuture needed.
+                    val cameraProvider = ProcessCameraProvider.awaitInstance(appContext)
+                    provider = cameraProvider
 
-                    future.addListener({
-                        var provider: ProcessCameraProvider? = null
-                        try {
-                            provider = future.get()   // already resolved — returns immediately
+                    val imageCapture = ImageCapture.Builder()
+                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                        .build()
 
-                            val imageCapture = ImageCapture.Builder()
-                                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                                .build()
+                    val selector = CameraSelector.Builder()
+                        .requireLensFacing(lensFacing)
+                        .build()
 
-                            val selector = CameraSelector.Builder()
-                                .requireLensFacing(lensFacing)
-                                .build()
+                    // Walk lifecycle to RESUMED *before* binding.
+                    lifecycleOwner.markResumed()
 
-                            // Walk lifecycle to RESUMED *before* binding.
-                            // (Previous code called unbindAll before markResumed which
-                            // could leave the lifecycle owner in an uninitialised state
-                            // when the bind executed.)
-                            lifecycleOwner.markResumed()
+                    // Unbind any lingering use cases from a previous capture.
+                    cameraProvider.unbindAll()
+                    cameraProvider.bindToLifecycle(lifecycleOwner, selector, imageCapture)
 
-                            // Unbind any lingering use cases from a previous capture.
-                            provider.unbindAll()
+                    val outputFile    = CameraFileStore.createImageFile(appContext)
+                    val outputOptions = ImageCapture.OutputFileOptions.Builder(outputFile).build()
+                    val executor      = ContextCompat.getMainExecutor(appContext)
 
-                            provider.bindToLifecycle(lifecycleOwner, selector, imageCapture)
-
-                            val outputFile    = CameraFileStore.createImageFile(appContext)
-                            val outputOptions = ImageCapture.OutputFileOptions.Builder(outputFile).build()
-
-                            imageCapture.takePicture(outputOptions, executor,
-                                object : ImageCapture.OnImageSavedCallback {
-                                    override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                                        release(lifecycleOwner, provider)
-                                        Log.i(TAG, "Photo saved: ${outputFile.name} (${outputFile.length()} bytes)")
-                                        if (cont.isActive) cont.resume(CaptureResult.Success(outputFile))
-                                    }
-
-                                    override fun onError(ex: ImageCaptureException) {
-                                        release(lifecycleOwner, provider)
-                                        val reason = buildErrorMessage(ex)
-                                        Log.w(TAG, "Capture error code=${ex.imageCaptureError}: $reason")
-                                        if (cont.isActive) cont.resume(CaptureResult.Failure(reason))
-                                    }
+                    suspendCancellableCoroutine<CaptureResult> { cont ->
+                        imageCapture.takePicture(outputOptions, executor,
+                            object : ImageCapture.OnImageSavedCallback {
+                                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                                    release(lifecycleOwner, provider)
+                                    Log.i(TAG, "Photo saved: ${outputFile.name} (${outputFile.length()} bytes)")
+                                    if (cont.isActive) cont.resume(CaptureResult.Success(outputFile))
                                 }
-                            )
 
-                            cont.invokeOnCancellation { release(lifecycleOwner, provider) }
-
-                        } catch (e: Exception) {
-                            release(lifecycleOwner, provider)
-                            val reason = buildExceptionMessage(e)
-                            Log.e(TAG, "Camera setup failed: ${e.message}", e)
-                            if (cont.isActive) cont.resume(CaptureResult.Failure(reason))
-                        }
-                    }, executor)
+                                override fun onError(ex: ImageCaptureException) {
+                                    release(lifecycleOwner, provider)
+                                    val reason = buildErrorMessage(ex)
+                                    Log.w(TAG, "Capture error code=${ex.imageCaptureError}: $reason")
+                                    if (cont.isActive) cont.resume(CaptureResult.Failure(reason))
+                                }
+                            }
+                        )
+                        cont.invokeOnCancellation { release(lifecycleOwner, provider) }
+                    }
+                } catch (e: Exception) {
+                    release(lifecycleOwner, provider)
+                    val reason = buildExceptionMessage(e)
+                    Log.e(TAG, "Camera setup failed: ${e.message}", e)
+                    CaptureResult.Failure(reason)
                 }
             }
             opResult ?: CaptureResult.Failure("Camera timed out. The phone may be restricting camera access while locked.")

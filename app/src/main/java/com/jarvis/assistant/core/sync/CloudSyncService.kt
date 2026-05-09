@@ -244,12 +244,12 @@ class CloudSyncService(
             for (doc in snapshot.documents) {
                 val key = doc.getString("factKey") ?: continue
                 val value = doc.getString("value") ?: continue
-                val categoryName = doc.getString("category") ?: "PROFILE"
+                val categoryName = doc.getString("category") ?: "FACT"
                 val remoteUpdated = doc.getLong("lastUpdatedAt") ?: continue
                 val local = memoryFactDao.getByKey(key)
                 if (local == null || remoteUpdated > local.lastUpdatedAt) {
                     val category = runCatching { FactCategory.valueOf(categoryName) }
-                        .getOrDefault(FactCategory.PROFILE)
+                        .getOrDefault(FactCategory.FACT)
                     memoryFactDao.upsert(
                         MemoryFact(
                             factKey = key,

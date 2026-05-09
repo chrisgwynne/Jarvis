@@ -190,15 +190,23 @@ class JarvisService : Service() {
         // was the single biggest battery drain in long sessions.  If a
         // specific branch ever needs the CPU awake outside of audio capture,
         // acquire a scoped, timed lock at that site — never here.
-        // Android 14+ requires the three-argument form when foregroundServiceType is
-        // declared in the manifest. The two-argument form throws SecurityException on API 34+.
+        // Android 10+ (API 29+): use the 3-arg form when foregroundServiceType is declared.
+        // Only include a type flag when the corresponding runtime permission is actually
+        // granted — on a fresh install neither RECORD_AUDIO nor CAMERA may be granted yet,
+        // and passing an ungranted type throws SecurityException on Android 14+ (API 34+).
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                buildNotification(),
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-            )
+            var serviceType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE
+            if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                serviceType = serviceType or
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            }
+            if (checkSelfPermission(android.Manifest.permission.CAMERA) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                serviceType = serviceType or
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            }
+            startForeground(NOTIFICATION_ID, buildNotification(), serviceType)
         } else {
             startForeground(NOTIFICATION_ID, buildNotification())
         }

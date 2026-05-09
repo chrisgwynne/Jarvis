@@ -4,6 +4,11 @@ import android.util.Log
 import com.jarvis.assistant.llm.LlmException
 import com.jarvis.assistant.llm.NetworkClient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -14,6 +19,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
@@ -70,6 +76,56 @@ class OpenClawClient {
                 }
             })
         }
+
+    /**
+     * Stream [request] to the OpenClaw chat completions endpoint.
+     *
+     * Returns a cold [Flow] of raw content tokens parsed from the SSE stream.
+     * Callers are responsible for timeout and sentence extraction.
+     * Throws [LlmException] on HTTP errors; the flow is cancelled on IO failure.
+     */
+    fun stream(settings: OpenClawSettings, request: OpenClawRequest): Flow<String> {
+        val url = OpenClawConnectionBuilder.buildChatEndpoint(settings)
+        val headers = buildMap<String, String> {
+            put("Content-Type", "application/json")
+            if (settings.authToken.isNotBlank()) put("Authorization", "Bearer ${settings.authToken}")
+        }
+        val body = NetworkClient.gson.toJson(request.copy(stream = true))
+        return flow {
+            val req = Request.Builder()
+                .url(url)
+                .apply { headers.forEach { (k, v) -> addHeader(k, v) } }
+                .post(body.toRequestBody(JSON_MEDIA))
+                .build()
+            val call = httpClient.newCall(req)
+            try {
+                val resp = call.execute()
+                if (!resp.isSuccessful) {
+                    val b = resp.body?.string()?.take(200) ?: ""
+                    throw LlmException("HTTP ${resp.code}: $b")
+                }
+                resp.use { r ->
+                    val src = r.body?.source() ?: throw LlmException("Empty SSE body")
+                    while (!src.exhausted() && currentCoroutineContext().isActive) {
+                        val line = src.readUtf8Line() ?: break
+                        if (!line.startsWith("data: ")) continue
+                        val data = line.removePrefix("data: ").trim()
+                        if (data.isEmpty() || data == "[DONE]") continue
+                        val content = try {
+                            JSONObject(data)
+                                .optJSONArray("choices")
+                                ?.optJSONObject(0)
+                                ?.optJSONObject("delta")
+                                ?.optString("content") ?: ""
+                        } catch (_: Exception) { "" }
+                        if (content.isNotEmpty()) emit(content)
+                    }
+                }
+            } finally {
+                if (!call.isCanceled()) call.cancel()
+            }
+        }.flowOn(Dispatchers.IO)
+    }
 
     /**
      * POST [request] to the OpenClaw chat completions endpoint and return the result.

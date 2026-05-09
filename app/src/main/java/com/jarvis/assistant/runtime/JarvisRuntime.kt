@@ -1972,48 +1972,101 @@ class JarvisRuntime(
                     if (openClawRouter.shouldRoute()) {
                         val route = openClawRouter.classify(transcript)
 
-                        // Track whether the user explicitly invoked OpenClaw via keyword.
-                        // Keyword-triggered failures are surfaced to the user; auto-routed
-                        // REMOTE_LONG failures silently fall through to local LLM instead.
+                        // Keyword-triggered failures are always surfaced to the user.
+                        // Auto-routed REMOTE_LONG failures fall through to local LLM silently.
                         val ocKeyword = openClawRepo.snapshot().keyword.trim()
                         val keywordTriggered = ocKeyword.isNotBlank() &&
                             transcript.trim().lowercase().startsWith(ocKeyword.lowercase())
 
-                        // REMOTE_LONG: speak acknowledgement first so there's no silence
                         if (route == com.jarvis.assistant.remote.openclaw.RouteType.REMOTE_LONG) {
                             ttsEngine.speak("Looking into that.")
                         }
 
-                        val clawResult = openClawRouter.execute(
-                            transcript,
-                            sessionId,
+                        val streamFlow = openClawRouter.executeStreaming(
+                            transcript, sessionId,
                             llmRouter.conversationStore.getRecentMessages(6)
                         )
-                        LatencyTracker.mark("OPENCLAW_COMPLETE")
 
-                        when (clawResult) {
-                            is OpenClawExecutionResult.Success -> {
-                                speakAndRecord(clawResult.spokenSummary)
-                                machine.transition(JarvisState.Listening)
-                                syncState(JarvisState.Listening)
-                                continue
-                            }
-                            is OpenClawExecutionResult.Failure -> {
-                                Log.w(TAG, "OpenClaw failed: ${clawResult.error.spokenMessage}")
-                                val isConfigError =
-                                    clawResult.error is com.jarvis.assistant.remote.openclaw.OpenClawError.AuthFailed ||
-                                    clawResult.error is com.jarvis.assistant.remote.openclaw.OpenClawError.NotConfigured
-                                if (isConfigError || keywordTriggered) {
-                                    // User explicitly routed this to OpenClaw — tell them it failed.
-                                    // Don't silently answer locally; that's confusing and misleading.
-                                    speakAndRecord(clawResult.error.spokenMessage)
+                        if (streamFlow != null) {
+                            val fullResponse    = StringBuilder()
+                            var speakingStarted = false
+                            try {
+                                withTimeout(openClawRepo.snapshot().timeoutMs) {
+                                    streamFlow.collect { sentence ->
+                                        fullResponse.append(sentence).append(" ")
+                                        if (!speakingStarted) {
+                                            speakingStarted = true
+                                            machine.transition(JarvisState.Speaking)
+                                            DeviceStateStore.update { copy(ttsPlaying = true) }
+                                            syncState(JarvisState.Speaking)
+                                            if (settings.voiceResponse) {
+                                                LatencyTracker.mark("TTS_START")
+                                                bargeIn.start()
+                                            }
+                                        }
+                                        if (settings.voiceResponse && machine.isIn<JarvisState.Speaking>()) {
+                                            ttsEngine.speak(sentence)
+                                        }
+                                    }
+                                }
+                                if (speakingStarted) {
+                                    if (settings.voiceResponse) bargeIn.stop()
+                                    DeviceStateStore.update { copy(ttsPlaying = false) }
+                                }
+                                LatencyTracker.mark("OPENCLAW_COMPLETE")
+
+                                if (fullResponse.isNotBlank()) {
+                                    val response = fullResponse.toString().trim()
+                                    llmRouter.conversationStore.addMessage("user", transcript)
+                                    llmRouter.conversationStore.addMessage("assistant", response)
+                                    memoryWriter.writeTurn(sessionId, "assistant", response)
+                                    DeviceStateStore.update { copy(lastAssistantResponse = response) }
                                     machine.transition(JarvisState.Listening)
                                     syncState(JarvisState.Listening)
                                     continue
                                 }
-                                // Auto-routed REMOTE_LONG failure — fall through to local LLM
+                                // Empty stream — fall through to local LLM
+
+                            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                                if (speakingStarted) {
+                                    if (settings.voiceResponse) bargeIn.stop()
+                                    DeviceStateStore.update { copy(ttsPlaying = false) }
+                                }
+                                if (keywordTriggered) {
+                                    speakAndRecord(com.jarvis.assistant.remote.openclaw.OpenClawError.TimedOut.spokenMessage)
+                                    machine.transition(JarvisState.Listening)
+                                    syncState(JarvisState.Listening)
+                                    continue
+                                }
+                                // Auto-routed timeout — fall through to local LLM
+
+                            } catch (e: CancellationException) {
+                                if (speakingStarted) {
+                                    if (settings.voiceResponse) bargeIn.stop()
+                                    DeviceStateStore.update { copy(ttsPlaying = false) }
+                                }
+                                throw e
+
+                            } catch (e: Exception) {
+                                if (speakingStarted) {
+                                    if (settings.voiceResponse) bargeIn.stop()
+                                    DeviceStateStore.update { copy(ttsPlaying = false) }
+                                }
+                                Log.w(TAG, "OpenClaw stream error: ${e.message}")
+                                val isAuth = e.message?.contains("401") == true ||
+                                             e.message?.contains("403") == true
+                                if (isAuth || keywordTriggered) {
+                                    val error = if (isAuth)
+                                        com.jarvis.assistant.remote.openclaw.OpenClawError.AuthFailed
+                                    else
+                                        com.jarvis.assistant.remote.openclaw.OpenClawError.Unreachable(e.message ?: "")
+                                    speakAndRecord(error.spokenMessage)
+                                    machine.transition(JarvisState.Listening)
+                                    syncState(JarvisState.Listening)
+                                    continue
+                                }
+                                // Auto-routed failure — fall through to local LLM
                             }
-                            OpenClawExecutionResult.Bypassed -> { /* LOCAL_FAST or disabled — fall through */ }
                         }
                     }
 

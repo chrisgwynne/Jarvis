@@ -2,6 +2,8 @@ package com.jarvis.assistant.remote.openclaw
 
 import android.util.Log
 import com.jarvis.assistant.llm.Message
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import java.util.UUID
 
 /**
@@ -30,6 +32,8 @@ class OpenClawRouter(
 
     companion object {
         private const val TAG = "OpenClawRouter"
+
+        private val SENTENCE_BOUNDARY = Regex("""[.!?]\s""")
 
         // Patterns that force LOCAL_FAST — keep on device
         private val LOCAL_PATTERNS = listOf(
@@ -131,5 +135,62 @@ class OpenClawRouter(
         )
 
         return client.send(settings, request)
+    }
+
+    /**
+     * Same routing logic as [execute] but returns a [Flow] of sentences rather than
+     * waiting for the full response.  Returns null when routing is disabled or the
+     * transcript classifies as [RouteType.LOCAL_FAST].
+     *
+     * The returned flow emits complete sentences (not raw tokens) so the caller can
+     * pass each sentence directly to TTS.  Throws on HTTP / IO errors.
+     */
+    fun executeStreaming(
+        transcript:     String,
+        sessionId:      String,
+        recentMessages: List<Message> = emptyList()
+    ): Flow<String>? {
+        if (!shouldRoute()) return null
+        val settings = settingsRepo.snapshot()
+        val route    = classify(transcript)
+        if (route == RouteType.LOCAL_FAST) return null
+
+        val kw = settings.keyword.trim().lowercase()
+        val cleanTranscript = if (kw.isNotBlank() && transcript.trim().lowercase().startsWith(kw))
+            transcript.trim().substring(kw.length).trim()
+        else transcript
+
+        val ocMessages = buildList {
+            recentMessages.takeLast(6)
+                .filter { it.role == "user" || it.role == "assistant" }
+                .forEach { add(OpenClawChatMessage(role = it.role, content = it.content)) }
+            add(OpenClawChatMessage(role = "user", content = cleanTranscript))
+        }
+
+        val request    = OpenClawRequest(model = settings.modelName, messages = ocMessages, stream = true)
+        val tokenFlow  = client.stream(settings, request)
+
+        return flow {
+            val buffer = StringBuilder()
+            tokenFlow.collect { token ->
+                buffer.append(token)
+                var sentence = extractSentence(buffer)
+                while (sentence != null) {
+                    emit(sentence)
+                    sentence = extractSentence(buffer)
+                }
+            }
+            val trailing = buffer.toString().trim()
+            if (trailing.isNotBlank()) emit(trailing)
+        }
+    }
+
+    private fun extractSentence(buffer: StringBuilder): String? {
+        val text  = buffer.toString()
+        val match = SENTENCE_BOUNDARY.find(text) ?: return null
+        val end      = match.range.first + 1
+        val sentence = text.substring(0, end).trim()
+        buffer.delete(0, match.range.last + 1)
+        return sentence.ifBlank { null }
     }
 }

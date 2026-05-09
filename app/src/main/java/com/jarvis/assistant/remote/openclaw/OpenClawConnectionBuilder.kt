@@ -13,11 +13,18 @@ object OpenClawConnectionBuilder {
         return "$scheme://$host:${settings.port}/gateway"
     }
 
-    /** OpenAI-compatible chat completions endpoint: http(s)://host:port/v1/chat/completions */
+    /**
+     * OpenAI-compatible chat completions endpoint.
+     * Uses [OpenClawSettings.llmBaseUrl] if set, so you can route LLM queries to
+     * a different port/service (e.g. Hermes on :8642) while keeping the node
+     * WebSocket on the primary host:port.
+     */
     fun buildChatEndpoint(settings: OpenClawSettings): String {
-        val scheme = if (settings.secure) "https" else "http"
-        val host   = settings.host.trim().trimEnd('/')
-        return "$scheme://$host:${settings.port}/v1/chat/completions"
+        val base = settings.llmBaseUrl.trim().trimEnd('/').ifBlank {
+            val scheme = if (settings.secure) "https" else "http"
+            "$scheme://${settings.host.trim().trimEnd('/')}:${settings.port}"
+        }
+        return "$base/v1/chat/completions"
     }
 
     /** OpenAI-compatible models endpoint: http(s)://host:port/v1/models (used for health checks) */

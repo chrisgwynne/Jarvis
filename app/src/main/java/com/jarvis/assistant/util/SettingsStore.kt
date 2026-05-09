@@ -133,6 +133,7 @@ class SettingsStore(context: Context) {
         const val KEY_OPENCLAW_NODE_ENABLED = "openclaw_node_enabled"
         const val KEY_OPENCLAW_DEVICE_ID    = "openclaw_device_id"
         const val KEY_OPENCLAW_DEVICE_TOKEN = "openclaw_device_token"
+        const val KEY_OPENCLAW_LLM_BASE_URL = "openclaw_llm_base_url"
 
         // Defaults
         const val DEFAULT_PROVIDER       = "OpenAI"
@@ -373,6 +374,16 @@ class SettingsStore(context: Context) {
     var openClawDeviceToken: String
         get() = prefs.getString(KEY_OPENCLAW_DEVICE_TOKEN, "") ?: ""
         set(v) = prefs.edit().putString(KEY_OPENCLAW_DEVICE_TOKEN, v).apply()
+
+    /**
+     * Optional base URL that overrides the LLM endpoint while leaving the gateway
+     * (WebSocket node connection) on the primary host:port.
+     * E.g. "http://openclaw.tail48466.ts.net:8642" to route queries to Hermes.
+     * Blank = derive from host:port as normal.
+     */
+    var openClawLlmBaseUrl: String
+        get() = prefs.getString(KEY_OPENCLAW_LLM_BASE_URL, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_OPENCLAW_LLM_BASE_URL, v).apply()
 
     /**
      * One-shot trigger: when ≥ 0, JarvisRuntime will auto-start voice enrollment

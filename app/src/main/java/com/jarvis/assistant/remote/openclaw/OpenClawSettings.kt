@@ -13,9 +13,14 @@ data class OpenClawSettings(
     val timeoutMs:   Long,
     val modelName:   String  = "openclaw",
     val keyword:     String  = "computer",
-    val nodeEnabled: Boolean = false,
-    val deviceId:    String  = "",
-    val deviceToken: String  = "",
+    val nodeEnabled:  Boolean = false,
+    val deviceId:     String  = "",
+    val deviceToken:  String  = "",
+    /**
+     * When non-blank, overrides the LLM endpoint base URL (e.g. "http://host:8642").
+     * The gateway (WebSocket node) always uses the primary host:port above.
+     */
+    val llmBaseUrl:   String  = "",
 ) {
     companion object {
         const val DEFAULT_PORT       = 8765

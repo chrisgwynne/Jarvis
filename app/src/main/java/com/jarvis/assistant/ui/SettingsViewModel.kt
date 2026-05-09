@@ -464,6 +464,9 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     private val _openClawKeyword = MutableStateFlow(store.openClawKeyword)
     val openClawKeyword: StateFlow<String> = _openClawKeyword.asStateFlow()
 
+    private val _openClawLlmBaseUrl = MutableStateFlow(store.openClawLlmBaseUrl)
+    val openClawLlmBaseUrl: StateFlow<String> = _openClawLlmBaseUrl.asStateFlow()
+
     private val _openClawStatus = MutableStateFlow(OpenClawConnectionStatus.NOT_CONFIGURED)
     val openClawConnectionStatus: StateFlow<OpenClawConnectionStatus> = _openClawStatus.asStateFlow()
 
@@ -493,8 +496,9 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         v.toLongOrNull()?.let { store.openClawTimeoutMs = it }
     }
 
-    fun setOpenClawModel(v: String)   { _openClawModel.value = v;   store.openClawModel = v }
-    fun setOpenClawKeyword(v: String) { _openClawKeyword.value = v; store.openClawKeyword = v }
+    fun setOpenClawModel(v: String)      { _openClawModel.value = v;      store.openClawModel = v }
+    fun setOpenClawKeyword(v: String)    { _openClawKeyword.value = v;    store.openClawKeyword = v }
+    fun setOpenClawLlmBaseUrl(v: String) { _openClawLlmBaseUrl.value = v; store.openClawLlmBaseUrl = v }
 
     fun testOpenClawConnection() {
         _openClawStatus.value = OpenClawConnectionStatus.CONNECTING

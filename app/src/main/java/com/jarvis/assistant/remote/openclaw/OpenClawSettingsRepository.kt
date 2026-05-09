@@ -21,6 +21,7 @@ class OpenClawSettingsRepository(private val store: SettingsStore) {
         nodeEnabled = store.openClawNodeEnabled,
         deviceId    = store.openClawDeviceId,
         deviceToken = store.openClawDeviceToken,
+        llmBaseUrl  = store.openClawLlmBaseUrl,
     )
 
     fun saveDeviceToken(token: String) { store.openClawDeviceToken = token }

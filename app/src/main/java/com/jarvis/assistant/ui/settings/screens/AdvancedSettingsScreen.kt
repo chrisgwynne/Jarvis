@@ -59,7 +59,8 @@ internal fun AdvancedSettingsScreen(
     val openClawAuthToken by vm.openClawAuthToken.collectAsStateWithLifecycle()
     val openClawTimeoutMs by vm.openClawTimeoutMs.collectAsStateWithLifecycle()
     val openClawKeyword   by vm.openClawKeyword.collectAsStateWithLifecycle()
-    val openClawModel     by vm.openClawModel.collectAsStateWithLifecycle()
+    val openClawModel        by vm.openClawModel.collectAsStateWithLifecycle()
+    val openClawLlmBaseUrl   by vm.openClawLlmBaseUrl.collectAsStateWithLifecycle()
     val openClawStatus       by vm.openClawConnectionStatus.collectAsStateWithLifecycle()
     val openClawStatusDetail by vm.openClawStatusDetail.collectAsStateWithLifecycle()
     val openClawNodeEnabled  by vm.openClawNodeEnabled.collectAsStateWithLifecycle()
@@ -375,6 +376,14 @@ internal fun AdvancedSettingsScreen(
                     value         = openClawModel,
                     onValueChange = vm::setOpenClawModel,
                     placeholder   = "openclaw/default",
+                )
+                SettingsRowDivider()
+                SettingsTextFieldRow(
+                    title         = "AI endpoint (optional)",
+                    description   = "Override the LLM URL, e.g. http://host:8642. Leave blank to use the host above. Gateway stays on port above.",
+                    value         = openClawLlmBaseUrl,
+                    onValueChange = vm::setOpenClawLlmBaseUrl,
+                    placeholder   = "http://host:8642",
                 )
                 SettingsRowDivider()
                 Column(

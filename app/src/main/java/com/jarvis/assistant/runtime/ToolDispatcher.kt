@@ -4,7 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.jarvis.assistant.core.decisions.ActionLedger
 import com.jarvis.assistant.core.safety.ConfirmationGate
-import com.jarvis.assistant.core.state.DeviceStateStore
+import com.jarvis.assistant.core.store.DeviceStateStore
 import com.jarvis.assistant.core.state.JarvisState
 import com.jarvis.assistant.core.state.JarvisStateMachine
 import com.jarvis.assistant.security.ActionPolicyGate
@@ -16,7 +16,7 @@ import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolRegistry
 import com.jarvis.assistant.tools.framework.ToolResult
 import com.jarvis.assistant.util.LatencyTracker
-import com.jarvis.assistant.util.ResponseFormatter
+import com.jarvis.assistant.runtime.ResponseFormatter
 
 /**
  * ToolDispatcher — decouples the tool-match → permission-check → policy-gate → execute
@@ -67,7 +67,7 @@ class ToolDispatcher(
         private const val TAG = "ToolDispatcher"
         private val ROUTINE_TOOL_NAMES = setOf(
             "save_routine", "run_routine", "list_routines", "delete_routine",
-            "undo_last_action", "repeat_last_action",
+            "undo_last_action", "repeat_last_action", "report_issue",
         )
     }
 

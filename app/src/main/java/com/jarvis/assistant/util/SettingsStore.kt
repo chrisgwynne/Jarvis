@@ -122,14 +122,17 @@ class SettingsStore(context: Context) {
         const val DEFAULT_HERMES_TIMEOUT  = 30_000L
 
         // OpenClaw remote routing keys
-        const val KEY_OPENCLAW_ENABLED    = "openclaw_enabled"
-        const val KEY_OPENCLAW_HOST       = "openclaw_host"
-        const val KEY_OPENCLAW_PORT       = "openclaw_port"
-        const val KEY_OPENCLAW_SECURE     = "openclaw_secure"
-        const val KEY_OPENCLAW_AUTH_TOKEN = "openclaw_auth_token"
-        const val KEY_OPENCLAW_TIMEOUT_MS = "openclaw_timeout_ms"
-        const val KEY_OPENCLAW_MODEL      = "openclaw_model"
-        const val KEY_OPENCLAW_KEYWORD    = "openclaw_keyword"
+        const val KEY_OPENCLAW_ENABLED      = "openclaw_enabled"
+        const val KEY_OPENCLAW_HOST         = "openclaw_host"
+        const val KEY_OPENCLAW_PORT         = "openclaw_port"
+        const val KEY_OPENCLAW_SECURE       = "openclaw_secure"
+        const val KEY_OPENCLAW_AUTH_TOKEN   = "openclaw_auth_token"
+        const val KEY_OPENCLAW_TIMEOUT_MS   = "openclaw_timeout_ms"
+        const val KEY_OPENCLAW_MODEL        = "openclaw_model"
+        const val KEY_OPENCLAW_KEYWORD      = "openclaw_keyword"
+        const val KEY_OPENCLAW_NODE_ENABLED = "openclaw_node_enabled"
+        const val KEY_OPENCLAW_DEVICE_ID    = "openclaw_device_id"
+        const val KEY_OPENCLAW_DEVICE_TOKEN = "openclaw_device_token"
 
         // Defaults
         const val DEFAULT_PROVIDER       = "OpenAI"
@@ -348,6 +351,28 @@ class SettingsStore(context: Context) {
     var openClawKeyword: String
         get() = prefs.getString(KEY_OPENCLAW_KEYWORD, "computer") ?: "computer"
         set(v) = prefs.edit().putString(KEY_OPENCLAW_KEYWORD, v).apply()
+
+    /** Whether Jarvis registers as an OpenClaw node so the gateway can invoke tools on the phone. */
+    var openClawNodeEnabled: Boolean
+        get() = prefs.getBoolean(KEY_OPENCLAW_NODE_ENABLED, false)
+        set(v) = prefs.edit().putBoolean(KEY_OPENCLAW_NODE_ENABLED, v).apply()
+
+    /** Stable device ID generated once and used in the OpenClaw handshake. */
+    var openClawDeviceId: String
+        get() {
+            var id = prefs.getString(KEY_OPENCLAW_DEVICE_ID, null)
+            if (id.isNullOrBlank()) {
+                id = java.util.UUID.randomUUID().toString()
+                prefs.edit().putString(KEY_OPENCLAW_DEVICE_ID, id).apply()
+            }
+            return id
+        }
+        set(v) = prefs.edit().putString(KEY_OPENCLAW_DEVICE_ID, v).apply()
+
+    /** Device token returned by the gateway after successful pairing; used on reconnects. */
+    var openClawDeviceToken: String
+        get() = prefs.getString(KEY_OPENCLAW_DEVICE_TOKEN, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_OPENCLAW_DEVICE_TOKEN, v).apply()
 
     /**
      * One-shot trigger: when ≥ 0, JarvisRuntime will auto-start voice enrollment

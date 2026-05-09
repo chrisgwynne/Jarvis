@@ -68,36 +68,42 @@ class TtsEngine(context: Context) : TextToSpeech.OnInitListener {
             val utteranceId = "jarvis_${System.currentTimeMillis()}"
 
             tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onDone(id: String?) {
-                    if (cont.isActive) cont.resume(Unit)
+                // Clear the listener once the utterance is settled so the TTS native
+                // connection doesn't keep a reference to this object (and through it, the
+                // suspended continuation) after the coroutine has already resumed.
+                private fun finish(resume: Boolean) {
+                    tts.setOnUtteranceProgressListener(null)
+                    if (resume && cont.isActive) cont.resume(Unit)
                 }
+                override fun onDone(id: String?)  = finish(true)
+                override fun onStop(utteranceId: String?, interrupted: Boolean) = finish(true)
+                override fun onStart(id: String?) {}
                 override fun onError(id: String?) {
                     Log.w(TAG, "TTS utterance error for $id (no error code)")
-                    if (cont.isActive) cont.resume(Unit)
+                    finish(true)
                 }
                 @Suppress("DEPRECATION")
                 override fun onError(utteranceId: String?, errorCode: Int) {
                     val reason = when (errorCode) {
-                        TextToSpeech.ERROR_SYNTHESIS    -> "ERROR_SYNTHESIS"
-                        TextToSpeech.ERROR_SERVICE      -> "ERROR_SERVICE"
-                        TextToSpeech.ERROR_OUTPUT       -> "ERROR_OUTPUT"
-                        TextToSpeech.ERROR_NETWORK      -> "ERROR_NETWORK"
-                        TextToSpeech.ERROR_NETWORK_TIMEOUT -> "ERROR_NETWORK_TIMEOUT"
-                        TextToSpeech.ERROR_INVALID_REQUEST -> "ERROR_INVALID_REQUEST"
+                        TextToSpeech.ERROR_SYNTHESIS         -> "ERROR_SYNTHESIS"
+                        TextToSpeech.ERROR_SERVICE           -> "ERROR_SERVICE"
+                        TextToSpeech.ERROR_OUTPUT            -> "ERROR_OUTPUT"
+                        TextToSpeech.ERROR_NETWORK           -> "ERROR_NETWORK"
+                        TextToSpeech.ERROR_NETWORK_TIMEOUT   -> "ERROR_NETWORK_TIMEOUT"
+                        TextToSpeech.ERROR_INVALID_REQUEST   -> "ERROR_INVALID_REQUEST"
                         TextToSpeech.ERROR_NOT_INSTALLED_YET -> "ERROR_NOT_INSTALLED_YET"
-                        else                            -> "unknown ($errorCode)"
+                        else                                 -> "unknown ($errorCode)"
                     }
                     Log.w(TAG, "TTS utterance error for $utteranceId — $reason")
-                    if (cont.isActive) cont.resume(Unit)
+                    finish(true)
                 }
-                override fun onStop(utteranceId: String?, interrupted: Boolean) {
-                    if (cont.isActive) cont.resume(Unit)
-                }
-                override fun onStart(id: String?) {}
             })
 
             tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
-            cont.invokeOnCancellation { tts.stop() }
+            cont.invokeOnCancellation {
+                tts.stop()
+                tts.setOnUtteranceProgressListener(null)
+            }
         }
     }
 

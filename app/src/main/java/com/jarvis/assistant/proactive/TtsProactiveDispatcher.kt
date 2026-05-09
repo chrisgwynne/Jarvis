@@ -26,11 +26,15 @@ import com.jarvis.assistant.util.JarvisNotificationHelper
  *                             on every dispatch so runtime setting changes are respected.
  */
 class TtsProactiveDispatcher(
-    private val context: Context,
+    context: Context,
     private val ttsEngine: TtsEngine,
     private val onPassiveAction: (ProactiveAction.PassiveAction) -> Unit = {},
     private val voiceResponseEnabled: () -> Boolean = { true }
 ) : ProactiveDispatcher {
+
+    // Never store the raw service context — use applicationContext so a suspended dispatch
+    // coroutine doesn't prevent JarvisService from being GC'd after onDestroy().
+    private val context: Context = context.applicationContext
 
     companion object {
         private const val TAG = "TtsProactiveDispatcher"

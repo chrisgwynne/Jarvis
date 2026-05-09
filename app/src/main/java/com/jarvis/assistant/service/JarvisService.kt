@@ -190,7 +190,18 @@ class JarvisService : Service() {
         // was the single biggest battery drain in long sessions.  If a
         // specific branch ever needs the CPU awake outside of audio capture,
         // acquire a scoped, timed lock at that site — never here.
-        startForeground(NOTIFICATION_ID, buildNotification())
+        // Android 14+ requires the three-argument form when foregroundServiceType is
+        // declared in the manifest. The two-argument form throws SecurityException on API 34+.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(),
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
 
         serviceScope.launch {
             try {

@@ -105,6 +105,28 @@ class DailyBriefingTool(
         )
     }
 
+    // ── Auto-trigger support ──────────────────────────────────────────────────
+
+    /**
+     * Build a short greeting string without the LLM — used when Jarvis auto-triggers
+     * the morning briefing on the first wake of the day.
+     * Also marks today as briefed so it won't fire again.
+     */
+    suspend fun buildBriefText(): String {
+        val now     = Date()
+        val today   = DATE_FORMAT.format(now)
+        saveBriefingDate(today)
+
+        val day     = SimpleDateFormat("EEEE",   Locale.US).format(now)   // "Friday"
+        val date    = SimpleDateFormat("MMMM d", Locale.US).format(now)   // "May 9"
+        val reminder = resolveNextReminder()
+
+        return buildString {
+            append("Good morning, Chris. It's $day, $date.")
+            if (reminder != "none") append(" Coming up: $reminder.")
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     /**

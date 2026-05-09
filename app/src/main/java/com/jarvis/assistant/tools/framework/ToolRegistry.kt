@@ -67,6 +67,7 @@ import com.jarvis.assistant.tools.device.EmailTool
 import com.jarvis.assistant.tools.device.EndCallTool
 import com.jarvis.assistant.tools.smart.SmartHomeTool
 import com.jarvis.assistant.tools.web.MusicSearchTool
+import com.jarvis.assistant.tools.device.ReportIssueTool
 
 /**
  * ToolRegistry — ordered list of tools; first match wins.
@@ -198,6 +199,8 @@ class ToolRegistry private constructor(
                     // shadowed by Read's "read my notifications" pattern (they
                     // don't overlap, but keep related tools adjacent for sanity).
                     add(ClearNotificationsTool(context))
+                    add(com.jarvis.assistant.tools.device.ReplyNotificationTool(context))
+                    add(com.jarvis.assistant.tools.device.ClipboardTool(context))
                     // Screen vision + actuation (before generic OpenApp)
                     llmRouter?.let { add(ReadScreenTool(it)) }
                     add(TapScreenTool())
@@ -241,6 +244,7 @@ class ToolRegistry private constructor(
                     expectationStore?.let {
                         add(com.jarvis.assistant.tools.device.NoteExpectationTool(it))
                     }
+                    add(ReportIssueTool())
                     add(HelpTool { buildCapabilitySummary(settings) })
                 },
                 recordingManager = recordingManager

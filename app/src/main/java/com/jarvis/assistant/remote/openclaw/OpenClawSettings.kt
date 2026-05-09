@@ -5,14 +5,17 @@ package com.jarvis.assistant.remote.openclaw
  * Passed around so callers don't repeatedly hit SettingsStore.
  */
 data class OpenClawSettings(
-    val enabled:   Boolean,
-    val host:      String,
-    val port:      Int,
-    val secure:    Boolean,
-    val authToken: String,
-    val timeoutMs: Long,
-    val modelName: String = "openclaw",
-    val keyword:   String = "computer"
+    val enabled:     Boolean,
+    val host:        String,
+    val port:        Int,
+    val secure:      Boolean,
+    val authToken:   String,
+    val timeoutMs:   Long,
+    val modelName:   String  = "openclaw",
+    val keyword:     String  = "computer",
+    val nodeEnabled: Boolean = false,
+    val deviceId:    String  = "",
+    val deviceToken: String  = "",
 ) {
     companion object {
         const val DEFAULT_PORT       = 8765
@@ -22,6 +25,16 @@ data class OpenClawSettings(
     /** True when the integration is enabled AND a host has been entered. */
     val isFullyConfigured: Boolean
         get() = enabled && host.isNotBlank()
+}
+
+/** Live connection status for the OpenClaw node (inbound gateway WebSocket). */
+enum class OpenClawNodeStatus(val displayLabel: String) {
+    DISABLED("Disabled"),
+    CONNECTING("Connecting…"),
+    PENDING_APPROVAL("Awaiting admin approval"),
+    CONNECTED("Connected as node"),
+    RECONNECTING("Reconnecting…"),
+    ERROR("Connection error"),
 }
 
 /** How a transcript should be routed after local tool matching fails. */

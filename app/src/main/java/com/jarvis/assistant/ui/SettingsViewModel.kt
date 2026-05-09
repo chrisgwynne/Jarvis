@@ -14,6 +14,7 @@ import com.jarvis.assistant.service.JarvisService
 import com.jarvis.assistant.memory.db.JarvisDatabase
 import com.jarvis.assistant.remote.openclaw.OpenClawConnectionStatus
 import com.jarvis.assistant.remote.openclaw.OpenClawHealthMonitor
+import com.jarvis.assistant.remote.openclaw.OpenClawNodeStatus
 import com.jarvis.assistant.remote.openclaw.OpenClawSettingsRepository
 import com.jarvis.assistant.tools.smart.HomeAssistantClient
 import com.jarvis.assistant.speaker.SpeakerProfileStore
@@ -466,37 +467,26 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     private val _openClawStatus = MutableStateFlow(OpenClawConnectionStatus.NOT_CONFIGURED)
     val openClawConnectionStatus: StateFlow<OpenClawConnectionStatus> = _openClawStatus.asStateFlow()
 
+    private val _openClawStatusDetail = MutableStateFlow("")
+    val openClawStatusDetail: StateFlow<String> = _openClawStatusDetail.asStateFlow()
+
+    private fun resetOpenClawStatus() {
+        _openClawStatus.value = OpenClawConnectionStatus.NOT_CONFIGURED
+        _openClawStatusDetail.value = ""
+    }
+
     // ── OpenClaw mutators ──────────────────────────────────────────────────
 
     fun setOpenClawEnabled(v: Boolean) {
         _openClawEnabled.value = v
         store.openClawEnabled = v
-        if (!v) _openClawStatus.value = OpenClawConnectionStatus.NOT_CONFIGURED
+        if (!v) resetOpenClawStatus()
     }
 
-    fun setOpenClawHost(v: String) {
-        _openClawHost.value = v
-        store.openClawHost = v
-        _openClawStatus.value = OpenClawConnectionStatus.NOT_CONFIGURED
-    }
-
-    fun setOpenClawPort(v: String) {
-        _openClawPort.value = v
-        v.toIntOrNull()?.let { store.openClawPort = it }
-        _openClawStatus.value = OpenClawConnectionStatus.NOT_CONFIGURED
-    }
-
-    fun setOpenClawSecure(v: Boolean) {
-        _openClawSecure.value = v
-        store.openClawSecure = v
-        _openClawStatus.value = OpenClawConnectionStatus.NOT_CONFIGURED
-    }
-
-    fun setOpenClawAuthToken(v: String) {
-        _openClawAuthToken.value = v
-        store.openClawAuthToken = v
-        _openClawStatus.value = OpenClawConnectionStatus.NOT_CONFIGURED
-    }
+    fun setOpenClawHost(v: String)      { _openClawHost.value = v;      store.openClawHost = v;      resetOpenClawStatus() }
+    fun setOpenClawPort(v: String)      { _openClawPort.value = v;      v.toIntOrNull()?.let { store.openClawPort = it }; resetOpenClawStatus() }
+    fun setOpenClawSecure(v: Boolean)   { _openClawSecure.value = v;    store.openClawSecure = v;    resetOpenClawStatus() }
+    fun setOpenClawAuthToken(v: String) { _openClawAuthToken.value = v; store.openClawAuthToken = v; resetOpenClawStatus() }
 
     fun setOpenClawTimeoutMs(v: String) {
         _openClawTimeoutMs.value = v
@@ -508,9 +498,105 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun testOpenClawConnection() {
         _openClawStatus.value = OpenClawConnectionStatus.CONNECTING
+        _openClawStatusDetail.value = ""
         viewModelScope.launch {
             val settings = openClawRepo.snapshot()
-            _openClawStatus.value = OpenClawHealthMonitor.check(settings)
+            val result = OpenClawHealthMonitor.check(settings)
+            _openClawStatus.value = result.status
+            _openClawStatusDetail.value = result.detail
         }
     }
+
+    // ── OpenClaw node state ────────────────────────────────────────────────
+
+    private val _openClawNodeEnabled = MutableStateFlow(store.openClawNodeEnabled)
+    val openClawNodeEnabled: StateFlow<Boolean> = _openClawNodeEnabled.asStateFlow()
+
+    val openClawNodeStatus: StateFlow<OpenClawNodeStatus> =
+        com.jarvis.assistant.remote.openclaw.OpenClawNodeClient.sharedStatus
+
+    fun setOpenClawNodeEnabled(v: Boolean) {
+        _openClawNodeEnabled.value = v
+        store.openClawNodeEnabled = v
+    }
+
+    // ── Hermes state ───────────────────────────────────────────────────────
+
+    private val _hermesEnabled   = MutableStateFlow(store.hermesEnabled)
+    val hermesEnabled: StateFlow<Boolean> = _hermesEnabled.asStateFlow()
+
+    private val _hermesHost      = MutableStateFlow(store.hermesHost)
+    val hermesHost: StateFlow<String> = _hermesHost.asStateFlow()
+
+    private val _hermesPort      = MutableStateFlow(store.hermesPort.toString())
+    val hermesPort: StateFlow<String> = _hermesPort.asStateFlow()
+
+    private val _hermesSecure    = MutableStateFlow(store.hermesSecure)
+    val hermesSecure: StateFlow<Boolean> = _hermesSecure.asStateFlow()
+
+    private val _hermesApiKey    = MutableStateFlow(store.hermesApiKey)
+    val hermesApiKey: StateFlow<String> = _hermesApiKey.asStateFlow()
+
+    private val _hermesProfile   = MutableStateFlow(store.hermesProfile)
+    val hermesProfile: StateFlow<String> = _hermesProfile.asStateFlow()
+
+    private val _hermesStatus    = MutableStateFlow<String?>(null)
+    val hermesStatus: StateFlow<String?> = _hermesStatus.asStateFlow()
+
+    fun setHermesEnabled(v: Boolean) {
+        _hermesEnabled.value = v; store.hermesEnabled = v
+        if (!v) _hermesStatus.value = null
+    }
+    fun setHermesHost(v: String)    { _hermesHost.value = v;    store.hermesHost = v;    _hermesStatus.value = null }
+    fun setHermesPort(v: String)    { _hermesPort.value = v;    v.toIntOrNull()?.let { store.hermesPort = it }; _hermesStatus.value = null }
+    fun setHermesSecure(v: Boolean) { _hermesSecure.value = v;  store.hermesSecure = v;  _hermesStatus.value = null }
+    fun setHermesApiKey(v: String)  { _hermesApiKey.value = v;  store.hermesApiKey = v;  _hermesStatus.value = null }
+    fun setHermesProfile(v: String) { _hermesProfile.value = v; store.hermesProfile = v }
+
+    fun testHermesConnection() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _hermesStatus.value = "Connecting…"
+            val scheme = if (store.hermesSecure) "https" else "http"
+            val url = "$scheme://${store.hermesHost.trim()}:${store.hermesPort}/v1/models"
+            try {
+                val req = okhttp3.Request.Builder().url(url).apply {
+                    if (store.hermesApiKey.isNotBlank()) header("Authorization", "Bearer ${store.hermesApiKey}")
+                }.build()
+                val resp = com.jarvis.assistant.llm.NetworkClient.http.newCall(req).execute()
+                _hermesStatus.value = when (resp.code) {
+                    200      -> "Connected"
+                    401, 403 -> "Auth failed — check API key"
+                    else     -> "Unexpected response (HTTP ${resp.code})"
+                }
+                resp.close()
+            } catch (e: java.net.SocketTimeoutException) {
+                _hermesStatus.value = "Timed out"
+            } catch (e: java.net.UnknownHostException) {
+                _hermesStatus.value = "Unreachable — DNS failed"
+            } catch (e: java.net.ConnectException) {
+                _hermesStatus.value = "Connection refused — check host/port/firewall"
+            } catch (e: Exception) {
+                _hermesStatus.value = "Error: ${e.message?.take(60)}"
+            }
+        }
+    }
+
+    // ── GitHub reporting state ─────────────────────────────────────────────
+
+    private val _githubReportingEnabled = MutableStateFlow(store.githubReportingEnabled)
+    val githubReportingEnabled: StateFlow<Boolean> = _githubReportingEnabled.asStateFlow()
+
+    private val _githubToken     = MutableStateFlow(store.githubToken)
+    val githubToken: StateFlow<String> = _githubToken.asStateFlow()
+
+    private val _githubRepoOwner = MutableStateFlow(store.githubRepoOwner)
+    val githubRepoOwner: StateFlow<String> = _githubRepoOwner.asStateFlow()
+
+    private val _githubRepoName  = MutableStateFlow(store.githubRepoName)
+    val githubRepoName: StateFlow<String> = _githubRepoName.asStateFlow()
+
+    fun setGithubReportingEnabled(v: Boolean) { _githubReportingEnabled.value = v; store.githubReportingEnabled = v }
+    fun setGithubToken(v: String)     { _githubToken.value = v;     store.githubToken = v }
+    fun setGithubRepoOwner(v: String) { _githubRepoOwner.value = v; store.githubRepoOwner = v }
+    fun setGithubRepoName(v: String)  { _githubRepoName.value = v;  store.githubRepoName = v }
 }

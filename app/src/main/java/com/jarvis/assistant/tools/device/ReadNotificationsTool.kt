@@ -82,6 +82,14 @@ class ReadNotificationsTool(
                 " Go to Settings, then Apps, Special app access, Notification access, and enable Jarvis."
             )
         }
+        // Access is granted but the OS hasn't bound the service yet (happens in the first
+        // few seconds after the user toggles notification access in Settings).
+        if (!JarvisNotificationListener.isConnected()) {
+            return ToolResult.Failure(
+                "Notification access is enabled but the listener isn't connected yet." +
+                " Try again in a moment, or restart Jarvis."
+            )
+        }
 
         // 2. Fetch notifications, filtered by source if requested
         val source = input.param(PARAM_SOURCE)

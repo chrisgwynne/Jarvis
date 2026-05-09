@@ -60,7 +60,18 @@ internal fun AdvancedSettingsScreen(
     val openClawTimeoutMs by vm.openClawTimeoutMs.collectAsStateWithLifecycle()
     val openClawKeyword   by vm.openClawKeyword.collectAsStateWithLifecycle()
     val openClawModel     by vm.openClawModel.collectAsStateWithLifecycle()
-    val openClawStatus    by vm.openClawConnectionStatus.collectAsStateWithLifecycle()
+    val openClawStatus       by vm.openClawConnectionStatus.collectAsStateWithLifecycle()
+    val openClawStatusDetail by vm.openClawStatusDetail.collectAsStateWithLifecycle()
+    val openClawNodeEnabled  by vm.openClawNodeEnabled.collectAsStateWithLifecycle()
+    val openClawNodeStatus   by vm.openClawNodeStatus.collectAsStateWithLifecycle()
+
+    val hermesEnabled  by vm.hermesEnabled.collectAsStateWithLifecycle()
+    val hermesHost     by vm.hermesHost.collectAsStateWithLifecycle()
+    val hermesPort     by vm.hermesPort.collectAsStateWithLifecycle()
+    val hermesSecure   by vm.hermesSecure.collectAsStateWithLifecycle()
+    val hermesApiKey   by vm.hermesApiKey.collectAsStateWithLifecycle()
+    val hermesProfile  by vm.hermesProfile.collectAsStateWithLifecycle()
+    val hermesStatus   by vm.hermesStatus.collectAsStateWithLifecycle()
 
     SettingsScaffold(title = "Advanced", onBack = onBack, onClose = onClose) {
 
@@ -216,6 +227,87 @@ internal fun AdvancedSettingsScreen(
             }
         }
 
+        /* ── Hermes Agent ───────────────────────────────────────────────── */
+        SettingsGroup(
+            title  = "Hermes Agent",
+            footer = "Self-hosted LLM agent on your LAN or Tailscale. Uses the OpenAI-compatible /v1 endpoint.",
+        ) {
+            SettingsToggleRow(
+                title           = "Enable Hermes",
+                description     = "Route queries to your Hermes Agent server.",
+                checked         = hermesEnabled,
+                onCheckedChange = vm::setHermesEnabled,
+            )
+            if (hermesEnabled) {
+                SettingsRowDivider()
+                SettingsTextFieldRow(
+                    title         = "Host",
+                    description   = "Tailscale IP or LAN address — no http:// prefix.",
+                    value         = hermesHost,
+                    onValueChange = vm::setHermesHost,
+                    placeholder   = "100.x.x.x or mypc.tail…net",
+                )
+                SettingsRowDivider()
+                SettingsTextFieldRow(
+                    title         = "Port",
+                    value         = hermesPort,
+                    onValueChange = vm::setHermesPort,
+                    placeholder   = "8000",
+                    keyboardType  = KeyboardType.Number,
+                )
+                SettingsRowDivider()
+                SettingsToggleRow(
+                    title           = "Secure (https)",
+                    description     = "Enable if the server uses TLS.",
+                    checked         = hermesSecure,
+                    onCheckedChange = vm::setHermesSecure,
+                )
+                SettingsRowDivider()
+                SettingsTextFieldRow(
+                    title         = "API key",
+                    description   = "API_SERVER_KEY set in your Hermes config.",
+                    value         = hermesApiKey,
+                    onValueChange = vm::setHermesApiKey,
+                    placeholder   = "your-hermes-api-key",
+                    isSecret      = true,
+                )
+                SettingsRowDivider()
+                SettingsTextFieldRow(
+                    title         = "Profile / model name",
+                    description   = "Advertised model name (default: hermes-agent).",
+                    value         = hermesProfile,
+                    onValueChange = vm::setHermesProfile,
+                    placeholder   = "hermes-agent",
+                )
+                SettingsRowDivider()
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text("Connection status", color = SettingsTheme.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        val statusText = hermesStatus ?: "Not tested"
+                        val statusColor = when {
+                            statusText == "Connected"      -> SettingsTheme.Success
+                            statusText == "Connecting…"    -> SettingsTheme.Cyan
+                            statusText == "Not tested"     -> SettingsTheme.TextMuted
+                            else                           -> SettingsTheme.Destructive
+                        }
+                        Text(statusText, color = statusColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    SettingsPrimaryButton(
+                        label   = if (hermesStatus == "Connecting…") "Testing…" else "Test connection",
+                        enabled = hermesStatus != "Connecting…",
+                        onClick = vm::testHermesConnection,
+                    )
+                }
+            }
+        }
+
         /* ── OpenClaw remote backend ─────────────────────────────────────── */
         SettingsGroup(
             title  = "OpenClaw remote",
@@ -302,11 +394,52 @@ internal fun AdvancedSettingsScreen(
                             fontWeight = FontWeight.SemiBold,
                         )
                     }
+                    if (openClawStatusDetail.isNotBlank()) {
+                        Text(
+                            text = openClawStatusDetail,
+                            color = SettingsTheme.TextMuted,
+                            fontSize = 12.sp,
+                        )
+                    }
                     SettingsPrimaryButton(
                         label   = if (openClawStatus == OpenClawConnectionStatus.CONNECTING) "Testing…" else "Test connection",
                         enabled = openClawStatus != OpenClawConnectionStatus.CONNECTING,
                         onClick = vm::testOpenClawConnection,
                     )
+                }
+                SettingsRowDivider()
+                // ── Node mode ──────────────────────────────────────────────
+                SettingsToggleRow(
+                    title       = "Register as OpenClaw node",
+                    description = "Let the OpenClaw gateway invoke Jarvis tools remotely",
+                    checked     = openClawNodeEnabled,
+                    onCheckedChange = vm::setOpenClawNodeEnabled,
+                )
+                if (openClawNodeEnabled) {
+                    SettingsRowDivider()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text("Node status", color = SettingsTheme.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            text  = openClawNodeStatus.displayLabel,
+                            color = nodeStatusColor(openClawNodeStatus),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    if (openClawNodeStatus == com.jarvis.assistant.remote.openclaw.OpenClawNodeStatus.PENDING_APPROVAL) {
+                        Text(
+                            text = "Run: openclaw devices approve <requestId> on the gateway to complete pairing",
+                            color = SettingsTheme.TextMuted,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp),
+                        )
+                    }
                 }
             }
         }
@@ -321,4 +454,13 @@ private fun statusColor(status: OpenClawConnectionStatus) = when (status) {
     OpenClawConnectionStatus.TIMED_OUT,
     OpenClawConnectionStatus.INVALID_RESPONSE -> SettingsTheme.Destructive
     OpenClawConnectionStatus.NOT_CONFIGURED   -> SettingsTheme.TextMuted
+}
+
+private fun nodeStatusColor(status: com.jarvis.assistant.remote.openclaw.OpenClawNodeStatus) = when (status) {
+    com.jarvis.assistant.remote.openclaw.OpenClawNodeStatus.CONNECTED         -> SettingsTheme.Success
+    com.jarvis.assistant.remote.openclaw.OpenClawNodeStatus.CONNECTING,
+    com.jarvis.assistant.remote.openclaw.OpenClawNodeStatus.RECONNECTING,
+    com.jarvis.assistant.remote.openclaw.OpenClawNodeStatus.PENDING_APPROVAL  -> SettingsTheme.Cyan
+    com.jarvis.assistant.remote.openclaw.OpenClawNodeStatus.ERROR             -> SettingsTheme.Destructive
+    com.jarvis.assistant.remote.openclaw.OpenClawNodeStatus.DISABLED          -> SettingsTheme.TextMuted
 }

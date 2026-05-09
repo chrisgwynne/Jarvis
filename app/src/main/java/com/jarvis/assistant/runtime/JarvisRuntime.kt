@@ -98,6 +98,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -251,8 +252,26 @@ class JarvisRuntime(
     private lateinit var followUpRepo      : FollowUpRepository
     private lateinit var convProactiveEngine: ConversationalProactiveEngine
 
-    // OpenClaw — remote routing for complex queries
-    private val openClawRouter = OpenClawRouter(OpenClawSettingsRepository(settings))
+    // OpenClaw — remote routing for complex queries (outbound) + node client (inbound)
+    private val openClawRepo   = com.jarvis.assistant.remote.openclaw.OpenClawSettingsRepository(settings)
+    private val openClawRouter = OpenClawRouter(openClawRepo)
+    private val openClawNode   = com.jarvis.assistant.remote.openclaw.OpenClawNodeClient(
+        settingsRepo      = openClawRepo,
+        availableCommands = { toolRegistry.registeredNames },
+        onInvoke          = { command, args ->
+            val tool  = toolRegistry.findByName(command)
+                ?: return@OpenClawNodeClient "Unknown command: $command"
+            val input = com.jarvis.assistant.tools.framework.ToolInput(
+                transcript = "openclaw:$command",
+                params     = args.mapValues { it.value.toString() }
+            )
+            when (val result = toolRegistry.execute(context, tool, input)) {
+                is com.jarvis.assistant.tools.framework.ToolResult.Success -> result.spokenFeedback
+                is com.jarvis.assistant.tools.framework.ToolResult.Failure -> result.spokenFeedback
+                else -> "Done."
+            }
+        }
+    )
 
     // Jarvis Brain — behavioural learning system
     private lateinit var brainEngine: com.jarvis.assistant.brain.BrainEngine
@@ -660,6 +679,7 @@ class JarvisRuntime(
         proactiveEngine.start()       // Proactive awareness polling
         convProactiveEngine.start()   // Conversational follow-up polling
         brainEngine.start()           // Behavioural learning system
+        if (settings.openClawNodeEnabled) openClawNode.start()  // OpenClaw node (inbound)
         drivingModeManager.start(context)  // Driving mode detection
         followUpCoordinator.restorePersistedFlow()  // Restore any flow that survived a restart
         ttsEngine.applyVoice(settings.ttsVoiceName)
@@ -900,6 +920,7 @@ class JarvisRuntime(
         recentEventBuffer.detach()
         eventAdapters.detachAll()       // Unwire bus adapters before callMonitor.stop()
         callMonitor.stop()              // Phase 6
+        openClawNode.stop()             // OpenClaw node (inbound)
         proactiveEngine.stop()          // Proactive awareness
         convProactiveEngine.stop()      // Conversational follow-up
         brainEngine.stop()              // Behavioural learning system
@@ -1213,6 +1234,14 @@ class JarvisRuntime(
                 }
 
                 machine.transitionAnd(JarvisState.Listening) { syncState(JarvisState.Listening) }
+
+                // Morning briefing on first wake of the day (before 10 am).
+                // Falls back to a random ack for all other activations.
+                // Skipped during first-run setup / voice enrollment.
+                if (!sessionSpeaker.awaitingOwnerName && !sessionSpeaker.awaitingVoiceEnrollmentSample) {
+                    val brief = tryMorningBriefing()
+                    ttsEngine.speak(brief ?: WakeAcknowledgements.random())
+                }
 
                 var consecutiveFastFails = 0
 
@@ -2210,26 +2239,28 @@ class JarvisRuntime(
                             }
 
                             val callList = fcResult.calls
-                            val feedbacks = callList.map { tc ->
-                                async(Dispatchers.IO) {
-                                    val tool = toolRegistry.findByName(tc.toolName) ?: return@async null
-                                    @Suppress("UNCHECKED_CAST")
-                                    val argsMap = try {
-                                        (NetworkClient.gson.fromJson(tc.argsJson, Map::class.java) as Map<*, *>)
-                                            .entries.associate { (k, v) -> k.toString() to v.toString() }
-                                    } catch (e: Exception) {
-                                        Log.w(TAG, "Malformed tool args for ${tc.toolName}: ${e.message}")
-                                        emptyMap()
+                            val feedbacks = coroutineScope {
+                                callList.map { tc ->
+                                    async<String?>(Dispatchers.IO) {
+                                        val tool = toolRegistry.findByName(tc.toolName) ?: return@async null
+                                        @Suppress("UNCHECKED_CAST")
+                                        val argsMap = try {
+                                            (NetworkClient.gson.fromJson(tc.argsJson, Map::class.java) as Map<*, *>)
+                                                .entries.associate { (k, v) -> k.toString() to v.toString() }
+                                        } catch (e: Exception) {
+                                            Log.w(TAG, "Malformed tool args for ${tc.toolName}: ${e.message}")
+                                            emptyMap()
+                                        }
+                                        val result = toolRegistry.execute(context, tool, ToolInput(transcript, argsMap))
+                                        val fb = when (result) {
+                                            is ToolResult.Success -> result.spokenFeedback
+                                            is ToolResult.Failure -> result.spokenFeedback
+                                            else -> null
+                                        }
+                                        fb?.let { "[${tool.name}]: $it" }
                                     }
-                                    val result = toolRegistry.execute(context, tool, ToolInput(transcript, argsMap))
-                                    val fb = when (result) {
-                                        is ToolResult.Success -> result.spokenFeedback
-                                        is ToolResult.Failure -> result.spokenFeedback
-                                        else -> null
-                                    }
-                                    fb?.let { "[${tool.name}]: $it" }
-                                }
-                            }.awaitAll().filterNotNull()
+                                }.awaitAll().filterNotNull()
+                            }
 
                             if (feedbacks.isEmpty() || hopsUsed >= MAX_TOOL_HOPS) {
                                 val combined = feedbacks.joinToString(". ")
@@ -2459,6 +2490,21 @@ class JarvisRuntime(
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * Returns a morning briefing string if this is the first wake of the day before 10 am,
+     * null otherwise (so the caller falls back to a random ack).
+     */
+    private suspend fun tryMorningBriefing(): String? {
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        if (hour >= 10) return null
+        val tool = toolRegistry.findByName("daily_briefing")
+            as? com.jarvis.assistant.tools.device.DailyBriefingTool ?: return null
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            .format(java.util.Date())
+        if (tool.getLastBriefingDate() == today) return null
+        return tool.buildBriefText()
+    }
 
     private suspend fun speakAndRecord(text: String) {
         val base = ResponseFormatter.format(text)

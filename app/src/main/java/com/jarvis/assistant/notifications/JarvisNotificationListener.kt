@@ -291,7 +291,38 @@ class JarvisNotificationListener : NotificationListenerService() {
     override fun onListenerConnected() {
         super.onListenerConnected()
         instance = this
-        Log.d(TAG, "Listener connected")
+        Log.d(TAG, "Listener connected — backfilling active notifications")
+        // Seed the buffer with notifications already on the device.
+        // Without this, asking for notifications immediately after granting access
+        // always returns empty because onNotificationPosted only fires for new arrivals.
+        try {
+            val active = getActiveNotifications() ?: emptyArray()
+            for (sbn in active) {
+                if (sbn.packageName == OWN_PACKAGE) continue
+                val extras = sbn.notification?.extras ?: continue
+                val title  = extras.getCharSequence("android.title")?.toString()?.trim()
+                val text   = (
+                    extras.getCharSequence("android.bigText")
+                        ?: extras.getCharSequence("android.text")
+                )?.toString()?.trim()
+                if (title.isNullOrEmpty() && text.isNullOrEmpty()) continue
+                val replyAction = sbn.notification?.actions?.firstOrNull { a ->
+                    a.remoteInputs?.isNotEmpty() == true && a.actionIntent != null
+                }
+                addEntry(NotificationEntry(
+                    packageName        = sbn.packageName,
+                    title              = title ?: "",
+                    text               = text  ?: "",
+                    postedAt           = sbn.postTime,
+                    sbnKey             = sbn.key,
+                    replyPendingIntent = replyAction?.actionIntent,
+                    replyRemoteInputs  = replyAction?.remoteInputs?.toList() ?: emptyList(),
+                ))
+            }
+            Log.d(TAG, "Backfill complete — ${synchronized(lock) { buffer.size }} entries in buffer")
+        } catch (e: Exception) {
+            Log.w(TAG, "Backfill failed: ${e.message}")
+        }
     }
 
     override fun onListenerDisconnected() {
@@ -340,12 +371,20 @@ class JarvisNotificationListener : NotificationListenerService() {
         // Only buffer entries with at least a title or text body
         if (title.isNullOrEmpty() && text.isNullOrEmpty()) return
 
+        // Extract a reply action if present (WhatsApp, Messages, etc.)
+        val replyAction = sbn.notification?.actions?.firstOrNull { action ->
+            action.remoteInputs?.isNotEmpty() == true && action.actionIntent != null
+        }
+        val replyInputs = replyAction?.remoteInputs?.toList() ?: emptyList()
+
         val entry = NotificationEntry(
-            packageName = sbn.packageName,
-            title       = title ?: "",
-            text        = text  ?: "",
-            postedAt    = sbn.postTime,
-            sbnKey      = sbn.key
+            packageName        = sbn.packageName,
+            title              = title ?: "",
+            text               = text  ?: "",
+            postedAt           = sbn.postTime,
+            sbnKey             = sbn.key,
+            replyPendingIntent = replyAction?.actionIntent,
+            replyRemoteInputs  = replyInputs,
         )
 
         addEntry(entry)
@@ -381,16 +420,23 @@ class JarvisNotificationListener : NotificationListenerService() {
 /**
  * A single notification entry stored in the ring buffer.
  *
- * @param packageName  App package that posted the notification.
- * @param title        Notification title (may be empty).
- * @param text         Notification body text (may be empty).
- * @param postedAt     [System.currentTimeMillis] when the notification was posted.
- * @param sbnKey       Unique key from [StatusBarNotification.getKey] — used for removal.
+ * @param packageName        App package that posted the notification.
+ * @param title              Notification title (may be empty).
+ * @param text               Notification body text (may be empty).
+ * @param postedAt           [System.currentTimeMillis] when the notification was posted.
+ * @param sbnKey             Unique key from [StatusBarNotification.getKey] — used for removal.
+ * @param replyPendingIntent PendingIntent to fire when sending a voice reply (null if not replyable).
+ * @param replyRemoteInputs  RemoteInput array from the reply action — needed by addResultsToIntent.
  */
 data class NotificationEntry(
-    val packageName: String,
-    val title:       String,
-    val text:        String,
-    val postedAt:    Long,
-    val sbnKey:      String
-)
+    val packageName:        String,
+    val title:              String,
+    val text:               String,
+    val postedAt:           Long,
+    val sbnKey:             String,
+    val replyPendingIntent: android.app.PendingIntent? = null,
+    val replyRemoteInputs:  List<android.app.RemoteInput> = emptyList(),
+) {
+    /** True when this notification has a reply action that can be triggered programmatically. */
+    val canReply: Boolean get() = replyPendingIntent != null && replyRemoteInputs.isNotEmpty()
+}

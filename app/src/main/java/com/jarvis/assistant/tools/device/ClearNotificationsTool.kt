@@ -40,10 +40,7 @@ class ClearNotificationsTool(
     // enabled the NotificationListenerService.  Same pattern as ReadNotificationsTool.
     override val requiredPermissions: List<String> = emptyList()
 
-    // Clearing notifications is recoverable (the OS keeps no history once
-    // dismissed) but surprising to do accidentally — a misheard "clear
-    // the kitchen" should not wipe the lock-screen. Gate behind MEDIUM.
-    override val riskClass = com.jarvis.assistant.tools.framework.RiskClass.MEDIUM
+    override val riskClass = com.jarvis.assistant.tools.framework.RiskClass.LOW
 
     companion object {
         private const val TAG = "ClearNotificationsTool"

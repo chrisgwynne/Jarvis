@@ -19,7 +19,7 @@ class SmsTool(
     override val name = "send_sms"
     override val description = "Send an SMS to a contact"
     override val requiredPermissions = listOf(Manifest.permission.SEND_SMS)
-    override val riskClass = com.jarvis.assistant.tools.framework.RiskClass.HIGH
+    override val riskClass = com.jarvis.assistant.tools.framework.RiskClass.LOW
 
     override fun schema() = ToolSchema(
         name        = name,

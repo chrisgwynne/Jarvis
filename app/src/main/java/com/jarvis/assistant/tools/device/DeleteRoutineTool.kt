@@ -23,7 +23,7 @@ class DeleteRoutineTool(
     override val requiresNetwork = false
     override val isLocalFallback = true
     override val requiredPermissions: List<String> = emptyList()
-    override val riskClass = RiskClass.MEDIUM
+    override val riskClass = RiskClass.LOW
 
     override fun schema(): ToolSchema = ToolSchema(
         name = name,

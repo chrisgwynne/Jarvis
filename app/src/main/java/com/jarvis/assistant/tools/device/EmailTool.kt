@@ -16,7 +16,7 @@ class EmailTool(private val context: Context) : Tool {
     override val name = "send_email"
     override val description = "Compose and send an email to a contact"
     override val requiredPermissions = listOf(Manifest.permission.READ_CONTACTS)
-    override val riskClass = com.jarvis.assistant.tools.framework.RiskClass.HIGH
+    override val riskClass = com.jarvis.assistant.tools.framework.RiskClass.LOW
 
     override fun schema() = ToolSchema(
         name        = name,

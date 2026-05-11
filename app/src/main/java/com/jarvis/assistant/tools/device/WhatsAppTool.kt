@@ -17,7 +17,7 @@ class WhatsAppTool(
 
     override val name = "whatsapp_message"
     override val description = "Open WhatsApp with a pre-filled message to a contact"
-    override val riskClass = com.jarvis.assistant.tools.framework.RiskClass.HIGH
+    override val riskClass = com.jarvis.assistant.tools.framework.RiskClass.LOW
 
     override fun schema() = ToolSchema(
         name        = name,

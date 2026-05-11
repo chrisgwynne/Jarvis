@@ -35,25 +35,24 @@ class OpenClawRouter(
 
         private val SENTENCE_BOUNDARY = Regex("""[.!?]\s""")
 
-        // Patterns that force LOCAL_FAST — keep on device
+        // Patterns that stay LOCAL — instant social responses where OpenClaw adds no value.
+        // NOTE: device/action commands (set, open, timer, alarm, etc.) are intentionally
+        // absent — tool matching runs before this router fires, so those never reach here.
         private val LOCAL_PATTERNS = listOf(
-            Regex("""^(?:what(?:'s| is) (?:the )?(?:time|date|day)|what day is it)\b""", RegexOption.IGNORE_CASE),
-            Regex("""^(?:how are you|what(?:'s| are) you|are you|do you|can you|tell me about yourself)\b""", RegexOption.IGNORE_CASE),
-            Regex("""^(?:hi|hello|hey|thanks|thank you|cheers|ok|okay|yes|no|sure|never mind|forget it)\b""", RegexOption.IGNORE_CASE),
-            Regex("""^(?:what is \d|calculate|how much is \d|\d+\s*[+\-*/]\s*\d)""", RegexOption.IGNORE_CASE),
-            Regex("""^(?:set|turn|switch|enable|disable|open|close|start|stop|play|pause|resume|cancel)\b""", RegexOption.IGNORE_CASE),
-            Regex("""(?:alarm|timer|reminder|note|call|text|message|photo|selfie|record)\b""", RegexOption.IGNORE_CASE)
+            // Social acknowledgements and confirmations — zero-latency responses expected
+            Regex("""^(?:hi|hello|hey|thanks|thank you|cheers|ok|okay|yes|no|sure|yep|nope|never mind|forget it|got it)\b""", RegexOption.IGNORE_CASE),
+            // Questions about Jarvis itself — answered by the local personality/prompt
+            Regex("""^(?:how are you|what(?:'s| are) you|are you|who are you|tell me about yourself)\b""", RegexOption.IGNORE_CASE),
         )
 
-        // Patterns that classify as REMOTE_LONG — long-running research/generation tasks
+        // Patterns that warrant an acknowledgement before the response arrives.
+        // Everything else that isn't LOCAL goes to OpenClaw as REMOTE_FAST.
         private val LONG_PATTERNS = listOf(
             Regex("""^(?:write|draft|compose|create)\s+(?:me\s+)?(?:a|an|the)\s+\w""", RegexOption.IGNORE_CASE),
             Regex("""^(?:explain|describe|summarise|summarize)\s+(?:in detail|everything|how|why|what)\b""", RegexOption.IGNORE_CASE),
             Regex("""^(?:find out|research|look into|investigate|analyse|analyze)\b""", RegexOption.IGNORE_CASE),
             Regex("""^(?:plan|outline|generate|build me|give me a list of|list all)\b""", RegexOption.IGNORE_CASE),
             Regex("""^(?:what(?:'s| is) the (?:best|difference|meaning|history|background))\b""", RegexOption.IGNORE_CASE),
-            // Queries referencing personal/stored knowledge — local LLM can't answer these.
-            // "what's in my wiki", "check the wiki", "my notes on X", "search my docs"
             Regex("""(?:my|the)\s+wiki\b""", RegexOption.IGNORE_CASE),
             Regex("""(?:in|on|from|about|check|search)\s+my\s+(?:notes?|knowledge\s*base|docs?|documents?|files?|obsidian|notion|confluence)\b""", RegexOption.IGNORE_CASE),
         )

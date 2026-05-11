@@ -68,26 +68,33 @@ class OpenClawRouter(
     /**
      * Classify a transcript into a [RouteType].
      *
-     * Checks in order: keyword → LOCAL_FAST patterns → LONG_PATTERNS → default LOCAL_FAST.
+     * Checks in order: keyword → LOCAL_FAST patterns → LONG_PATTERNS → default REMOTE_FAST.
+     *
+     * When OpenClaw is configured it is the default destination for any query that
+     * isn't trivially local (greetings, device actions, simple maths).  The local
+     * LLM is a fallback — used only when OpenClaw is unavailable or times out.
+     * The keyword is an escape hatch that forces OpenClaw even for LOCAL_FAST items.
      */
     fun classify(transcript: String): RouteType {
         val t      = transcript.trim()
         val kw     = settingsRepo.snapshot().keyword.trim().lowercase()
 
-        // 1. Explicit keyword → always REMOTE
+        // 1. Explicit keyword → always REMOTE (overrides even LOCAL_FAST patterns)
         if (kw.isNotBlank() && t.lowercase().startsWith(kw)) {
             return if (LONG_PATTERNS.any { it.containsMatchIn(t) }) RouteType.REMOTE_LONG
                    else RouteType.REMOTE_FAST
         }
 
-        // 2. LOCAL_FAST patterns → stay on device
+        // 2. LOCAL_FAST patterns → keep on device (tools, greetings, trivial responses)
         if (LOCAL_PATTERNS.any { it.containsMatchIn(t) }) return RouteType.LOCAL_FAST
 
-        // 3. Auto-classify clearly complex queries → REMOTE_LONG
+        // 3. Long/complex queries → acknowledge before waiting for the response
         if (LONG_PATTERNS.any { it.containsMatchIn(t) }) return RouteType.REMOTE_LONG
 
-        // 4. Default → stay local (do not silently intercept all queries)
-        return RouteType.LOCAL_FAST
+        // 4. Default → OpenClaw. Anything that isn't trivially local benefits from
+        //    the richer model and live knowledge. Falls through to local LLM silently
+        //    if OpenClaw is offline or times out.
+        return RouteType.REMOTE_FAST
     }
 
     /**

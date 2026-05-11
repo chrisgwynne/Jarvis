@@ -53,8 +53,10 @@ class TtsProactiveDispatcher(
                     } finally {
                         JarvisService.restoreWake(context)
                     }
-                } else {
-                    // Voice off — fall back to a notification so the message is not lost
+                } else if (action.sourceType != ProactiveEventType.UNREAD_NOTIFICATION) {
+                    // Voice off — fall back to a notification so the message is not lost.
+                    // Skip for phone notifications: the original app notification is already
+                    // in the shade, posting a Jarvis copy would just duplicate it.
                     Log.d(TAG, "Voice disabled — posting notification for SpeakAction")
                     JarvisNotificationHelper.postProactiveAlert(
                         context = context,

@@ -92,8 +92,24 @@ class ToolDispatcher(
         data class AugmentedLlm(val augmentedTranscript: String, val hints: BrainHints?) : DispatchResult()
         /** Tool ran OK but needs an LLM follow-up for the spoken response. */
         data class LlmFollowUp(val spokenFeedback: String, val hints: BrainHints?) : DispatchResult()
-        /** Execution failed — caller speaks the failure message then resumes. */
-        data class Failed(val message: String) : DispatchResult()
+        /**
+         * Execution failed — caller speaks the failure message then resumes.
+         *
+         * [hints] carries the tool name + parsed input so the caller can do
+         * smart things on top of a generic "failure".  In particular, the
+         * messaging tools return `ToolResult.Failure(spokenFeedback=
+         * "What should the X to Y say?")` when the body slot is empty;
+         * JarvisRuntime uses [hints] to recognise that path and park a
+         * [com.jarvis.assistant.tools.device.messaging.PendingMessageIntent]
+         * so the user's NEXT utterance ("Hello") becomes the body instead
+         * of being routed as a fresh small-talk turn.  Without [hints] the
+         * caller couldn't tell a "body missing" failure apart from any
+         * other tool error.
+         */
+        data class Failed(
+            val message: String,
+            val hints: BrainHints? = null,
+        ) : DispatchResult()
         /**
          * Tool is risk-gated. Caller MUST speak [prompt] and transition
          * back to listening so the user's next utterance reaches the
@@ -278,7 +294,7 @@ class ToolDispatcher(
             is ToolResult.Augmented ->
                 DispatchResult.AugmentedLlm(augmentedTranscript = result.augmentedTranscript, hints = hints)
             is ToolResult.Failure ->
-                DispatchResult.Failed(result.spokenFeedback)
+                DispatchResult.Failed(result.spokenFeedback, hints = hints)
             else ->
                 DispatchResult.Done(spokenFeedback = "", hints = null)
         }

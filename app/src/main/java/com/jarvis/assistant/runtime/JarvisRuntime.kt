@@ -3032,6 +3032,41 @@ class JarvisRuntime(
                                 continue
                             }
                             is ToolDispatcher.DispatchResult.Failed -> {
+                                // ── Messaging body/recipient clarify intercept ────
+                                // When a messaging tool returns Failure because a
+                                // slot is missing ("What should the WhatsApp to
+                                // Mike say?"), the tool already knew the channel
+                                // + (often) the recipient.  Without parking a
+                                // PendingMessageIntent here, the user's NEXT
+                                // utterance ("Hello") gets routed as fresh
+                                // small-talk and the LLM happily replies "Hey"
+                                // — the WhatsApp never sends.
+                                //
+                                // Fix: detect the messaging-clarify shape from
+                                // the failed hints, park a PendingMessageIntent
+                                // pre-filled with whatever the tool already
+                                // parsed, then speak the same prompt the tool
+                                // returned.  The next turn's pending-intent
+                                // intercept (above startCallEventCollection)
+                                // picks it up and merges the body in.
+                                val toolName = r.hints?.toolName
+                                if (toolName == "whatsapp_message" || toolName == "send_sms") {
+                                    val channel = if (toolName == "whatsapp_message")
+                                        com.jarvis.assistant.tools.device.MessageIntentParser.Channel.WHATSAPP
+                                    else
+                                        com.jarvis.assistant.tools.device.MessageIntentParser.Channel.SMS
+                                    val knownRecipient = r.hints?.input?.param("name").orEmpty()
+                                    val knownBody      = r.hints?.input?.param("message").orEmpty()
+                                    pendingMessageIntent = com.jarvis.assistant.tools.device.messaging
+                                        .PendingMessageIntent.create(
+                                            channel   = channel,
+                                            recipient = knownRecipient,
+                                            body      = knownBody,
+                                        )
+                                    Log.d(TAG, "[MSG_PENDING_PARKED] reason=tool_failure " +
+                                        "channel=$channel recipient=\"$knownRecipient\" " +
+                                        "body_blank=${knownBody.isBlank()} ttl_ms=20000")
+                                }
                                 speakAndRecord(r.message)
                                 machine.transition(JarvisState.Listening)
                                 syncState(JarvisState.Listening)

@@ -154,6 +154,45 @@ class PromptAssembler(
         recentFactFragment: String = "",
     ): String = buildString {
 
+        // ── Personality injection ────────────────────────────────────────
+        // Markdown files under assets/personality/ describe Jarvis's
+        // voice in user-tunable detail.  When personality is enabled +
+        // applyToLlmAnswers is on, the LLM_CHAT section bundle is
+        // prepended ahead of the hard-coded identity block below.
+        //
+        // The injection is gated on the JarvisApp singleton being
+        // initialised so tests that build a PromptAssembler in
+        // isolation (no Application) still work.
+        try {
+            // The companion lateinits throw UninitializedPropertyAccessException
+            // if accessed before JarvisApp.onCreate (e.g. in some test
+            // contexts).  Catching that is sufficient — no reflection
+            // gymnastics needed.
+            val s = com.jarvis.assistant.JarvisApp.personalitySettings.snapshot()
+            if (s.enabled && s.applyToLlmAnswers) {
+                val ctx = com.jarvis.assistant.JarvisApp.personalityLoader.load()
+                val selector = com.jarvis.assistant.personality.PersonalityPromptSelector(
+                    context  = ctx,
+                    settings = { s },
+                )
+                val serious = s.seriousModeAutoDetectEnabled &&
+                    com.jarvis.assistant.personality.SeriousModeDetector.isSerious(null)
+                val block = selector.promptFor(
+                    com.jarvis.assistant.personality.InteractionType.LLM_CHAT,
+                    serious = serious,
+                )
+                if (block.isNotBlank()) {
+                    append("PERSONALITY\n")
+                    append(block)
+                    append("\n\n")
+                }
+            }
+        } catch (_: Throwable) {
+            // Personality injection is best-effort.  Any init failure
+            // must NOT take down the LLM call — fall back to the
+            // existing hard-coded prompt below.
+        }
+
         append("""
 You are Jarvis. You are not a generic assistant. You are someone in the conversation.
 Every response should feel like a quick, natural reply — not a system output.

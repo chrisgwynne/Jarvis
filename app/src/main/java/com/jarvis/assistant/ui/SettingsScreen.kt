@@ -17,6 +17,7 @@ import com.jarvis.assistant.ui.settings.screens.HomeAssistantSettingsScreen
 import com.jarvis.assistant.ui.settings.screens.MemorySettingsScreen
 import com.jarvis.assistant.ui.settings.screens.NotificationsSettingsScreen
 import com.jarvis.assistant.ui.settings.screens.PrivacySettingsScreen
+import com.jarvis.assistant.ui.settings.screens.PersonalitySettingsScreen
 import com.jarvis.assistant.ui.settings.screens.ProactivitySettingsScreen
 import com.jarvis.assistant.ui.settings.screens.VoiceSettingsScreen
 
@@ -60,6 +61,9 @@ fun SettingsScreen(
         }
         composable(SettingsCategory.Proactivity.route) {
             ProactivitySettingsScreen(onBack = popToRoot, onClose = onBack)
+        }
+        composable(SettingsCategory.Personality.route) {
+            PersonalitySettingsScreen(onBack = popToRoot, onClose = onBack)
         }
         composable(SettingsCategory.Todoist.route) {
             com.jarvis.assistant.ui.settings.screens.TodoistSettingsScreen(

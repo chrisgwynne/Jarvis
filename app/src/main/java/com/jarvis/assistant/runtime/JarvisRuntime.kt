@@ -1156,108 +1156,54 @@ class JarvisRuntime(
         }
     }
 
+    // ── TtsResponseController delegation ──────────────────────────────
+    // Diagnostics + sample-voice TTS extracted to a focused controller
+    // (see runtime/controllers/TtsResponseController.kt and
+    // docs/architecture/runtime-split.md).  JarvisRuntime keeps the
+    // public methods as a façade so every existing call site
+    // (Settings UI, ViewModel, service) is untouched.  Lazy because
+    // `scope` is a `private val`; the controller can be instantiated
+    // at first access without ordering games.
+    private val ttsResponseController by lazy {
+        com.jarvis.assistant.runtime.controllers.TtsResponseController(
+            ttsEngine    = ttsEngine,
+            settings     = settings,
+            scope        = scope,
+            applyVoice   = ::applyVoice,
+            suppressWake = ::suppressWakeDetection,
+            restoreWake  = ::restoreWakeDetection,
+        )
+    }
+
     /**
      * Switch to [voiceName] and speak a short test phrase so the user can audition it.
      * Suppresses and restores wake detection automatically.
+     *
+     * Delegates to [TtsResponseController.testSpeak].
      */
-    fun testSpeak(voiceName: String) {
-        applyVoice(voiceName)
-        scope.launch {
-            suppressWakeDetection()
-            try {
-                ttsEngine.speak("Hi, I'm Jarvis. This is how I sound.")
-            } finally {
-                restoreWakeDetection()
-            }
-        }
-    }
+    fun testSpeak(voiceName: String) = ttsResponseController.testSpeak(voiceName)
 
     /**
-     * Proactivity diagnostics — speak a fixed sample line *immediately* and
-     * bypass every Proactivity gate (master switch / quiet hours /
-     * interruption mode / category / cooldown).
+     * Dispatch a synthetic SpeakAction through the live ProactivityGate
+     * and report back which gate verdict (Allow / Downgrade / Suppress)
+     * would fire right now.  Drives the Settings "Test normal
+     * proactivity decision" button.
      *
-     * This is the production behaviour of the Settings "Test spoken message"
-     * button: the user is sitting in Settings, has just tapped Speak, and
-     * needs to verify the TTS path is alive end-to-end.  Funnelling this
-     * through the gate would be hostile — the whole point is to prove TTS
-     * works even when something further upstream would have muted normal
-     * proactive output.
-     *
-     * Returns once the TTS utterance is queued (it's fire-and-forget on
-     * the runtime scope so the UI never blocks).  [onResult] is invoked on
-     * an arbitrary dispatcher with either `null` (success) or a short
-     * human-friendly reason string when speech could not happen.
-     *
-     * Log markers:
-     *   [PROACTIVITY_TEST_SPEAK_REQUESTED]
-     *   [PROACTIVITY_TEST_SPEAK_BYPASS_GATE]
-     *   [PROACTIVITY_TEST_SPEAK_SUCCESS]
-     *   [PROACTIVITY_TEST_SPEAK_FAILED] reason=...
+     * Delegates to [TtsResponseController.dispatchProactivityGateTest].
      */
-    /**
-     * Dispatch a synthetic [ProactiveAction.SpeakAction] through the live
-     * [ProactivityGate] and report back what the gate decided.  Used by
-     * the Settings "Test normal proactivity decision" button so the user
-     * can see *which* gate (master / quiet / mode / cooldown) is the
-     * reason normal proactive output isn't being spoken.
-     */
-    fun dispatchProactivityGateTest(onResult: (String) -> Unit) {
-        scope.launch {
-            try {
-                val action = com.jarvis.assistant.proactive.ProactiveAction.SpeakAction(
-                    text       = "Proactivity gate test.",
-                    dedupeKey  = "diagnostics:gate_test:${System.currentTimeMillis()}",
-                    sourceType = com.jarvis.assistant.proactive.ProactiveEventType.BEHAVIORAL_LEARNING,
-                )
-                val gate = com.jarvis.assistant.proactive.settings.ProactivityGate(
-                    settingsProvider = { JarvisApp.proactivitySettings.snapshot() },
-                )
-                val verdict = gate.evaluate(action, lastUserInteractionMs = System.currentTimeMillis())
-                val human = when (verdict) {
-                    is com.jarvis.assistant.proactive.settings.ProactivityGate.Verdict.Allow ->
-                        "Would speak now (gate=Allow)."
-                    is com.jarvis.assistant.proactive.settings.ProactivityGate.Verdict.Downgrade ->
-                        "Would notify, not speak (gate=Downgrade, reason=${verdict.reason})."
-                    is com.jarvis.assistant.proactive.settings.ProactivityGate.Verdict.Suppress ->
-                        "Suppressed entirely (reason=${verdict.reason})."
-                }
-                Log.d(TAG, "[PROACTIVITY_TEST_GATE_VERDICT] $human")
-                onResult(human)
-            } catch (e: Throwable) {
-                Log.e(TAG, "Gate test failed", e)
-                onResult("Gate test failed: ${e.message ?: e::class.simpleName}")
-            }
-        }
-    }
+    fun dispatchProactivityGateTest(onResult: (String) -> Unit) =
+        ttsResponseController.dispatchProactivityGateTest(onResult)
 
+    /**
+     * Speak a fixed sample line immediately, bypassing every Proactivity
+     * gate.  Drives the Settings "Test spoken message now" button.
+     *
+     * Delegates to [TtsResponseController.speakProactivityTest].
+     */
     fun speakProactivityTest(
         text: String = "Proactivity test — if you can hear this, voice output is working.",
         onResult: (failureReason: String?) -> Unit = {},
-    ) {
-        Log.d(TAG, "[PROACTIVITY_TEST_SPEAK_REQUESTED] text=\"$text\"")
-        Log.d(TAG, "[PROACTIVITY_TEST_SPEAK_BYPASS_GATE] reason=user_diagnostics_button")
-        scope.launch {
-            try {
-                if (!settings.voiceResponse) {
-                    val reason = "Voice response is disabled in Settings — turn it on first."
-                    Log.w(TAG, "[PROACTIVITY_TEST_SPEAK_FAILED] reason=voice_disabled")
-                    onResult(reason); return@launch
-                }
-                suppressWakeDetection()
-                try {
-                    ttsEngine.speak(text)
-                    Log.d(TAG, "[PROACTIVITY_TEST_SPEAK_SUCCESS]")
-                    onResult(null)
-                } finally {
-                    restoreWakeDetection()
-                }
-            } catch (e: Throwable) {
-                Log.e(TAG, "[PROACTIVITY_TEST_SPEAK_FAILED] reason=exception:${e.message}", e)
-                onResult("TTS error — ${e.message ?: e::class.simpleName}")
-            }
-        }
-    }
+    ) = ttsResponseController.speakProactivityTest(text, onResult)
 
     /**
      * Temporarily stop the wake-word detector.

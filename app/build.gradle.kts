@@ -167,3 +167,25 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.core)
 }
+
+/**
+ * Architecture invariants — runs the pure-JVM source scanner under
+ * `ArchitectureInvariantsTest`.  See
+ * `docs/architecture/routing-invariants.md` for the rules and
+ * `app/src/test/java/com/jarvis/assistant/architecture/` for the
+ * enforcement code.
+ *
+ * Wired to `check` so a normal CI run picks it up too.  Run on its
+ * own with:
+ *   ./gradlew :app:checkArchitectureInvariants
+ */
+tasks.register("checkArchitectureInvariants") {
+    group       = "verification"
+    description = "Enforce routing + extraction invariants (see docs/architecture/routing-invariants.md)."
+    dependsOn(tasks.named("testDebugUnitTest"))
+    doLast {
+        logger.lifecycle("✓ Architecture invariants verified — see ArchitectureInvariantsTest.")
+    }
+}
+
+tasks.named("check") { dependsOn("checkArchitectureInvariants") }

@@ -124,8 +124,31 @@ class AppResolver(
             "dialer"    to { Intent(Intent.ACTION_DIAL) },
             "browser"   to { Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.google.com")) },
             "messages"  to { Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_MESSAGING) } },
-            "contacts"  to { Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_CONTACTS) } }
+            "contacts"  to { Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_CONTACTS) } },
+            // Gallery / Photos — opens whichever gallery app the device
+            // has registered as the default handler for image/* viewing.
+            // On a Samsung phone this is Samsung Gallery; on a Pixel
+            // it's Google Photos; on stock AOSP it's the system gallery.
+            // The previous code hardcoded `com.google.android.apps.photos`
+            // and failed terminally when that package wasn't installed
+            // (Samsung devices ship without Google Photos by default).
+            "gallery"   to { galleryIntent() },
+            "pictures"  to { galleryIntent() },
+            // "photos" is also in BUILT_IN_ALIASES pointing at Google
+            // Photos, but if that package isn't installed (Samsung,
+            // most non-Pixel OEM ROMs) the alias check falls through.
+            // Having a category fallback here lets "open photos" hit
+            // whatever image-viewer the device actually has.
+            "photos"    to { galleryIntent() }
         )
+
+        private fun galleryIntent(): Intent =
+            Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(
+                    android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    "image/*",
+                )
+            }
     }
 
     /** Resolution outcome returned by [resolve]. */

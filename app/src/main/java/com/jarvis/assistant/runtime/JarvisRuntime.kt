@@ -1984,6 +1984,42 @@ class JarvisRuntime(
                         }
                     }
 
+                    // ── Todoist complete-bulk / by-name intercept ─────────────
+                    // "complete those tasks", "mark today's tasks done",
+                    // "complete pick up Mike".  Runs BEFORE the fresh-
+                    // reminder path because "complete X" can otherwise
+                    // be mis-parsed as a task-create intent.  The router
+                    // refuses ambiguous by-name matches and returns
+                    // NotApplicable for "complete that" (which the
+                    // existing handleEdit path owns via recentTaskContext).
+                    run {
+                        val lower = transcript.lowercase()
+                        val verbHit = Regex(
+                            """^(?:please\s+)?(?:complete|mark|tick|cross\s+off|finish|close)\b""",
+                            RegexOption.IGNORE_CASE,
+                        ).containsMatchIn(lower)
+                        if (verbHit) {
+                            val bulkAction = todoistReminderRouter.handleCompleteRequest(transcript)
+                            when (bulkAction) {
+                                is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.Speak -> {
+                                    Log.d(TAG, "[TODOIST_COMPLETE_DISPATCHED]")
+                                    speechStateSource.recordUserInteraction()
+                                    DeviceStateStore.update { copy(lastUserUtterance = transcript) }
+                                    scope.launch(Dispatchers.IO) {
+                                        memoryWriter.writeTurn(sessionId, "user", transcript)
+                                    }
+                                    speakAndRecord(bulkAction.text)
+                                    machine.transition(JarvisState.Listening)
+                                    syncState(JarvisState.Listening)
+                                    continue
+                                }
+                                is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.NotApplicable,
+                                is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.ParkPending ->
+                                    Unit  // fall through
+                            }
+                        }
+                    }
+
                     // ── Todoist list-query intercept ─────────────────────────
                     // "what are my tasks", "show my todoist", "what's
                     // overdue", "today's tasks" — strictly read-only,
@@ -2055,7 +2091,52 @@ class JarvisRuntime(
                             }
                             is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.NotApplicable -> {
                                 // looksLikeReminderCommand triggered but the
-                                // strict parser declined — fall through.
+                                // strict parser declined.  The user said
+                                // a Todoist verb ("create a task", "add a
+                                // todo", "remind me") but no content.
+                                // Park a content-awaiting PendingTodoistTask
+                                // so the NEXT utterance becomes the task
+                                // content — without this fix the transcript
+                                // fell through to OpenClaw and triggered
+                                // [INVALID_REMOTE_ROUTE] (auto-issue #36).
+                                //
+                                // Detect the verb-only shape narrowly: the
+                                // transcript looks like a reminder command
+                                // AND is short enough that there's no body
+                                // (≤ 6 tokens).  Longer rejections genuinely
+                                // are not Todoist intents (e.g. "what time
+                                // is the task due tomorrow").
+                                val tokenCount = transcript.trim().split(Regex("\\s+")).size
+                                if (tokenCount <= 6) {
+                                    val isTaskVerb = Regex(
+                                        """\b(?:add|create|make|new)\s+(?:a|the|an)?\s*(?:task|todo|to-?do)\b|^\s*todo\b""",
+                                        RegexOption.IGNORE_CASE,
+                                    ).containsMatchIn(transcript)
+                                    val kind = if (isTaskVerb)
+                                        com.jarvis.assistant.todoist.parse.ReminderIntentParser.Kind.TASK
+                                    else
+                                        com.jarvis.assistant.todoist.parse.ReminderIntentParser.Kind.REMINDER
+                                    val nowMs = System.currentTimeMillis()
+                                    pendingTodoistTask = com.jarvis.assistant.todoist.PendingTodoistTask(
+                                        kind = kind,
+                                        content = "",
+                                        awaitingSlot = com.jarvis.assistant.todoist.PendingTodoistTask
+                                            .AwaitingSlot.CONTENT,
+                                        createdMs = nowMs,
+                                        expiresAtMs = nowMs +
+                                            com.jarvis.assistant.todoist.PendingTodoistTask.TTL_MS,
+                                    )
+                                    val prompt = if (isTaskVerb)
+                                        "What's the task?"
+                                    else
+                                        "What should I remind you about?"
+                                    Log.d(TAG, "[TODOIST_PENDING_PARKED] reason=missing_content " +
+                                        "kind=$kind ttl_ms=${com.jarvis.assistant.todoist.PendingTodoistTask.TTL_MS}")
+                                    speakAndRecord(prompt)
+                                    machine.transition(JarvisState.Listening)
+                                    syncState(JarvisState.Listening)
+                                    continue
+                                }
                                 Log.d(TAG, "[TODOIST_FALLTHROUGH] " +
                                     "looksLike=true but parser rejected — escalating")
                             }
@@ -3032,6 +3113,41 @@ class JarvisRuntime(
                                 continue
                             }
                             is ToolDispatcher.DispatchResult.Failed -> {
+                                // ── Messaging body/recipient clarify intercept ────
+                                // When a messaging tool returns Failure because a
+                                // slot is missing ("What should the WhatsApp to
+                                // Mike say?"), the tool already knew the channel
+                                // + (often) the recipient.  Without parking a
+                                // PendingMessageIntent here, the user's NEXT
+                                // utterance ("Hello") gets routed as fresh
+                                // small-talk and the LLM happily replies "Hey"
+                                // — the WhatsApp never sends.
+                                //
+                                // Fix: detect the messaging-clarify shape from
+                                // the failed hints, park a PendingMessageIntent
+                                // pre-filled with whatever the tool already
+                                // parsed, then speak the same prompt the tool
+                                // returned.  The next turn's pending-intent
+                                // intercept (above startCallEventCollection)
+                                // picks it up and merges the body in.
+                                val toolName = r.hints?.toolName
+                                if (toolName == "whatsapp_message" || toolName == "send_sms") {
+                                    val channel = if (toolName == "whatsapp_message")
+                                        com.jarvis.assistant.tools.device.MessageIntentParser.Channel.WHATSAPP
+                                    else
+                                        com.jarvis.assistant.tools.device.MessageIntentParser.Channel.SMS
+                                    val knownRecipient = r.hints?.input?.param("name").orEmpty()
+                                    val knownBody      = r.hints?.input?.param("message").orEmpty()
+                                    pendingMessageIntent = com.jarvis.assistant.tools.device.messaging
+                                        .PendingMessageIntent.create(
+                                            channel   = channel,
+                                            recipient = knownRecipient,
+                                            body      = knownBody,
+                                        )
+                                    Log.d(TAG, "[MSG_PENDING_PARKED] reason=tool_failure " +
+                                        "channel=$channel recipient=\"$knownRecipient\" " +
+                                        "body_blank=${knownBody.isBlank()} ttl_ms=20000")
+                                }
                                 speakAndRecord(r.message)
                                 machine.transition(JarvisState.Listening)
                                 syncState(JarvisState.Listening)

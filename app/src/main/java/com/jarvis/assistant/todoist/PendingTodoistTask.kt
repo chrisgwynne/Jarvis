@@ -27,7 +27,18 @@ data class PendingTodoistTask(
     val createdMs: Long,
     val expiresAtMs: Long,
 ) {
-    enum class AwaitingSlot { TIME, LABEL, PROJECT, RECURRENCE, NONE }
+    enum class AwaitingSlot {
+        TIME, LABEL, PROJECT, RECURRENCE,
+        /**
+         * The user said the verb (e.g. "create a task") but no content —
+         * we're waiting for the next utterance to BE the content.  Used
+         * to plug the `[INVALID_REMOTE_ROUTE]` regression where bare
+         * "Create a task" / "Add a todo" fell through to OpenClaw because
+         * the strict parser rejects an empty content.
+         */
+        CONTENT,
+        NONE
+    }
 
     companion object {
         /** 60 s window — long enough for a natural follow-up, short

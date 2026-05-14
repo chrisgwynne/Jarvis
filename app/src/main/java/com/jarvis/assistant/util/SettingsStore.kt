@@ -164,6 +164,20 @@ class SettingsStore(context: Context) {
         const val KEY_SCHED_REMINDERS_NOTIFY_FALLBACK= "sched_reminders_notify_fallback"
         const val KEY_SCHED_REMINDERS_BG_SPEECH      = "sched_reminders_background_speech"
 
+        // ── Personality ───────────────────────────────────────────────────
+        // Markdown personality files under assets/personality/ are the
+        // *content*; these flags are the *policy* knobs the user adjusts
+        // in Settings.  Defaults mirror PersonalitySettings.DEFAULT.
+        const val KEY_PERSONALITY_ENABLED                = "personality_enabled"
+        const val KEY_PERSONALITY_SARCASM_LEVEL          = "personality_sarcasm_level"
+        const val KEY_PERSONALITY_JOKE_FREQUENCY         = "personality_joke_frequency"
+        const val KEY_PERSONALITY_PUSHBACK_ENABLED       = "personality_pushback_enabled"
+        const val KEY_PERSONALITY_ROASTING_ENABLED       = "personality_roasting_enabled"
+        const val KEY_PERSONALITY_SERIOUS_AUTODETECT     = "personality_serious_autodetect"
+        const val KEY_PERSONALITY_APPLY_TO_PROACTIVE     = "personality_apply_proactive"
+        const val KEY_PERSONALITY_APPLY_TO_CONFIRMATIONS = "personality_apply_confirmations"
+        const val KEY_PERSONALITY_APPLY_TO_LLM           = "personality_apply_llm"
+
         // ── Todoist ────────────────────────────────────────────────────────
         const val KEY_TODOIST_ENABLED            = "todoist_enabled"
         const val KEY_TODOIST_API_TOKEN          = "todoist_api_token"
@@ -603,6 +617,48 @@ class SettingsStore(context: Context) {
     var schedRemindersBackgroundSpeech: Boolean
         get() = prefs.getBoolean(KEY_SCHED_REMINDERS_BG_SPEECH, false)
         set(v) = prefs.edit().putBoolean(KEY_SCHED_REMINDERS_BG_SPEECH, v).apply()
+
+    // ── Personality ────────────────────────────────────────────────────────
+
+    var personalityEnabled: Boolean
+        get() = prefs.getBoolean(KEY_PERSONALITY_ENABLED, true)
+        set(v) = prefs.edit().putBoolean(KEY_PERSONALITY_ENABLED, v).apply()
+
+    var personalitySarcasmLevel: com.jarvis.assistant.personality.SarcasmLevel
+        get() = prefs.getString(KEY_PERSONALITY_SARCASM_LEVEL, null)?.let {
+            runCatching { com.jarvis.assistant.personality.SarcasmLevel.valueOf(it) }.getOrNull()
+        } ?: com.jarvis.assistant.personality.SarcasmLevel.MEDIUM
+        set(v) = prefs.edit().putString(KEY_PERSONALITY_SARCASM_LEVEL, v.name).apply()
+
+    var personalityJokeFrequency: com.jarvis.assistant.personality.JokeFrequency
+        get() = prefs.getString(KEY_PERSONALITY_JOKE_FREQUENCY, null)?.let {
+            runCatching { com.jarvis.assistant.personality.JokeFrequency.valueOf(it) }.getOrNull()
+        } ?: com.jarvis.assistant.personality.JokeFrequency.SOMETIMES
+        set(v) = prefs.edit().putString(KEY_PERSONALITY_JOKE_FREQUENCY, v.name).apply()
+
+    var personalityPushbackEnabled: Boolean
+        get() = prefs.getBoolean(KEY_PERSONALITY_PUSHBACK_ENABLED, true)
+        set(v) = prefs.edit().putBoolean(KEY_PERSONALITY_PUSHBACK_ENABLED, v).apply()
+
+    var personalityFriendlyRoastingEnabled: Boolean
+        get() = prefs.getBoolean(KEY_PERSONALITY_ROASTING_ENABLED, true)
+        set(v) = prefs.edit().putBoolean(KEY_PERSONALITY_ROASTING_ENABLED, v).apply()
+
+    var personalitySeriousAutoDetectEnabled: Boolean
+        get() = prefs.getBoolean(KEY_PERSONALITY_SERIOUS_AUTODETECT, true)
+        set(v) = prefs.edit().putBoolean(KEY_PERSONALITY_SERIOUS_AUTODETECT, v).apply()
+
+    var personalityApplyToProactiveReminders: Boolean
+        get() = prefs.getBoolean(KEY_PERSONALITY_APPLY_TO_PROACTIVE, true)
+        set(v) = prefs.edit().putBoolean(KEY_PERSONALITY_APPLY_TO_PROACTIVE, v).apply()
+
+    var personalityApplyToLocalConfirmations: Boolean
+        get() = prefs.getBoolean(KEY_PERSONALITY_APPLY_TO_CONFIRMATIONS, true)
+        set(v) = prefs.edit().putBoolean(KEY_PERSONALITY_APPLY_TO_CONFIRMATIONS, v).apply()
+
+    var personalityApplyToLlmAnswers: Boolean
+        get() = prefs.getBoolean(KEY_PERSONALITY_APPLY_TO_LLM, true)
+        set(v) = prefs.edit().putBoolean(KEY_PERSONALITY_APPLY_TO_LLM, v).apply()
 
     // ── Todoist ────────────────────────────────────────────────────────────
     // The user's Todoist integration settings — backing

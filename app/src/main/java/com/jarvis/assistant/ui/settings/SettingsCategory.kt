@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.EmojiPeople
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Science
@@ -54,6 +55,12 @@ internal enum class SettingsCategory(
         description = "When Jarvis speaks up on its own",
         icon        = Icons.Filled.Bolt,
         route       = "settings/proactivity",
+    ),
+    Personality(
+        title       = "Personality",
+        description = "Sarcasm, humour, pushback, serious-mode auto-detect",
+        icon        = Icons.Filled.EmojiPeople,
+        route       = "settings/personality",
     ),
     Todoist(
         title       = "Todoist",

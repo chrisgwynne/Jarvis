@@ -62,6 +62,20 @@ class JarvisApp : Application() {
         lateinit var scheduledReminderSettings
             : com.jarvis.assistant.proactive.scheduled.ScheduledReminderSettingsRepository
             private set
+
+        /**
+         * Personality — markdown files under assets/personality/ plus
+         * the user-visible policy flags.  Read by PromptAssembler (for
+         * LLM chat) and the local response template engine.
+         */
+        @Volatile
+        lateinit var personalitySettings
+            : com.jarvis.assistant.personality.PersonalitySettingsRepository
+            private set
+        @Volatile
+        lateinit var personalityLoader
+            : com.jarvis.assistant.personality.PersonalityProfileLoader
+            private set
     }
 
     override fun onCreate() {
@@ -89,6 +103,14 @@ class JarvisApp : Application() {
             .ScheduledReminderSettingsRepository(
                 com.jarvis.assistant.util.SettingsStore(this)
             )
+        personalitySettings = com.jarvis.assistant.personality
+            .PersonalitySettingsRepository(
+                com.jarvis.assistant.util.SettingsStore(this)
+            )
+        personalityLoader = com.jarvis.assistant.personality
+            .PersonalityProfileLoader(this)
+        // Eager load so the first LLM request doesn't pay the asset I/O.
+        personalityLoader.load()
         createNotificationChannel()
         // Install the GitHub issue reporter FIRST so it wraps the thread
         // default uncaught-exception handler before any other subsystem has a

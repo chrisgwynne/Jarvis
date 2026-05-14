@@ -248,6 +248,145 @@ class TodoistReminderRouter(
      * OpenClaw / LLM.  Settings checks mirror handleFresh — disabled
      * integration + missing token produce friendly hints.
      */
+    /**
+     * Bulk / by-name task completion.
+     *
+     * Triggers:
+     *   - "complete (all|those|the) (today's)? tasks" → mark every task
+     *     in today's filter as done (returns count in spoken reply).
+     *   - "complete (today's )? tasks" / "tick off everything for today" → same.
+     *   - "mark X as done" / "complete X" where X is task-content text →
+     *     fuzzy-match X against today's active tasks and complete the
+     *     single best match.  Refuses ambiguous matches.
+     *
+     * Strictly local — only calls TodoistClient methods.
+     *
+     * Returns [RouterAction.NotApplicable] when the utterance doesn't
+     * match either shape so the runtime falls through to the existing
+     * edit / fresh paths cleanly.
+     */
+    suspend fun handleCompleteRequest(transcript: String): RouterAction {
+        val t = transcript.lowercase().trim()
+
+        val bulkRx = Regex(
+            """^(?:please\s+)?
+               (?:complete|mark|tick(?:\s+off)?|cross\s+off|finish|close)\s+
+               (?:(?:all|those|these|the|my|today'?s|today)\s+){0,3}
+               (?:tasks?|todos?|reminders?|to-?dos?|everything|the\s+list)
+               (?:\s+for\s+today)?
+               (?:\s+as\s+(?:done|complete|finished|off))?
+               \s*[.?!]?\s*$""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.COMMENTS),
+        )
+        val byNameRx = Regex(
+            """^(?:please\s+)?
+               (?:complete|mark|tick(?:\s+off)?|cross\s+off|finish|close)\s+
+               (?:the\s+|my\s+)?
+               (.+?)
+               (?:\s+(?:as\s+(?:done|complete|finished)|task|todo|reminder|off))?
+               \s*[.?!]?\s*$""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.COMMENTS),
+        )
+
+        val isBulk = bulkRx.containsMatchIn(t)
+        // by-name only kicks in when bulk didn't AND the second-token
+        // isn't an anchor like "that" / "it" (which the existing
+        // ConversationalEditParser already handles).
+        if (!isBulk) {
+            val m = byNameRx.find(t) ?: return RouterAction.NotApplicable
+            val candidate = m.groupValues[1].trim()
+            if (candidate.isBlank() ||
+                candidate in setOf("that", "it", "this", "those", "them")
+            ) return RouterAction.NotApplicable
+            return completeByName(candidate)
+        }
+
+        val s = settingsProvider()
+        if (!s.enabled) {
+            return RouterAction.Speak(
+                "Turn on the Todoist integration in Settings — I'll close your tasks once you do."
+            )
+        }
+        if (s.apiToken.isBlank()) {
+            return RouterAction.Speak(
+                "I need your Todoist API token in Settings before I can close tasks."
+            )
+        }
+
+        val c = client()
+        Log.d(TAG, "[TODOIST_COMPLETE_BULK_BEGIN]")
+        val today = (c.getTodayTasks() as? TodoistClient.Result.Ok)?.value
+            ?: emptyList()
+        val pending = today.filter { !it.isCompleted }
+        if (pending.isEmpty()) {
+            return RouterAction.Speak("You're already clear for today.")
+        }
+        var done = 0
+        for (task in pending) {
+            val r = c.completeTask(task.id)
+            if (r is TodoistClient.Result.Ok) done++
+        }
+        Log.d(TAG, "[TODOIST_COMPLETE_BULK_DONE] requested=${pending.size} closed=$done")
+        recentTaskContext.clear()
+        val word = if (done == 1) "task" else "tasks"
+        return RouterAction.Speak(
+            when {
+                done == pending.size -> "Done — closed $done $word for today."
+                done > 0             -> "Closed $done of ${pending.size} $word — the rest didn't go through."
+                else                 -> "I couldn't close any of them — try again in a moment."
+            }
+        )
+    }
+
+    private suspend fun completeByName(spokenContent: String): RouterAction {
+        val s = settingsProvider()
+        if (!s.enabled || s.apiToken.isBlank()) {
+            return RouterAction.Speak("Turn on Todoist in Settings first.")
+        }
+        val c = client()
+        val today = (c.getTodayTasks() as? TodoistClient.Result.Ok)?.value
+            ?: return RouterAction.Speak("I couldn't read your task list.")
+        val pending = today.filter { !it.isCompleted }
+        if (pending.isEmpty()) {
+            return RouterAction.Speak("Nothing on today's list to close.")
+        }
+        // Score each task by simple lowercase substring overlap.  We
+        // want forgiving matching ("pick up Mike" matches "pick Mike
+        // up from school") but not silent false positives — require
+        // at least 2 shared tokens OR a strict substring containment.
+        val target = spokenContent.lowercase()
+        val targetTokens = target.split(Regex("\\s+")).filter { it.length > 2 }.toSet()
+        data class Scored(val task: TodoistTask, val score: Int)
+        val scored = pending.map { task ->
+            val content = task.content.lowercase()
+            val direct = if (target in content || content in target) 100 else 0
+            val tokenOverlap = targetTokens.count { it in content }
+            Scored(task, direct + tokenOverlap * 10)
+        }.filter { it.score > 0 }.sortedByDescending { it.score }
+
+        if (scored.isEmpty()) {
+            return RouterAction.Speak("I couldn't find a task matching that.")
+        }
+        if (scored.size > 1 && scored[0].score == scored[1].score) {
+            return RouterAction.Speak(
+                "More than one task matches — try saying the full title."
+            )
+        }
+        val pick = scored.first().task
+        Log.d(TAG, "[TODOIST_COMPLETE_BY_NAME] match=\"${pick.content}\" score=${scored.first().score}")
+        val result = c.completeTask(pick.id)
+        return when (result) {
+            is TodoistClient.Result.Ok -> {
+                recentTaskContext.clear()
+                RouterAction.Speak("Marked ${pick.content} as done.")
+            }
+            is TodoistClient.Result.Offline ->
+                RouterAction.Speak("Can't reach Todoist right now — try again in a sec.")
+            else ->
+                RouterAction.Speak("That didn't go through — Todoist rejected the request.")
+        }
+    }
+
     suspend fun handleListQuery(transcript: String): RouterAction {
         val query = com.jarvis.assistant.todoist.parse
             .TodoistListQueryParser.parse(transcript)
@@ -580,6 +719,30 @@ class TodoistReminderRouter(
                     labels = (pending.labels + followUp.trim()).distinct(),
                     expiresAtMs = now + PendingTodoistTask.TTL_MS,
                 )
+            }
+            PendingTodoistTask.AwaitingSlot.CONTENT -> {
+                // The whole follow-up IS the task content.  Re-run the
+                // parser on a synthesised "task <followUp>" so any date /
+                // time / label tokens land naturally.
+                val verb = when (pending.kind) {
+                    ReminderIntentParser.Kind.REMINDER -> "remind me to"
+                    ReminderIntentParser.Kind.TASK     -> "add a task"
+                }
+                val parsed = ReminderIntentParser.parse("$verb ${followUp.trim()}", now)
+                val merged = if (parsed != null) pending.copy(
+                    content     = parsed.content.ifBlank { followUp.trim() },
+                    date        = pending.date ?: parsed.date,
+                    time        = pending.time ?: parsed.time,
+                    recurrence  = pending.recurrence ?: parsed.recurrence,
+                    priority    = pending.priority ?: parsed.priority,
+                    projectHint = pending.projectHint ?: parsed.projectHint,
+                    labels      = (pending.labels + parsed.labels).distinct(),
+                    expiresAtMs = now + PendingTodoistTask.TTL_MS,
+                ) else pending.copy(
+                    content     = followUp.trim(),
+                    expiresAtMs = now + PendingTodoistTask.TTL_MS,
+                )
+                return merged
             }
             PendingTodoistTask.AwaitingSlot.RECURRENCE,
             PendingTodoistTask.AwaitingSlot.NONE -> return pending

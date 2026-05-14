@@ -20,6 +20,16 @@
         name="jarvis_recordings"
         path="recordings/" />
 
+    <!-- Camera output written by CameraFileStore.createImageFile to
+         filesDir/pictures/.  Required so ViewMediaTool / ShareMediaTool
+         can hand the captured JPEG to Gallery / Photos via FileProvider
+         without IllegalArgumentException("Failed to find configured
+         root").  This was the root cause of "I couldn't open the selfie"
+         — auto-issues #37 / #38 / #39. -->
+    <files-path
+        name="jarvis_pictures"
+        path="pictures/" />
+
     <!-- External app-private directory — where CameraCaptureManager
          publishes images on Android 10+ before they move to MediaStore. -->
     <external-files-path

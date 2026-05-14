@@ -1984,6 +1984,42 @@ class JarvisRuntime(
                         }
                     }
 
+                    // ── Todoist complete-bulk / by-name intercept ─────────────
+                    // "complete those tasks", "mark today's tasks done",
+                    // "complete pick up Mike".  Runs BEFORE the fresh-
+                    // reminder path because "complete X" can otherwise
+                    // be mis-parsed as a task-create intent.  The router
+                    // refuses ambiguous by-name matches and returns
+                    // NotApplicable for "complete that" (which the
+                    // existing handleEdit path owns via recentTaskContext).
+                    run {
+                        val lower = transcript.lowercase()
+                        val verbHit = Regex(
+                            """^(?:please\s+)?(?:complete|mark|tick|cross\s+off|finish|close)\b""",
+                            RegexOption.IGNORE_CASE,
+                        ).containsMatchIn(lower)
+                        if (verbHit) {
+                            val bulkAction = todoistReminderRouter.handleCompleteRequest(transcript)
+                            when (bulkAction) {
+                                is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.Speak -> {
+                                    Log.d(TAG, "[TODOIST_COMPLETE_DISPATCHED]")
+                                    speechStateSource.recordUserInteraction()
+                                    DeviceStateStore.update { copy(lastUserUtterance = transcript) }
+                                    scope.launch(Dispatchers.IO) {
+                                        memoryWriter.writeTurn(sessionId, "user", transcript)
+                                    }
+                                    speakAndRecord(bulkAction.text)
+                                    machine.transition(JarvisState.Listening)
+                                    syncState(JarvisState.Listening)
+                                    continue
+                                }
+                                is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.NotApplicable,
+                                is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.ParkPending ->
+                                    Unit  // fall through
+                            }
+                        }
+                    }
+
                     // ── Todoist list-query intercept ─────────────────────────
                     // "what are my tasks", "show my todoist", "what's
                     // overdue", "today's tasks" — strictly read-only,

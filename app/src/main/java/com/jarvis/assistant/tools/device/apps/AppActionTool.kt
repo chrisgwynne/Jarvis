@@ -45,6 +45,29 @@ class AppActionTool(private val context: Context) : Tool {
         // no capability matched.  Carry the parsed action through the
         // input params for execute() — saves a second parse pass.
         val action = AppActionParser.parse(transcript) ?: return null
+
+        // Bare-open guard: when the user said only "open <app>" (no
+        // query, no parameterised intent), and the registry's
+        // recommended package isn't installed, decline so the next
+        // tool in the chain (OpenAppTool, which uses the smarter
+        // AppResolver: learned alias → built-in alias → label fuzzy
+        // → package-name → category intent) gets a shot at finding
+        // the actually-installed app on this device.
+        //
+        // Without this guard "open photos" on a Samsung device — which
+        // ships Samsung Gallery (`com.sec.android.gallery3d`) and not
+        // Google Photos — failed with "Google Photos isn't installed",
+        // even though Samsung Gallery is right there and OpenAppTool
+        // would happily resolve it.  Same story for "open firefox"
+        // when only Samsung Internet is present.
+        if (action is AppActionParser.AppAction.Open &&
+            !isPackageInstalled(action.cap.packageName)
+        ) {
+            Log.d(TAG, "[APP_ACTION_DECLINE] reason=package_not_installed " +
+                "pkg=${action.cap.packageName} fall_through_to_open_app_tool=true")
+            return null
+        }
+
         val params = when (action) {
             is AppActionParser.AppAction.Open ->
                 mapOf("kind" to "open", "package" to action.cap.packageName,
@@ -59,6 +82,18 @@ class AppActionTool(private val context: Context) : Tool {
         }
         return ToolInput(transcript, params)
     }
+
+    /**
+     * Cheap presence check.  We do NOT use `getLaunchIntentForPackage`
+     * because that requires a launchable activity AND the package; we
+     * want to detect "installed but not launchable" (e.g. background-
+     * only apps) the same way as "not installed at all" — neither is
+     * useful for a bare-open utterance.
+     */
+    private fun isPackageInstalled(pkg: String): Boolean =
+        try {
+            context.packageManager.getLaunchIntentForPackage(pkg) != null
+        } catch (_: Exception) { false }
 
     override fun schema() = ToolSchema(
         name        = name,

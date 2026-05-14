@@ -581,6 +581,30 @@ class TodoistReminderRouter(
                     expiresAtMs = now + PendingTodoistTask.TTL_MS,
                 )
             }
+            PendingTodoistTask.AwaitingSlot.CONTENT -> {
+                // The whole follow-up IS the task content.  Re-run the
+                // parser on a synthesised "task <followUp>" so any date /
+                // time / label tokens land naturally.
+                val verb = when (pending.kind) {
+                    ReminderIntentParser.Kind.REMINDER -> "remind me to"
+                    ReminderIntentParser.Kind.TASK     -> "add a task"
+                }
+                val parsed = ReminderIntentParser.parse("$verb ${followUp.trim()}", now)
+                val merged = if (parsed != null) pending.copy(
+                    content     = parsed.content.ifBlank { followUp.trim() },
+                    date        = pending.date ?: parsed.date,
+                    time        = pending.time ?: parsed.time,
+                    recurrence  = pending.recurrence ?: parsed.recurrence,
+                    priority    = pending.priority ?: parsed.priority,
+                    projectHint = pending.projectHint ?: parsed.projectHint,
+                    labels      = (pending.labels + parsed.labels).distinct(),
+                    expiresAtMs = now + PendingTodoistTask.TTL_MS,
+                ) else pending.copy(
+                    content     = followUp.trim(),
+                    expiresAtMs = now + PendingTodoistTask.TTL_MS,
+                )
+                return merged
+            }
             PendingTodoistTask.AwaitingSlot.RECURRENCE,
             PendingTodoistTask.AwaitingSlot.NONE -> return pending
         }

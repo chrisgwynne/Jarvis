@@ -2055,7 +2055,52 @@ class JarvisRuntime(
                             }
                             is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.NotApplicable -> {
                                 // looksLikeReminderCommand triggered but the
-                                // strict parser declined — fall through.
+                                // strict parser declined.  The user said
+                                // a Todoist verb ("create a task", "add a
+                                // todo", "remind me") but no content.
+                                // Park a content-awaiting PendingTodoistTask
+                                // so the NEXT utterance becomes the task
+                                // content — without this fix the transcript
+                                // fell through to OpenClaw and triggered
+                                // [INVALID_REMOTE_ROUTE] (auto-issue #36).
+                                //
+                                // Detect the verb-only shape narrowly: the
+                                // transcript looks like a reminder command
+                                // AND is short enough that there's no body
+                                // (≤ 6 tokens).  Longer rejections genuinely
+                                // are not Todoist intents (e.g. "what time
+                                // is the task due tomorrow").
+                                val tokenCount = transcript.trim().split(Regex("\\s+")).size
+                                if (tokenCount <= 6) {
+                                    val isTaskVerb = Regex(
+                                        """\b(?:add|create|make|new)\s+(?:a|the|an)?\s*(?:task|todo|to-?do)\b|^\s*todo\b""",
+                                        RegexOption.IGNORE_CASE,
+                                    ).containsMatchIn(transcript)
+                                    val kind = if (isTaskVerb)
+                                        com.jarvis.assistant.todoist.parse.ReminderIntentParser.Kind.TASK
+                                    else
+                                        com.jarvis.assistant.todoist.parse.ReminderIntentParser.Kind.REMINDER
+                                    val nowMs = System.currentTimeMillis()
+                                    pendingTodoistTask = com.jarvis.assistant.todoist.PendingTodoistTask(
+                                        kind = kind,
+                                        content = "",
+                                        awaitingSlot = com.jarvis.assistant.todoist.PendingTodoistTask
+                                            .AwaitingSlot.CONTENT,
+                                        createdMs = nowMs,
+                                        expiresAtMs = nowMs +
+                                            com.jarvis.assistant.todoist.PendingTodoistTask.TTL_MS,
+                                    )
+                                    val prompt = if (isTaskVerb)
+                                        "What's the task?"
+                                    else
+                                        "What should I remind you about?"
+                                    Log.d(TAG, "[TODOIST_PENDING_PARKED] reason=missing_content " +
+                                        "kind=$kind ttl_ms=${com.jarvis.assistant.todoist.PendingTodoistTask.TTL_MS}")
+                                    speakAndRecord(prompt)
+                                    machine.transition(JarvisState.Listening)
+                                    syncState(JarvisState.Listening)
+                                    continue
+                                }
                                 Log.d(TAG, "[TODOIST_FALLTHROUGH] " +
                                     "looksLike=true but parser rejected — escalating")
                             }

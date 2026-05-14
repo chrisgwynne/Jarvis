@@ -74,9 +74,14 @@ class ViewMediaTool(private val context: Context) : Tool {
     )
 
     override suspend fun execute(input: ToolInput): ToolResult {
-        val explicitUri = input.param("uri").trim()
-        val (path, mime, kind) = resolveTarget(explicitUri)
+        val explicitUri  = input.param("uri").trim()
+        val spokenKind   = input.param("kind").trim().takeIf { it.isNotBlank() }
+        val (path, mime, fallbackKind) = resolveTarget(explicitUri)
             ?: return ToolResult.Failure("I haven't captured anything to open yet.")
+        // Prefer the kind that ContextualFollowupResolver passed through
+        // ("selfie" / "screenshot" / etc.) over the generic "photo"
+        // default so the spoken reply matches what the user said.
+        val kind = spokenKind ?: fallbackKind
 
         return try {
             val uri = buildShareUri(path)
@@ -89,22 +94,33 @@ class ViewMediaTool(private val context: Context) : Tool {
             Log.d(TAG, "[MEDIA_URI_OPENED] uri=$uri mime=$mime kind=$kind")
             ToolResult.Success("Opening the $kind.")
         } catch (e: Exception) {
-            Log.w(TAG, "[VIEW_MEDIA_FAILED] ${e.message}")
+            // Log the *type* of failure (e.g.
+            // IllegalArgumentException("Failed to find configured
+            // root") was the root cause of auto-issue #37–#39 before
+            // jarvis_file_paths.xml was updated to include
+            // files-path "pictures/").
+            Log.w(TAG, "[VIEW_MEDIA_FAILED] ${e::class.simpleName}: ${e.message}")
             ToolResult.Failure("I couldn't open the $kind.")
         }
     }
 
     /**
      * Locate the file to open.  If [explicitUri] is set, parse it as
-     * either a content URI (used as-is) or a filesystem path.
+     * either a content URI (used as-is) or a filesystem path; prefer
+     * [MediaContextStore]'s richer metadata when the explicit URI
+     * matches the most-recent capture so we don't lose mime/kind.
      * Otherwise consult [MediaContextStore].  Returns null when no
      * media is available.
      */
     private fun resolveTarget(explicitUri: String): Triple<String, String, String>? {
         if (explicitUri.isNotBlank()) {
-            // content:// URIs go through as-is later; file paths fall
-            // through to FileProvider.  MIME defaults to image/jpeg
-            // since we can't introspect arbitrary URIs.
+            val recent = MediaContextStore.peek()
+            // When the explicit URI matches the most-recent capture,
+            // borrow its kind + mime — far more accurate than the
+            // image/jpeg-and-photo defaults.
+            if (recent != null && recent.filePath == explicitUri) {
+                return Triple(recent.filePath, recent.mimeType, recent.kind)
+            }
             return Triple(explicitUri, "image/jpeg", "photo")
         }
         val e = MediaContextStore.peek() ?: return null

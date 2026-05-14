@@ -37,6 +37,18 @@ class TtsEngine(context: Context) : TextToSpeech.OnInitListener {
     private val ready = AtomicBoolean(false)
 
     /**
+     * The most recent text passed to [speak].  Read by
+     * [com.jarvis.assistant.voice.attention.AttentionGate] as the echo-guard
+     * reference — if the next captured transcript closely resembles this
+     * text, it's our own TTS bleeding back into the microphone.
+     *
+     * Cleared once the utterance finishes so the guard does not keep
+     * suppressing legitimate follow-ups indefinitely.
+     */
+    @Volatile var lastSpokenText: String? = null
+        private set
+
+    /**
      * Persists the voice name across the async [onInit] gap so that a voice
      * selected before the engine is ready is still applied once it fires.
      */
@@ -64,6 +76,7 @@ class TtsEngine(context: Context) : TextToSpeech.OnInitListener {
     suspend fun speak(text: String) {
         if (!ready.get() || text.isBlank()) return
 
+        lastSpokenText = text
         suspendCancellableCoroutine { cont ->
             val utteranceId = "jarvis_${System.currentTimeMillis()}"
 
@@ -110,6 +123,9 @@ class TtsEngine(context: Context) : TextToSpeech.OnInitListener {
     /**
      * Play a short ascending two-tone chime to signal that Jarvis heard the wake word.
      * Suspends for ~600 ms before returning.
+     *
+     * Prefer [startChimeAsync] in the wake pipeline — it fires immediately and
+     * returns so the microphone opens in parallel instead of waiting.
      */
     suspend fun playChime() {
         val chime = buildChime() ?: return
@@ -121,6 +137,27 @@ class TtsEngine(context: Context) : TextToSpeech.OnInitListener {
             // cancellation, which would otherwise leave the hardware claim open.
             try { chime.release() } catch (_: Exception) {}
         }
+    }
+
+    /**
+     * Fire-and-forget chime: starts playback and returns immediately.
+     *
+     * The chime is 2 × 150 ms = 300 ms of audio.  A daemon thread waits 350 ms
+     * (a little longer than the audio) and then releases the AudioTrack.  Callers
+     * do not block — the microphone opens in parallel while the chime plays.
+     *
+     * Use this in the wake pipeline instead of the suspending [playChime].
+     */
+    fun startChimeAsync() {
+        val chime = buildChime() ?: return
+        val t0 = android.os.SystemClock.elapsedRealtime()
+        Log.d(TAG, "Chime start (async) t=+0ms")
+        chime.play()
+        Thread {
+            Thread.sleep(350L)   // slightly longer than 300 ms audio to ensure full playback
+            try { chime.release() } catch (_: Exception) {}
+            Log.d(TAG, "Chime released after ${android.os.SystemClock.elapsedRealtime() - t0}ms")
+        }.also { it.isDaemon = true; it.name = "jarvis-chime-release" }.start()
     }
 
     /**

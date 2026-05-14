@@ -2,9 +2,7 @@ package com.jarvis.assistant.tools.device
 
 import android.Manifest
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.telephony.SmsManager
+import android.util.Log
 import com.jarvis.assistant.tools.ContactLookup
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
@@ -16,14 +14,19 @@ class SmsTool(
     private val contacts: ContactLookup
 ) : Tool {
 
+    companion object { private const val TAG = "SmsTool" }
+
     override val name = "send_sms"
     override val description = "Send an SMS to a contact"
     override val requiredPermissions = listOf(Manifest.permission.SEND_SMS)
-    override val riskClass = com.jarvis.assistant.tools.framework.RiskClass.LOW
+    // MEDIUM: confirmed only when confidence tier is < HIGH.  Explicit
+    // utterances with name + body get promoted to HIGH in LocalFirstRouter.
+    override val riskClass = com.jarvis.assistant.tools.framework.RiskClass.MEDIUM
 
     override fun schema() = ToolSchema(
         name        = name,
-        description = "Send an SMS text message to a contact by name.",
+        description = "Send an SMS text message to a contact by name. " +
+            "Do NOT use this when the user says WhatsApp — use whatsapp_message instead.",
         parameters  = mapOf(
             "type" to "object",
             "properties" to mapOf(
@@ -34,47 +37,35 @@ class SmsTool(
         )
     )
 
-    private val REGEX = Regex(
-        """(?:text|message|send (?:a )?(?:text|message)(?: to)?)\s+(.+?)(?:\s+(?:saying|and say|to say|that)\s+(.+))?$""",
-        RegexOption.IGNORE_CASE
-    )
-
     override fun matches(transcript: String): ToolInput? {
-        val m = REGEX.find(transcript.trim()) ?: return null
+        val intent = MessageIntentParser.parse(transcript) ?: return null
+        // Defer when the user specified WhatsApp — WhatsAppTool will pick this up.
+        if (intent.channel != MessageIntentParser.Channel.SMS) {
+            Log.d(TAG, "[SMS_MATCH_SKIP] channel=${intent.channel} — yielding to WhatsAppTool")
+            return null
+        }
+        Log.d(TAG, "[SMS_PARSED] recipient=\"${intent.recipient}\" body=\"${intent.body}\" route=SMS")
         return ToolInput(
             transcript,
-            mapOf(
-                "name"    to m.groupValues[1].trim(),
-                "message" to m.groupValues.getOrElse(2) { "" }.trim()
-            )
+            mapOf("name" to intent.recipient, "message" to intent.body)
         )
     }
 
-    override suspend fun execute(input: ToolInput): ToolResult {
-        val name    = input.param("name")
-        val message = input.param("message")
-        val contact = contacts.find(name)
-            ?: return ToolResult.Failure("No $name in your contacts that I can see.")
-
-        if (message.isBlank()) {
-            return try {
-                context.startActivity(
-                    Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:${contact.number}"))
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-                ToolResult.Success("Opening a message to ${contact.displayName}.")
-            } catch (e: Exception) {
-                ToolResult.Failure("Couldn't open Messages: ${e.message}")
-            }
-        }
-
-        return try {
-            @Suppress("DEPRECATION")
-            val sms = SmsManager.getDefault()
-            sms.sendMultipartTextMessage(contact.number, null, sms.divideMessage(message), null, null)
-            ToolResult.Success("Message sent to ${contact.displayName}.")
-        } catch (e: Exception) {
-            ToolResult.Failure("Failed to send the message: ${e.message}")
-        }
+    /**
+     * Shared messaging pipeline.  All of: input validation, contact lookup,
+     * disambiguation, latency bounds, are owned by [MessagePipeline].  The
+     * only thing SmsTool contributes is the [SmsDeliveryAdapter].
+     */
+    private val deliveryAdapter by lazy {
+        com.jarvis.assistant.tools.device.messaging.SmsDeliveryAdapter(context)
     }
+
+    override suspend fun execute(input: ToolInput): ToolResult {
+        return com.jarvis.assistant.tools.device.messaging.MessagePipeline.run(
+            input    = input,
+            contacts = contacts,
+            adapter  = deliveryAdapter,
+        )
+    }
+
 }

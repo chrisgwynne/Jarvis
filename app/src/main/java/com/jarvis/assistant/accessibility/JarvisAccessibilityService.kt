@@ -31,18 +31,37 @@ class JarvisAccessibilityService : AccessibilityService() {
             "com.whatsapp.w4b:id/send_button"
         )
 
-        // How long to stay armed before giving up (10 s)
-        private const val ARMED_TIMEOUT_MS = 10_000L
+        // How long to stay armed before giving up.  Tightened to 3 s — past
+        // that point WhatsApp is either visibly stuck or the user has moved
+        // on; either way blocking longer just risks a stale click on a
+        // future foreground app.
+        private const val ARMED_TIMEOUT_MS = 3_000L
 
         private val armed = AtomicBoolean(false)
+        /**
+         * Package the [armed] flag applies to.  Click attempts on any other
+         * package are ignored as a safety net so a randomly-foregrounded app
+         * can never have its "Send"-labelled button tapped on the user's
+         * behalf.  Set by [arm], cleared by [disarm].
+         */
+        @Volatile private var armedPackage: String? = null
 
-        fun arm() {
+        /**
+         * Arm auto-send.  When [pkg] is set, only that package can be clicked
+         * — defaults to "com.whatsapp" / "com.whatsapp.w4b" since those are
+         * the only packages this service was designed for.
+         */
+        fun arm(pkg: String = "com.whatsapp") {
             armed.set(true)
-            Log.d(TAG, "Armed for auto-send")
+            armedPackage = pkg
+            Log.d(TAG, "[WA_AUTOSEND_PENDING_CREATED] pkg=$pkg")
         }
 
         fun disarm() {
-            if (armed.compareAndSet(true, false)) Log.d(TAG, "Disarmed")
+            if (armed.compareAndSet(true, false)) {
+                armedPackage = null
+                Log.d(TAG, "Disarmed")
+            }
         }
 
         fun isArmed(): Boolean = armed.get()
@@ -78,11 +97,25 @@ class JarvisAccessibilityService : AccessibilityService() {
             val svc = instance ?: return false
             return ScreenActuator.setText(svc, node, text)
         }
+
+        /**
+         * Bridge for tools that need an OS-level global action
+         * (e.g. [com.jarvis.assistant.tools.device.ScreenshotTool] calling
+         * GLOBAL_ACTION_TAKE_SCREENSHOT).  Returns false when the
+         * accessibility service isn't connected.
+         */
+        fun performGlobalAction(action: Int): Boolean {
+            val svc = instance ?: return false
+            return svc.performGlobalAction(action)
+        }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val disarmRunnable = Runnable {
-        if (armed.compareAndSet(true, false)) Log.w(TAG, "Auto-disarmed after timeout")
+        if (armed.compareAndSet(true, false)) {
+            armedPackage = null
+            Log.w(TAG, "[WA_AUTOSEND_TIMEOUT] auto-disarmed after ${ARMED_TIMEOUT_MS}ms")
+        }
     }
 
     override fun onServiceConnected() {
@@ -114,10 +147,18 @@ class JarvisAccessibilityService : AccessibilityService() {
         if (!armed.get()) return
 
         val pkgName = event.packageName?.toString() ?: return
-        if (pkgName != "com.whatsapp" && pkgName != "com.whatsapp.w4b") return
+        // Safety: only act on the package the arm() caller targeted.  Falls
+        // back to the WhatsApp pair if armedPackage was somehow lost.
+        val expected = armedPackage
+        val allowed  = when {
+            expected != null -> pkgName == expected
+            else             -> pkgName == "com.whatsapp" || pkgName == "com.whatsapp.w4b"
+        }
+        if (!allowed) return
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                Log.d(TAG, "[WA_ACCESSIBILITY_WINDOW_CHANGED] pkg=$pkgName")
                 // New WhatsApp window opened — schedule timeout and attempt immediately
                 mainHandler.removeCallbacks(disarmRunnable)
                 mainHandler.postDelayed(disarmRunnable, ARMED_TIMEOUT_MS)
@@ -138,14 +179,22 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         val sendButton = findSendButton(root)
         if (sendButton == null) {
-            Log.d(TAG, "Send button not found yet (may not be enabled)")
+            Log.v(TAG, "Send button not found yet (may not be enabled)")
             return
         }
+        Log.d(TAG, "[WA_SEND_BUTTON_FOUND] pkg=$pkgName " +
+            "id=${sendButton.viewIdResourceName} desc=\"${sendButton.contentDescription}\"")
 
         if (armed.compareAndSet(true, false)) {
             mainHandler.removeCallbacks(disarmRunnable)
-            Log.d(TAG, "Tapping Send in $pkgName")
-            sendButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            val ok = sendButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            armedPackage = null
+            if (ok) {
+                Log.d(TAG, "[WA_SEND_BUTTON_CLICKED] pkg=$pkgName")
+                Log.d(TAG, "[WA_AUTOSEND_SUCCESS]")
+            } else {
+                Log.w(TAG, "[WA_AUTOSEND_FAILED] performAction returned false pkg=$pkgName")
+            }
         }
     }
 

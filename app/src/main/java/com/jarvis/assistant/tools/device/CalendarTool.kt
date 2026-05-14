@@ -71,6 +71,18 @@ class CalendarTool(private val context: Context) : Tool {
             RegexOption.IGNORE_CASE
         )
 
+        /**
+         * Catch-all matcher for "is there anything on my calendar" / "calendar
+         * events" / "agenda" phrasings the explicit period regexes miss.
+         * Intentionally permissive — the fallback always assumes "today" since
+         * that's the overwhelmingly common ask, and a wrong-day answer is
+         * less bad than the LLM falling back to "Something went wrong."
+         */
+        private val CALENDAR_FALLBACK = Regex(
+            """\b(?:calendar|schedule|agenda|appointments?|meetings?)\b""",
+            RegexOption.IGNORE_CASE
+        )
+
         private val CREATE_REGEX = Regex(
             """(?:add|create|schedule|book|put|set up)\s+(?:a\s+|an\s+|me\s+in\s+for\s+a?\s*)?(.+?)(?:\s+(?:on|for|at|this|next)\s+.+)?$""",
             RegexOption.IGNORE_CASE
@@ -90,17 +102,27 @@ class CalendarTool(private val context: Context) : Tool {
         if (CREATE_TRIGGERS.any { it.containsMatchIn(t) }) {
             return ToolInput(transcript, mapOf("action" to "create"))
         }
-        return when {
-            TOMORROW_REGEX.containsMatchIn(t) ->
-                ToolInput(transcript, mapOf("action" to "read", "period" to "tomorrow"))
-            WEEK_REGEX.containsMatchIn(t) ->
-                ToolInput(transcript, mapOf("action" to "read", "period" to "week"))
-            NEXT_REGEX.containsMatchIn(t) ->
-                ToolInput(transcript, mapOf("action" to "read", "period" to "next"))
-            TODAY_REGEX.containsMatchIn(t) ->
-                ToolInput(transcript, mapOf("action" to "read", "period" to "today"))
-            else -> null
+        // Order matters: tomorrow / week / next are more specific than the
+        // bare-calendar TODAY_REGEX, which must check last.
+        if (TOMORROW_REGEX.containsMatchIn(t))
+            return ToolInput(transcript, mapOf("action" to "read", "period" to "tomorrow"))
+        if (WEEK_REGEX.containsMatchIn(t))
+            return ToolInput(transcript, mapOf("action" to "read", "period" to "week"))
+        if (NEXT_REGEX.containsMatchIn(t))
+            return ToolInput(transcript, mapOf("action" to "read", "period" to "next"))
+        if (TODAY_REGEX.containsMatchIn(t))
+            return ToolInput(transcript, mapOf("action" to "read", "period" to "today"))
+
+        // Fall-through catch-all: any "calendar" / "schedule" / "agenda"
+        // word combined with a question verb defaults to today's events.
+        // This catches phrasings the explicit regexes miss after STT
+        // normalisation strips apostrophes, e.g. "whats on my calendar
+        // for today", "any calendar events", "do I have anything today".
+        if (CALENDAR_FALLBACK.containsMatchIn(t)) {
+            Log.d(TAG, "[CAL_MATCH_FALLBACK] \"$t\" → action=read period=today")
+            return ToolInput(transcript, mapOf("action" to "read", "period" to "today"))
         }
+        return null
     }
 
     override suspend fun execute(input: ToolInput): ToolResult {
@@ -110,6 +132,18 @@ class CalendarTool(private val context: Context) : Tool {
         val period = input.param("period").ifBlank { "today" }
         val (startMs, endMs) = periodBounds(period)
         val label = periodLabel(period)
+
+        // Pre-flight permission check so we give the user a clear "I need
+        // calendar access" message instead of a generic failure surfaced from
+        // somewhere downstream.
+        if (context.checkSelfPermission(Manifest.permission.READ_CALENDAR) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "[CAL_PERM_DENIED] READ_CALENDAR not granted")
+            return ToolResult.Failure(
+                "I need calendar access for that. Open Settings and grant the Jarvis " +
+                    "app calendar permission, then try again."
+            )
+        }
 
         return try {
             val events = queryEvents(startMs, endMs, limitToOne = period == "next")

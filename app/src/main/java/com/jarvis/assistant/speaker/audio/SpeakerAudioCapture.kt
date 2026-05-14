@@ -3,8 +3,10 @@ package com.jarvis.assistant.speaker.audio
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AudioEffect
 import android.os.Build
 import android.util.Log
+import com.jarvis.assistant.audio.AudioEffectsAttach
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -48,6 +50,7 @@ class SpeakerAudioCapture(private val maxSeconds: Int = 10) {
     @Volatile private var sampleCount = 0
 
     private var audioRecord : AudioRecord? = null
+    private var audioEffects: List<AudioEffect> = emptyList()
     private val captureScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var captureJob  : Job? = null
 
@@ -83,9 +86,10 @@ class SpeakerAudioCapture(private val maxSeconds: Int = 10) {
                 Log.w(TAG, "AudioRecord failed to initialise (state=${record.state}) — mic likely busy")
                 record.release(); return
             }
-            audioRecord = record
-            writePos    = 0
-            sampleCount = 0
+            audioRecord  = record
+            audioEffects = AudioEffectsAttach.attach(record, TAG)
+            writePos     = 0
+            sampleCount  = 0
             record.startRecording()
             Log.d(TAG, "SpeakerAudioCapture started")
 
@@ -110,6 +114,8 @@ class SpeakerAudioCapture(private val maxSeconds: Int = 10) {
     fun stop(): ShortArray? {
         captureJob?.cancel()
         captureJob = null
+        AudioEffectsAttach.release(audioEffects)
+        audioEffects = emptyList()
         runCatching { audioRecord?.stop() }
         runCatching { audioRecord?.release() }
         audioRecord = null

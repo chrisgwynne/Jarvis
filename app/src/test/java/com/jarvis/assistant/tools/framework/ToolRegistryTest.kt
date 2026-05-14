@@ -4,13 +4,19 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Test
 import java.io.File
 
 /**
  * Tests the tool matching logic without any Android dependencies.
  * Each tool's matches() is pure pattern matching — no Context needed.
+ *
+ * History note: a stale top-level function `fun ToolRegistry(tools)` used to
+ * sit at the bottom of this file as a shadowing hack from before
+ * [ToolRegistry] had a real constructor.  Under Kotlin 2.2 that helper's
+ * return type was inferred as `Any`, hiding `match` from callers.  Tier-A
+ * test-suite stabilisation deleted the shadow and pointed the tests at the
+ * real (now-public) primary constructor.
  */
 class ToolRegistryTest {
 
@@ -26,9 +32,9 @@ class ToolRegistryTest {
     @Test fun `first matching tool wins`() {
         val first  = stubTool("first",  Regex("hello"))
         val second = stubTool("second", Regex("hello"))
-        val reg    = ToolRegistry(listOf(first, second))
+        val reg: ToolRegistry = ToolRegistry(listOf(first, second))
 
-        val result = reg.match("hello", isOnline = true)
+        val result: Pair<Tool, ToolInput>? = reg.match("hello", isOnline = true)
         assertNotNull(result)
         assertEquals("first", result!!.first.name)
     }
@@ -38,10 +44,11 @@ class ToolRegistryTest {
             override val name = "net_tool"
             override val description = "needs internet"
             override val requiresNetwork = true
-            override fun matches(t: String) = if (t.contains("search")) ToolInput(t) else null
+            override fun matches(t: String): ToolInput? =
+                if (t.contains("search")) ToolInput(t) else null
             override suspend fun execute(input: ToolInput) = ToolResult.Success("ok")
         }
-        val reg = ToolRegistry(listOf(netTool))
+        val reg: ToolRegistry = ToolRegistry(listOf<Tool>(netTool))
         assertNull(reg.match("search for cats", isOnline = false))
     }
 
@@ -51,15 +58,16 @@ class ToolRegistryTest {
             override val description = "hybrid"
             override val requiresNetwork = true
             override val isLocalFallback = true
-            override fun matches(t: String) = if (t.contains("test")) ToolInput(t) else null
+            override fun matches(t: String): ToolInput? =
+                if (t.contains("test")) ToolInput(t) else null
             override suspend fun execute(input: ToolInput) = ToolResult.Success("ok")
         }
-        val reg = ToolRegistry(listOf(hybridTool))
+        val reg: ToolRegistry = ToolRegistry(listOf<Tool>(hybridTool))
         assertNotNull(reg.match("test this", isOnline = false))
     }
 
     @Test fun `no match returns null`() {
-        val reg = ToolRegistry(emptyList())
+        val reg: ToolRegistry = ToolRegistry(emptyList())
         assertNull(reg.match("what is the weather", isOnline = true))
     }
 
@@ -94,20 +102,8 @@ class ToolRegistryTest {
             missing.isEmpty()
         )
         assertTrue(
-            "Expected \u2265 35 Tool implementations, found ${toolFiles.size}",
+            "Expected ≥ 35 Tool implementations, found ${toolFiles.size}",
             toolFiles.size >= 35
         )
-    }
-}
-
-// Test-only constructor for ToolRegistry (bypasses Context)
-fun ToolRegistry(tools: List<Tool>) = object {
-    fun match(transcript: String, isOnline: Boolean): Pair<Tool, ToolInput>? {
-        for (tool in tools) {
-            if (tool.requiresNetwork && !isOnline && !tool.isLocalFallback) continue
-            val input = tool.matches(transcript) ?: continue
-            return Pair(tool, input)
-        }
-        return null
     }
 }

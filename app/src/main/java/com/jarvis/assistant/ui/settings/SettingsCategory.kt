@@ -6,11 +6,13 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.ui.graphics.vector.ImageVector
 
@@ -53,6 +55,18 @@ internal enum class SettingsCategory(
         icon        = Icons.Filled.Bolt,
         route       = "settings/proactivity",
     ),
+    Todoist(
+        title       = "Todoist",
+        description = "Reminders, tasks and offline sync",
+        icon        = Icons.Filled.CheckCircle,
+        route       = "settings/todoist",
+    ),
+    LocalDiagnostics(
+        title       = "Diagnostics",
+        description = "Recent local routes and remote-touched audit",
+        icon        = Icons.Filled.Bolt,
+        route       = "settings/diagnostics",
+    ),
     ActionsApps(
         title       = "Actions & Apps",
         description = "Tools, search and connected apps",
@@ -88,6 +102,12 @@ internal enum class SettingsCategory(
         description = "LLM provider, keys and remote backend",
         icon        = Icons.Filled.Tune,
         route       = "settings/advanced",
+    ),
+    ExperimentalFlags(
+        title       = "Experimental Features",
+        description = "Toggle experimental Jarvis subsystems",
+        icon        = Icons.Filled.Science,
+        route       = "settings/experimental",
     ),
     Faq(
         title       = "FAQ & Commands",

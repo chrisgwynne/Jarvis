@@ -131,9 +131,64 @@ class SettingsStore(context: Context) {
         const val KEY_OPENCLAW_MODEL        = "openclaw_model"
         const val KEY_OPENCLAW_KEYWORD      = "openclaw_keyword"
         const val KEY_OPENCLAW_NODE_ENABLED = "openclaw_node_enabled"
+        const val KEY_OPENCLAW_PAIRING_CODE = "openclaw_pairing_code"
         const val KEY_OPENCLAW_DEVICE_ID    = "openclaw_device_id"
         const val KEY_OPENCLAW_DEVICE_TOKEN = "openclaw_device_token"
         const val KEY_OPENCLAW_LLM_BASE_URL = "openclaw_llm_base_url"
+
+        // ── Proactivity ────────────────────────────────────────────────────
+        const val KEY_PROACTIVITY_ENABLED              = "proactivity_enabled"
+        const val KEY_PROACTIVITY_QUIET_HOURS_ENABLED  = "proactivity_quiet_hours_enabled"
+        const val KEY_PROACTIVITY_QUIET_START_MIN      = "proactivity_quiet_start_min"
+        const val KEY_PROACTIVITY_QUIET_END_MIN        = "proactivity_quiet_end_min"
+        const val KEY_PROACTIVITY_ALLOW_URGENT_QH      = "proactivity_allow_urgent_qh"
+        const val KEY_PROACTIVITY_CAT_SUGGESTIONS      = "proactivity_cat_suggestions"
+        const val KEY_PROACTIVITY_CAT_REMINDERS        = "proactivity_cat_reminders"
+        const val KEY_PROACTIVITY_CAT_LOCATION         = "proactivity_cat_location"
+        const val KEY_PROACTIVITY_CAT_HA               = "proactivity_cat_home_assistant"
+        const val KEY_PROACTIVITY_CAT_CALENDAR         = "proactivity_cat_calendar"
+        const val KEY_PROACTIVITY_CAT_LEARNING         = "proactivity_cat_learning"
+        const val KEY_PROACTIVITY_CAT_SAFETY           = "proactivity_cat_safety"
+        const val KEY_PROACTIVITY_INTERRUPTION_MODE    = "proactivity_interruption_mode"
+        const val KEY_PROACTIVITY_SENSITIVITY          = "proactivity_sensitivity"
+        const val KEY_PROACTIVITY_COOLDOWN_MIN         = "proactivity_global_cooldown_minutes"
+
+        // ── Scheduled reminders (Calendar / Todoist / local) ──────────────
+        // Per-source enables + offset toggles.  Defaults live in
+        // [ScheduledReminderSettings.DEFAULT]; keys mirror the field names.
+        const val KEY_SCHED_REMINDERS_CALENDAR_EN    = "sched_reminders_calendar_enabled"
+        const val KEY_SCHED_REMINDERS_TODOIST_EN     = "sched_reminders_todoist_enabled"
+        const val KEY_SCHED_REMINDERS_LOCAL_EN       = "sched_reminders_local_enabled"
+        const val KEY_SCHED_REMINDERS_30M            = "sched_reminders_30m_enabled"
+        const val KEY_SCHED_REMINDERS_10M            = "sched_reminders_10m_enabled"
+        const val KEY_SCHED_REMINDERS_NOTIFY_FALLBACK= "sched_reminders_notify_fallback"
+        const val KEY_SCHED_REMINDERS_BG_SPEECH      = "sched_reminders_background_speech"
+
+        // ── Todoist ────────────────────────────────────────────────────────
+        const val KEY_TODOIST_ENABLED            = "todoist_enabled"
+        const val KEY_TODOIST_API_TOKEN          = "todoist_api_token"
+        const val KEY_TODOIST_DEFAULT_PROJECT    = "todoist_default_project_id"
+        const val KEY_TODOIST_DEFAULT_LABELS     = "todoist_default_labels"      // CSV
+        const val KEY_TODOIST_DEFAULT_PRIORITY   = "todoist_default_priority"    // enum name
+        const val KEY_TODOIST_DEFAULT_TIME_MIN   = "todoist_default_time_min"
+        const val KEY_TODOIST_ASK_LABEL          = "todoist_ask_label"
+        const val KEY_TODOIST_ASK_TIME           = "todoist_ask_time_when_vague"
+        const val KEY_TODOIST_OFFLINE_SYNC       = "todoist_offline_sync"
+        const val KEY_TODOIST_VOICE_CONFIRMS     = "todoist_voice_confirms"
+        const val KEY_TODOIST_SMART_FOLLOWUP     = "todoist_smart_followup"
+        const val KEY_TODOIST_CONTEXTUAL         = "todoist_contextual_reminders"
+        const val KEY_TODOIST_REPEAT_NUDGES      = "todoist_repeat_nudges"
+
+        // ── Voice Identity / trust ─────────────────────────────────────────
+        // All four default to safe values that prevent owner lockout —
+        // see [com.jarvis.assistant.speaker.trust.VoiceTrustState] +
+        // CommandPermissionPolicy for the policy matrix.
+        const val KEY_VOICE_IDENTITY_ENABLED       = "voice_identity_enabled"
+        const val KEY_VOICE_ASSUME_OWNER_ON_START  = "voice_assume_owner_on_start"
+        const val KEY_VOICE_STRICT_MODE            = "voice_strict_security_mode"
+        const val KEY_VOICE_REQUIRE_FOR_SENSITIVE  = "voice_require_match_sensitive"
+        const val KEY_VOICE_ASK_WHO                = "voice_ask_who_when_uncertain"
+        const val KEY_VOICE_REAUTH_TIMEOUT_MS      = "voice_reauth_timeout_ms"
 
         // Defaults
         const val DEFAULT_PROVIDER       = "OpenAI"
@@ -180,7 +235,12 @@ class SettingsStore(context: Context) {
         get() {
             val stored = prefs.getString(KEY_MINIMAX_MODEL, DEFAULT_MINIMAX_MODEL) ?: DEFAULT_MINIMAX_MODEL
             // "minimax-2.7" was renamed — silently migrate to the current model name.
-            return if (stored == "minimax-2.7") DEFAULT_MINIMAX_MODEL else stored
+            val migrated = if (stored == "minimax-2.7") DEFAULT_MINIMAX_MODEL else stored
+            // Normalise user-typed variants ("MiniMax-M2.7-highspeed", "M.27",
+            // "minimax m2.7 fast", …) to the canonical id MiniMax actually
+            // accepts.  Centralised in MiniMaxProvider.canonicalise so both
+            // the wire call and the displayed model match.
+            return com.jarvis.assistant.llm.providers.MiniMaxProvider.canonicalise(migrated)
         }
         set(v) = prefs.edit().putString(KEY_MINIMAX_MODEL, v).apply()
 
@@ -358,6 +418,18 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_OPENCLAW_NODE_ENABLED, false)
         set(v) = prefs.edit().putBoolean(KEY_OPENCLAW_NODE_ENABLED, v).apply()
 
+    /**
+     * Optional pairing code shown by the OpenClaw gateway during the initial
+     * approval flow.  When set, it is sent inside the `connect` request's
+     * `auth.pairingCode` field on the next reconnect; the gateway uses it
+     * to auto-approve this device without a CLI `openclaw devices approve`
+     * step.  Cleared by the gateway once approval is exchanged for a
+     * deviceToken.
+     */
+    var openClawPairingCode: String
+        get() = prefs.getString(KEY_OPENCLAW_PAIRING_CODE, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_OPENCLAW_PAIRING_CODE, v).apply()
+
     /** Stable device ID generated once and used in the OpenClaw handshake. */
     var openClawDeviceId: String
         get() {
@@ -403,6 +475,257 @@ class SettingsStore(context: Context) {
     var fallbackProvider: String
         get() = prefs.getString(KEY_FALLBACK_PROVIDER, "") ?: ""
         set(v) = prefs.edit().putString(KEY_FALLBACK_PROVIDER, v).apply()
+
+    // ── Proactivity ────────────────────────────────────────────────────────
+    // Settings backing the user-visible Proactivity screen.  Defaults are
+    // sourced from [ProactivitySettings.DEFAULT] so a single change there
+    // propagates everywhere.  Each field is its own pref key to match the
+    // existing storage pattern in this file.
+
+    var proactivityEnabled: Boolean
+        get() = prefs.getBoolean(KEY_PROACTIVITY_ENABLED,
+            com.jarvis.assistant.proactive.settings.ProactivitySettings.DEFAULT.enabled)
+        set(v) = prefs.edit().putBoolean(KEY_PROACTIVITY_ENABLED, v).apply()
+
+    var proactivityQuietHoursEnabled: Boolean
+        get() = prefs.getBoolean(KEY_PROACTIVITY_QUIET_HOURS_ENABLED,
+            com.jarvis.assistant.proactive.settings.ProactivitySettings.DEFAULT.quietHoursEnabled)
+        set(v) = prefs.edit().putBoolean(KEY_PROACTIVITY_QUIET_HOURS_ENABLED, v).apply()
+
+    /** Quiet-hours start, minutes-from-midnight (0..1439). */
+    var proactivityQuietStartMinute: Int
+        get() = prefs.getInt(KEY_PROACTIVITY_QUIET_START_MIN,
+            com.jarvis.assistant.proactive.settings.ProactivitySettings.DEFAULT.quietStartMinute)
+        set(v) = prefs.edit().putInt(KEY_PROACTIVITY_QUIET_START_MIN, v.coerceIn(0, 1439)).apply()
+
+    /** Quiet-hours end, minutes-from-midnight (0..1439). */
+    var proactivityQuietEndMinute: Int
+        get() = prefs.getInt(KEY_PROACTIVITY_QUIET_END_MIN,
+            com.jarvis.assistant.proactive.settings.ProactivitySettings.DEFAULT.quietEndMinute)
+        set(v) = prefs.edit().putInt(KEY_PROACTIVITY_QUIET_END_MIN, v.coerceIn(0, 1439)).apply()
+
+    var proactivityAllowUrgentDuringQuietHours: Boolean
+        get() = prefs.getBoolean(KEY_PROACTIVITY_ALLOW_URGENT_QH,
+            com.jarvis.assistant.proactive.settings.ProactivitySettings.DEFAULT.allowUrgentDuringQuietHours)
+        set(v) = prefs.edit().putBoolean(KEY_PROACTIVITY_ALLOW_URGENT_QH, v).apply()
+
+    var proactivitySuggestionsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_PROACTIVITY_CAT_SUGGESTIONS,
+            com.jarvis.assistant.proactive.settings.ProactivitySettings.DEFAULT.suggestionsEnabled)
+        set(v) = prefs.edit().putBoolean(KEY_PROACTIVITY_CAT_SUGGESTIONS, v).apply()
+
+    var proactivityRemindersEnabled: Boolean
+        get() = prefs.getBoolean(KEY_PROACTIVITY_CAT_REMINDERS,
+            com.jarvis.assistant.proactive.settings.ProactivitySettings.DEFAULT.remindersEnabled)
+        set(v) = prefs.edit().putBoolean(KEY_PROACTIVITY_CAT_REMINDERS, v).apply()
+
+    var proactivityLocationAlertsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_PROACTIVITY_CAT_LOCATION,
+            com.jarvis.assistant.proactive.settings.ProactivitySettings.DEFAULT.locationAlertsEnabled)
+        set(v) = prefs.edit().putBoolean(KEY_PROACTIVITY_CAT_LOCATION, v).apply()
+
+    var proactivityHomeAssistantAlertsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_PROACTIVITY_CAT_HA,
+            com.jarvis.assistant.proactive.settings.ProactivitySettings.DEFAULT.homeAssistantAlertsEnabled)
+        set(v) = prefs.edit().putBoolean(KEY_PROACTIVITY_CAT_HA, v).apply()
+
+    var proactivityCalendarNudgesEnabled: Boolean
+        get() = prefs.getBoolean(KEY_PROACTIVITY_CAT_CALENDAR,
+            com.jarvis.assistant.proactive.settings.ProactivitySettings.DEFAULT.calendarNudgesEnabled)
+        set(v) = prefs.edit().putBoolean(KEY_PROACTIVITY_CAT_CALENDAR, v).apply()
+
+    var proactivityLearningObservationsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_PROACTIVITY_CAT_LEARNING,
+            com.jarvis.assistant.proactive.settings.ProactivitySettings.DEFAULT.learningObservationsEnabled)
+        set(v) = prefs.edit().putBoolean(KEY_PROACTIVITY_CAT_LEARNING, v).apply()
+
+    var proactivitySafetySecurityAlertsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_PROACTIVITY_CAT_SAFETY,
+            com.jarvis.assistant.proactive.settings.ProactivitySettings.DEFAULT.safetySecurityAlertsEnabled)
+        set(v) = prefs.edit().putBoolean(KEY_PROACTIVITY_CAT_SAFETY, v).apply()
+
+    /** [InterruptionMode] stored by .name; unknown values fall back to default. */
+    var proactivityInterruptionMode: com.jarvis.assistant.proactive.settings.InterruptionMode
+        get() {
+            val stored = prefs.getString(KEY_PROACTIVITY_INTERRUPTION_MODE, null)
+            return stored?.let {
+                runCatching {
+                    com.jarvis.assistant.proactive.settings.InterruptionMode.valueOf(it)
+                }.getOrNull()
+            } ?: com.jarvis.assistant.proactive.settings.ProactivitySettings.DEFAULT.interruptionMode
+        }
+        set(v) = prefs.edit().putString(KEY_PROACTIVITY_INTERRUPTION_MODE, v.name).apply()
+
+    /** [ProactivitySensitivity] stored by .name; unknown values fall back to default. */
+    var proactivitySensitivity: com.jarvis.assistant.proactive.settings.ProactivitySensitivity
+        get() {
+            val stored = prefs.getString(KEY_PROACTIVITY_SENSITIVITY, null)
+            return stored?.let {
+                runCatching {
+                    com.jarvis.assistant.proactive.settings.ProactivitySensitivity.valueOf(it)
+                }.getOrNull()
+            } ?: com.jarvis.assistant.proactive.settings.ProactivitySettings.DEFAULT.sensitivity
+        }
+        set(v) = prefs.edit().putString(KEY_PROACTIVITY_SENSITIVITY, v.name).apply()
+
+    /** Minimum gap between any two proactive surfacings, in whole minutes. */
+    var proactivityGlobalCooldownMinutes: Int
+        get() = prefs.getInt(KEY_PROACTIVITY_COOLDOWN_MIN,
+            com.jarvis.assistant.proactive.settings.ProactivitySettings.DEFAULT.globalCooldownMinutes)
+        set(v) = prefs.edit().putInt(KEY_PROACTIVITY_COOLDOWN_MIN, v.coerceIn(1, 240)).apply()
+
+    // ── Scheduled reminders (Calendar / Todoist / local) ───────────────────
+
+    var schedRemindersCalendarEnabled: Boolean
+        get() = prefs.getBoolean(KEY_SCHED_REMINDERS_CALENDAR_EN, true)
+        set(v) = prefs.edit().putBoolean(KEY_SCHED_REMINDERS_CALENDAR_EN, v).apply()
+
+    var schedRemindersTodoistEnabled: Boolean
+        get() = prefs.getBoolean(KEY_SCHED_REMINDERS_TODOIST_EN, true)
+        set(v) = prefs.edit().putBoolean(KEY_SCHED_REMINDERS_TODOIST_EN, v).apply()
+
+    var schedRemindersLocalEnabled: Boolean
+        get() = prefs.getBoolean(KEY_SCHED_REMINDERS_LOCAL_EN, true)
+        set(v) = prefs.edit().putBoolean(KEY_SCHED_REMINDERS_LOCAL_EN, v).apply()
+
+    var schedReminders30mEnabled: Boolean
+        get() = prefs.getBoolean(KEY_SCHED_REMINDERS_30M, true)
+        set(v) = prefs.edit().putBoolean(KEY_SCHED_REMINDERS_30M, v).apply()
+
+    var schedReminders10mEnabled: Boolean
+        get() = prefs.getBoolean(KEY_SCHED_REMINDERS_10M, true)
+        set(v) = prefs.edit().putBoolean(KEY_SCHED_REMINDERS_10M, v).apply()
+
+    var schedRemindersNotifyFallback: Boolean
+        get() = prefs.getBoolean(KEY_SCHED_REMINDERS_NOTIFY_FALLBACK, true)
+        set(v) = prefs.edit().putBoolean(KEY_SCHED_REMINDERS_NOTIFY_FALLBACK, v).apply()
+
+    var schedRemindersBackgroundSpeech: Boolean
+        get() = prefs.getBoolean(KEY_SCHED_REMINDERS_BG_SPEECH, false)
+        set(v) = prefs.edit().putBoolean(KEY_SCHED_REMINDERS_BG_SPEECH, v).apply()
+
+    // ── Todoist ────────────────────────────────────────────────────────────
+    // The user's Todoist integration settings — backing
+    // [com.jarvis.assistant.todoist.TodoistSettings].  Defaults are
+    // sourced from [TodoistSettings.DEFAULT].
+
+    var todoistEnabled: Boolean
+        get() = prefs.getBoolean(KEY_TODOIST_ENABLED,
+            com.jarvis.assistant.todoist.TodoistSettings.DEFAULT.enabled)
+        set(v) = prefs.edit().putBoolean(KEY_TODOIST_ENABLED, v).apply()
+
+    /** Personal Todoist API token.  Stored in the encrypted prefs file. */
+    var todoistApiToken: String
+        get() = prefs.getString(KEY_TODOIST_API_TOKEN, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_TODOIST_API_TOKEN, v.trim()).apply()
+
+    var todoistDefaultProjectId: String
+        get() = prefs.getString(KEY_TODOIST_DEFAULT_PROJECT, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_TODOIST_DEFAULT_PROJECT, v).apply()
+
+    /** Stored as CSV; empty string = no defaults. */
+    var todoistDefaultLabelsCsv: String
+        get() = prefs.getString(KEY_TODOIST_DEFAULT_LABELS, "") ?: ""
+        set(v) = prefs.edit().putString(KEY_TODOIST_DEFAULT_LABELS, v).apply()
+
+    var todoistDefaultPriority: com.jarvis.assistant.todoist.TodoistPriority
+        get() {
+            val stored = prefs.getString(KEY_TODOIST_DEFAULT_PRIORITY, null)
+            return stored?.let {
+                runCatching { com.jarvis.assistant.todoist.TodoistPriority.valueOf(it) }
+                    .getOrNull()
+            } ?: com.jarvis.assistant.todoist.TodoistSettings.DEFAULT.defaultPriority
+        }
+        set(v) = prefs.edit().putString(KEY_TODOIST_DEFAULT_PRIORITY, v.name).apply()
+
+    var todoistDefaultReminderMinuteOfDay: Int
+        get() = prefs.getInt(KEY_TODOIST_DEFAULT_TIME_MIN,
+            com.jarvis.assistant.todoist.TodoistSettings.DEFAULT.defaultReminderMinuteOfDay)
+        set(v) = prefs.edit().putInt(KEY_TODOIST_DEFAULT_TIME_MIN,
+            v.coerceIn(0, 1439)).apply()
+
+    var todoistAskForLabelAfterCreate: Boolean
+        get() = prefs.getBoolean(KEY_TODOIST_ASK_LABEL,
+            com.jarvis.assistant.todoist.TodoistSettings.DEFAULT.askForLabelAfterCreate)
+        set(v) = prefs.edit().putBoolean(KEY_TODOIST_ASK_LABEL, v).apply()
+
+    var todoistAskForTimeWhenDateVague: Boolean
+        get() = prefs.getBoolean(KEY_TODOIST_ASK_TIME,
+            com.jarvis.assistant.todoist.TodoistSettings.DEFAULT.askForTimeWhenDateVague)
+        set(v) = prefs.edit().putBoolean(KEY_TODOIST_ASK_TIME, v).apply()
+
+    var todoistOfflineSyncEnabled: Boolean
+        get() = prefs.getBoolean(KEY_TODOIST_OFFLINE_SYNC,
+            com.jarvis.assistant.todoist.TodoistSettings.DEFAULT.offlineSyncEnabled)
+        set(v) = prefs.edit().putBoolean(KEY_TODOIST_OFFLINE_SYNC, v).apply()
+
+    var todoistVoiceConfirmationsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_TODOIST_VOICE_CONFIRMS,
+            com.jarvis.assistant.todoist.TodoistSettings.DEFAULT.voiceConfirmationsEnabled)
+        set(v) = prefs.edit().putBoolean(KEY_TODOIST_VOICE_CONFIRMS, v).apply()
+
+    var todoistSmartFollowUpEnabled: Boolean
+        get() = prefs.getBoolean(KEY_TODOIST_SMART_FOLLOWUP,
+            com.jarvis.assistant.todoist.TodoistSettings.DEFAULT.smartFollowUpEnabled)
+        set(v) = prefs.edit().putBoolean(KEY_TODOIST_SMART_FOLLOWUP, v).apply()
+
+    var todoistContextualRemindersEnabled: Boolean
+        get() = prefs.getBoolean(KEY_TODOIST_CONTEXTUAL,
+            com.jarvis.assistant.todoist.TodoistSettings.DEFAULT.contextualRemindersEnabled)
+        set(v) = prefs.edit().putBoolean(KEY_TODOIST_CONTEXTUAL, v).apply()
+
+    var todoistRepeatingNudgesEnabled: Boolean
+        get() = prefs.getBoolean(KEY_TODOIST_REPEAT_NUDGES,
+            com.jarvis.assistant.todoist.TodoistSettings.DEFAULT.repeatingReminderNudgesEnabled)
+        set(v) = prefs.edit().putBoolean(KEY_TODOIST_REPEAT_NUDGES, v).apply()
+
+    // ── Voice Identity / trust ─────────────────────────────────────────────
+    // Defaults chosen so a fresh install or any-state restart NEVER locks
+    // the owner out of phone commands.  See
+    // [com.jarvis.assistant.speaker.trust.VoiceTrustState] for the
+    // permission matrix backing these flags.
+
+    /** Master switch for speaker-recognition personalisation features. */
+    var voiceIdentityEnabled: Boolean
+        get() = prefs.getBoolean(KEY_VOICE_IDENTITY_ENABLED, true)
+        set(v) = prefs.edit().putBoolean(KEY_VOICE_IDENTITY_ENABLED, v).apply()
+
+    /**
+     * When ON (default), every app start and every Start-button press
+     * sets the trust state to OWNER_ASSUMED so local commands work
+     * immediately.  Disabling this means the owner MUST be voice-matched
+     * before any sensitive command — only flip if you genuinely have a
+     * multi-user setup with hostile actors.
+     */
+    var voiceAssumeOwnerOnStart: Boolean
+        get() = prefs.getBoolean(KEY_VOICE_ASSUME_OWNER_ON_START, true)
+        set(v) = prefs.edit().putBoolean(KEY_VOICE_ASSUME_OWNER_ON_START, v).apply()
+
+    /**
+     * Strict voice-security mode.  When OFF (default), unknown / low-
+     * confidence speakers still execute LOW_RISK and MEDIUM_RISK
+     * commands as OWNER_ASSUMED.  When ON, MEDIUM_RISK and HIGH_RISK
+     * commands require a reauth or voice match.
+     */
+    var voiceStrictMode: Boolean
+        get() = prefs.getBoolean(KEY_VOICE_STRICT_MODE, false)
+        set(v) = prefs.edit().putBoolean(KEY_VOICE_STRICT_MODE, v).apply()
+
+    /** Require a voice match for HIGH_RISK actions (door unlock, etc.). */
+    var voiceRequireMatchForSensitive: Boolean
+        get() = prefs.getBoolean(KEY_VOICE_REQUIRE_FOR_SENSITIVE, false)
+        set(v) = prefs.edit().putBoolean(KEY_VOICE_REQUIRE_FOR_SENSITIVE, v).apply()
+
+    /** Ask "Who is this?" when voice identity is uncertain.  Default ON. */
+    var voiceAskWhoWhenUncertain: Boolean
+        get() = prefs.getBoolean(KEY_VOICE_ASK_WHO, true)
+        set(v) = prefs.edit().putBoolean(KEY_VOICE_ASK_WHO, v).apply()
+
+    /** How long a reauth challenge stays pending before expiring. */
+    var voiceReauthTimeoutMs: Long
+        get() = prefs.getLong(KEY_VOICE_REAUTH_TIMEOUT_MS, 60_000L)
+        set(v) = prefs.edit().putLong(KEY_VOICE_REAUTH_TIMEOUT_MS,
+            v.coerceIn(10_000L, 300_000L)).apply()
 
     // ── Home Assistant ─────────────────────────────────────────────────────
 

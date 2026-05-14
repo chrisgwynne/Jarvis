@@ -522,7 +522,26 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setOpenClawNodeEnabled(v: Boolean) {
         _openClawNodeEnabled.value = v
         store.openClawNodeEnabled = v
+        // Drive the actual WebSocket lifecycle.  Previously this method only
+        // persisted the setting — the OpenClawNodeClient was started once at
+        // service onCreate and never restarted on a toggle, so flipping the
+        // switch produced zero gateway-side activity.
+        if (JarvisService.isRunning(getApplication())) {
+            com.jarvis.assistant.service.JarvisService.toggleOpenClawNode(
+                getApplication(), v
+            )
+        }
     }
+
+    /** Persist a user-typed pairing code; node client picks it up on next connect. */
+    fun setOpenClawPairingCode(code: String) {
+        val trimmed = code.trim()
+        _openClawPairingCode.value = trimmed
+        store.openClawPairingCode = trimmed
+    }
+
+    private val _openClawPairingCode = MutableStateFlow(store.openClawPairingCode)
+    val openClawPairingCode: StateFlow<String> = _openClawPairingCode.asStateFlow()
 
     // ── Hermes state ───────────────────────────────────────────────────────
 

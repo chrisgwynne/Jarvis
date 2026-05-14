@@ -401,6 +401,39 @@ class IssueReporter private constructor(
         fun get(): IssueReporter? = INSTANCE
 
         /**
+         * Static convenience wrapper for callers that only want to flag
+         * a real bug WITHOUT bringing a Throwable into scope.  Looks up
+         * the singleton; if reporting isn't installed (very early in
+         * app startup, unit tests) it silently no-ops — speech-path
+         * callers depend on never throwing.
+         *
+         * Used by:
+         *   - [com.jarvis.assistant.runtime.ResponseFormatter] when the
+         *     SpeechSanitizer catches a leak about to reach TTS.
+         *   - [com.jarvis.assistant.core.safety.UserSafeErrorHandler]
+         *     wrappers when a BUG-severity classification fires.
+         */
+        fun reportFatalSafe(
+            subsystem: String,
+            category: String,
+            message: String,
+            snippet: String? = null,
+        ) {
+            try {
+                INSTANCE?.reportFatal(
+                    subsystem = subsystem,
+                    category  = category,
+                    message   = message,
+                    metadata  = buildMap {
+                        if (snippet != null) put("snippet", snippet)
+                    },
+                )
+            } catch (_: Throwable) {
+                // Never propagate from the safety wrapper.
+            }
+        }
+
+        /**
          * Install the reporter exactly once.  Safe to call from
          * [android.app.Application.onCreate].
          *

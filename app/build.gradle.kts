@@ -1,6 +1,9 @@
 plugins {
+    // AGP 9+ ships built-in Kotlin support — the standalone
+    // `org.jetbrains.kotlin.android` plugin must NOT be applied alongside
+    // it (KGP 2.2.20 fails fast with a clear error if you do).
+    // See https://issuetracker.google.com/438678642
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
 }
@@ -22,6 +25,16 @@ android {
         }
     }
 
+    // Tier-A: let JVM unit tests return default values from un-mocked
+    // android.* APIs (e.g. android.util.Log) instead of throwing
+    // RuntimeException("not mocked").  Without this any pure-JVM test that
+    // touches Log.d via production code crashes.  This is the modern Android
+    // best practice and reduces the pre-existing failure count.
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -41,10 +54,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     buildFeatures {
         compose = true
     }
@@ -53,6 +62,16 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+    }
+}
+
+// AGP 9's built-in Kotlin support exposes the Kotlin DSL at the top level
+// (the old `android { kotlinOptions { … } }` form went away with the
+// standalone `org.jetbrains.kotlin.android` plugin).  Pin the JVM target
+// to 17 so it matches `compileOptions` above.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 

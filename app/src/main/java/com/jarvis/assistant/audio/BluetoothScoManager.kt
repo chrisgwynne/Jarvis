@@ -204,6 +204,16 @@ class BluetoothScoManager(private val context: Context) {
             true
         } == true
 
+        if (!connected) {
+            // SCO negotiation timed out — the earphone may not support HFP/SCO
+            // (e.g. A2DP-only mode) or the BT stack is busy. Roll back the
+            // isBluetoothScoOn flag so subsequent AudioRecord / SpeechRecognizer
+            // calls use the built-in mic rather than a non-existent SCO channel.
+            Log.w(TAG, "SCO timed out — resetting audio routing to built-in mic")
+            audioManager.stopBluetoothSco()
+            audioManager.isBluetoothScoOn = false
+        }
+
         Log.d(TAG, "SCO connect result: $connected")
         return connected
     }

@@ -76,12 +76,16 @@ import com.jarvis.assistant.tools.device.ReportIssueTool
  *   High-specificity tools (WhatsApp, Call, SMS) must come before
  *   low-specificity ones (OpenApp, WebSearch) to prevent misrouting.
  */
-class ToolRegistry private constructor(
+// Public primary constructor so JVM unit tests can build a minimal registry
+// with stub tools.  Production code still uses [buildDefault] which
+// resolves every dependency from the live runtime; never call this directly
+// outside of tests.
+@androidx.annotation.VisibleForTesting(otherwise = androidx.annotation.VisibleForTesting.PACKAGE_PRIVATE)
+class ToolRegistry constructor(
     private val tools: List<Tool>,
     /** Held so [release] can stop an in-progress recording on service teardown. */
     private val recordingManager: AudioRecordingManager? = null
 ) {
-
     /**
      * Release resources that must be freed when the service stops.
      *
@@ -126,8 +130,37 @@ class ToolRegistry private constructor(
              */
             planRunnerProvider: () -> com.jarvis.assistant.runtime.plan.PlanRunner? = { null },
             expectationStore: com.jarvis.assistant.core.presence.ExpectationStore? = null,
+            /**
+             * Tier-A2 consolidation: every consumer (SmsTool, WhatsAppTool,
+             * CallTool, TranscriptCorrector, FollowUpCoordinator) must share
+             * the same [ContactLookup] so the address-book load + Jaro-Winkler
+             * cache is computed once.  Defaults to a fresh instance for back-
+             * compat when no caller passes one in.
+             */
+            sharedContacts: ContactLookup? = null,
+            /**
+             * OpenClaw settings repo — required by [OpenClawStatusTool] so the
+             * user can ask "are you connected to OpenClaw?" without going
+             * anywhere near the LLM.  When null, the status tool is omitted
+             * and the question falls through to the LLM (legacy behaviour).
+             */
+            openClawRepo: com.jarvis.assistant.remote.openclaw.OpenClawSettingsRepository? = null,
+            /**
+             * Profile memory service — required by [PersonalFactTool] to
+             * answer direct identity questions ("what's my name?") by
+             * reading stored profile facts rather than asking the LLM,
+             * which previously bled adjacent facts ("I love you").
+             */
+            profileMemory: com.jarvis.assistant.memory.ProfileMemoryService? = null,
         ): ToolRegistry {
-            val contacts = ContactLookup(context)
+            val contacts = sharedContacts ?: run {
+                android.util.Log.d(TAG, "[CONTACT_LOOKUP_SHARED_INSTANCE_CREATED] " +
+                    "buildDefault fallback path — no shared lookup passed in")
+                ContactLookup(context)
+            }
+            if (sharedContacts != null) {
+                android.util.Log.d(TAG, "[CONTACT_LOOKUP_SHARED_INSTANCE_USED] tools=registry")
+            }
             val search   = WebSearch()
 
             // Shared camera + recording instances — one per registry lifetime
@@ -148,10 +181,71 @@ class ToolRegistry private constructor(
                     // End-call MUST precede CallTool so "end call" / "hang up"
                     // is not accidentally routed to the outgoing-call tool.
                     outgoingCallController?.let { add(EndCallTool(it)) }
-                    // High-specificity tools first — order matters
+                    // OpenClaw self-introspection: "are you connected to
+                    // OpenClaw?" / "ping OpenClaw" / "OpenClaw status".
+                    // Registered early so the question never reaches the LLM
+                    // (which has no built-in knowledge of OpenClaw).
+                    openClawRepo?.let {
+                        add(com.jarvis.assistant.tools.device.OpenClawStatusTool(it))
+                    }
+                    // PersonalFactTool: direct identity queries read straight
+                    // from the profile store — never the LLM.  Prevents
+                    // adjacent-fact bleed where "what's my name" returned
+                    // "I love you".
+                    profileMemory?.let {
+                        add(com.jarvis.assistant.tools.device.PersonalFactTool(it))
+                    }
+                    // TimeTool: "what time is it", "what's the date", … must
+                    // resolve locally in < 200 ms.  Registered before any tool
+                    // whose matcher could otherwise consume time/date phrasing
+                    // (AlarmTool / TimerTool / CalendarTool all anchor on
+                    // verbs like "set" / "create", so collision is unlikely,
+                    // but the explicit ordering guarantees it.)
+                    add(com.jarvis.assistant.tools.device.TimeTool())
+                    // BatteryTool: "what's my battery", "how much battery",
+                    // "is the phone charging".  Reads BatteryManager — no
+                    // network, no LLM.
+                    add(com.jarvis.assistant.tools.device.BatteryTool(context))
+                    // Pure-local utility tools — no network, no Android
+                    // permissions, deterministic.  Register early so they
+                    // win over the LLM fallback for arithmetic / unit /
+                    // stopwatch utterances.
+                    add(com.jarvis.assistant.tools.device.CalculatorTool())
+                    add(com.jarvis.assistant.tools.device.UnitConversionTool())
+                    add(com.jarvis.assistant.tools.device.StopwatchTool())
+                    // System toggles: brightness, DND, rotation, screenshot.
+                    // Each opens its own special-access settings panel when
+                    // the grant is missing — no manifest runtime prompt.
+                    add(com.jarvis.assistant.tools.device.BrightnessTool(context))
+                    add(com.jarvis.assistant.tools.device.DndTool(context))
+                    add(com.jarvis.assistant.tools.device.ScreenRotationTool(context))
+                    add(com.jarvis.assistant.tools.device.ScreenshotTool())
+                    // Settings panel navigation — pure Intent dispatch.
+                    add(com.jarvis.assistant.tools.device.SettingsPanelTool(context))
+                    // "Find my phone" — local ring + flashlight strobe.
+                    add(com.jarvis.assistant.tools.device.FindPhoneTool(context))
+                    // Read-only comms helpers — guarded by READ_SMS and
+                    // READ_CALL_LOG runtime permissions.
+                    add(com.jarvis.assistant.tools.device.ReadSmsTool(context, contacts))
+                    add(com.jarvis.assistant.tools.device.RecentCallsTool(context))
+                    // Share-location depends on the location provider.
+                    locationProvider?.let {
+                        add(com.jarvis.assistant.tools.device.ShareLocationTool(context, contacts, it))
+                    }
+                    // Calendar create — sibling of the read-only CalendarTool.
+                    // Registered before CalendarTool so the more specific
+                    // "schedule X at Y" / "add X to calendar" verbs win;
+                    // CalendarTool keeps the read-only "what's on my
+                    // calendar" path.
+                    add(com.jarvis.assistant.tools.device.CalendarCreateTool(context))
+                    // High-specificity tools first — order matters.
+                    // WhatsApp BEFORE SMS: both now share MessageIntentParser
+                    // (which routes by channel), but if a future change ever
+                    // makes their matchers overlap again, the explicit-channel
+                    // tool must win, so register it first.
                     add(CallTool(context, contacts))
-                    add(SmsTool(context, contacts))
                     add(WhatsAppTool(context, contacts))
+                    add(SmsTool(context, contacts))
                     add(EmailTool(context))
                     add(VolumeTool(context))
                     // Music search before MediaControl — "play [track]" must not hit generic play/pause
@@ -217,9 +311,21 @@ class ToolRegistry private constructor(
                     }
                     // Camera + vision tools (before OpenApp to avoid misrouting)
                     add(CameraCaptureTool(context, cameraCapture))
+                    // ViewMediaTool + ShareMediaTool — discoverable via
+                    // "show me the selfie", "share that photo".  Must
+                    // come AFTER CameraCaptureTool so a fresh capture
+                    // utterance wins over the view path.
+                    add(com.jarvis.assistant.tools.device.ViewMediaTool(context))
+                    add(com.jarvis.assistant.tools.device.ShareMediaTool(context))
                     add(AnalyzeCameraViewTool(context, cameraCapture, visionClient, llmRouter))
                     // Audio recording (start/stop/transcribe/summarize)
                     add(AudioRecordingTool(context, recordingManager, transcriber))
+                    // AppActionTool — handles parameterised "open Firefox
+                    // and search for X", "Google X", "search Maps for Y".
+                    // Registered BEFORE the bare OpenAppTool so the
+                    // richer forms win; OpenAppTool catches everything
+                    // it doesn't handle.
+                    add(com.jarvis.assistant.tools.device.apps.AppActionTool(context))
                     add(OpenAppTool(context))
                     add(WebSearchTool(search, settings))
                     // Referential tools — "undo that" / "do the same".  Only

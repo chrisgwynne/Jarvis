@@ -371,24 +371,38 @@ class JarvisNotificationListener : NotificationListenerService() {
         // Only buffer entries with at least a title or text body
         if (title.isNullOrEmpty() && text.isNullOrEmpty()) return
 
+        // ── Home Assistant alert filter ──────────────────────────────────────
+        // Motion / camera / doorbell notifications from the HA companion app
+        // must NEVER be spoken by the proactive engine.  We keep them visible
+        // in the Android notification shade (the user can still see them) but
+        // skip the ring buffer that feeds the proactive "unread" path and tag
+        // the EventBus payload so any downstream consumer can recognise them.
+        val isHaAlert = com.jarvis.assistant.core.events.input
+            .HomeAssistantNotificationClassifier
+            .isHomeAssistantAlert(sbn.packageName, title, text)
+
         // Extract a reply action if present (WhatsApp, Messages, etc.)
         val replyAction = sbn.notification?.actions?.firstOrNull { action ->
             action.remoteInputs?.isNotEmpty() == true && action.actionIntent != null
         }
         val replyInputs = replyAction?.remoteInputs?.toList() ?: emptyList()
 
-        val entry = NotificationEntry(
-            packageName        = sbn.packageName,
-            title              = title ?: "",
-            text               = text  ?: "",
-            postedAt           = sbn.postTime,
-            sbnKey             = sbn.key,
-            replyPendingIntent = replyAction?.actionIntent,
-            replyRemoteInputs  = replyInputs,
-        )
-
-        addEntry(entry)
-        Log.v(TAG, "Buffered notification from ${sbn.packageName}: $title")
+        if (!isHaAlert) {
+            val entry = NotificationEntry(
+                packageName        = sbn.packageName,
+                title              = title ?: "",
+                text               = text  ?: "",
+                postedAt           = sbn.postTime,
+                sbnKey             = sbn.key,
+                replyPendingIntent = replyAction?.actionIntent,
+                replyRemoteInputs  = replyInputs,
+            )
+            addEntry(entry)
+            Log.v(TAG, "Buffered notification from ${sbn.packageName}: $title")
+        } else {
+            Log.d(TAG, "[HA_ALERT_SKIPPED_BUFFER] pkg=${sbn.packageName} title=\"$title\" " +
+                "text=\"$text\" — not eligible for proactive speech")
+        }
 
         EventBus.publish(
             kind = EventKind.NOTIFICATION_POSTED,
@@ -398,6 +412,9 @@ class JarvisNotificationListener : NotificationListenerService() {
                 if (!title.isNullOrEmpty()) put("title", title)
                 if (!text.isNullOrEmpty()) put("text", text)
                 put("is_call", isCallNotif.toString())
+                // Downstream consumers (proactive triggers, dispatcher) must check
+                // this flag and refuse to convert the event into a SpeakAction.
+                put("is_ha_alert", isHaAlert.toString())
             },
             sensitivity = Event.Sensitivity.PERSONAL,
             dedupeKey = sbn.key,

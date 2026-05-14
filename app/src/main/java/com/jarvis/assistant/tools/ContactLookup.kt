@@ -109,6 +109,18 @@ class ContactLookup(private val context: Context) {
     }
 
     /**
+     * Returns every contact display name on the device.  Used by
+     * [com.jarvis.assistant.audio.stt.VocabularyBiaser] to bias STT
+     * candidate scoring against the user's real address book.
+     *
+     * Returns an empty set if READ_CONTACTS permission is denied or the
+     * provider isn't available.  Cheap enough to call on startup; do not
+     * call from the hot path.
+     */
+    fun allDisplayNames(): Set<String> =
+        loadAllContacts().map { it.displayName }.toSet()
+
+    /**
      * Returns top [TOP_N_RESULTS] contacts whose Jaro-Winkler similarity to
      * [name] exceeds [AMBIGUOUS_THRESHOLD], sorted by score descending.
      *

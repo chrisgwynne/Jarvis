@@ -24,6 +24,7 @@ class ReminderFlowTest {
 
     @Before fun setUp() {
         context       = mock()
+        com.jarvis.assistant.testing.stubSharedPreferences(context)
         contactLookup = mock()
         reminderRepo  = mock()
         coordinator   = FollowUpCoordinator(context, contactLookup, reminderRepo)

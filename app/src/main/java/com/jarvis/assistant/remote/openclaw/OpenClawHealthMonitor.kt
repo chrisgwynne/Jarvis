@@ -5,17 +5,36 @@ import com.jarvis.assistant.llm.NetworkClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Request
+import java.util.concurrent.TimeUnit
 
 /**
  * Performs a lightweight HTTP GET to the /health endpoint and maps the result
  * to an [OpenClawConnectionStatus].
  *
  * Used by the Settings UI "Test Connection" button and as a pre-flight check.
- * Reuses [NetworkClient.http] — no dedicated OkHttp instance needed for health checks.
+ * Reuses [NetworkClient.http] as the base client but applies *tight* call
+ * timeouts so a dead OpenClaw doesn't leave the user waiting 30 s on a
+ * routine "are you connected?" check.  Bound is 6 s total — enough for a
+ * sleepy Tailscale node, short enough that the spoken response feels
+ * snappy when the server is just plain down.
  */
 object OpenClawHealthMonitor {
 
     private const val TAG = "OpenClawHealth"
+
+    /**
+     * Health-check OkHttp client.  Derived from [NetworkClient.http] so we
+     * inherit the connection pool / interceptors, but with much shorter
+     * timeouts (the default 30-s connect / 45-s read makes a missing
+     * server feel like a bug in the app).
+     */
+    private val healthHttp by lazy {
+        NetworkClient.http.newBuilder()
+            .connectTimeout(4, TimeUnit.SECONDS)
+            .readTimeout(4, TimeUnit.SECONDS)
+            .callTimeout(6, TimeUnit.SECONDS)
+            .build()
+    }
 
     /** Result of a health check — status + human-readable detail explaining the outcome. */
     data class Result(val status: OpenClawConnectionStatus, val detail: String)
@@ -41,7 +60,7 @@ object OpenClawHealthMonitor {
                     }
                     .build()
 
-                val response = NetworkClient.http.newCall(request).execute()
+                val response = healthHttp.newCall(request).execute()
                 response.use { r ->
                     Log.d(TAG, "Response: HTTP ${r.code}")
                     when (r.code) {

@@ -135,7 +135,15 @@ class GoogleWakeWordDetector(
             }
 
             override fun onError(error: Int) {
-                Log.d(TAG, "Recognizer onError code=$error")
+                // ERROR_AUDIO (3) = mic hardware unavailable or audio routing broken.
+                // This typically fires when Bluetooth SCO is active but the channel
+                // isn't ready for SpeechRecognizer.  We surface it as a warning so
+                // it's visible in logcat rather than silently looping.
+                if (error == 3 /*SpeechRecognizer.ERROR_AUDIO*/) {
+                    Log.w(TAG, "Recognizer ERROR_AUDIO (3) — likely audio routing conflict")
+                } else {
+                    Log.d(TAG, "Recognizer onError code=$error")
+                }
                 settle(false)
             }
 
@@ -159,8 +167,10 @@ class GoogleWakeWordDetector(
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_200L)
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 800L)
+                    // Tightened from 1200/800 ms → 800/400 ms to reduce dead-air
+                    // between wake-word sessions and speed up activation latency.
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 800L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 400L)
                     putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 0L)
                 }
             )

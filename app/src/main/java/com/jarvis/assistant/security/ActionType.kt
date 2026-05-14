@@ -43,7 +43,35 @@ enum class ActionType(val displayName: String) {
     VOICE_SHORTCUT("Voice Shortcut"),
     REPEAT_ACTION("Repeat Last Action"),
     UNDO_ACTION("Undo Last Action"),
-    EXPORT_CONVERSATION("Export Conversation");
+    EXPORT_CONVERSATION("Export Conversation"),
+    // ── Sprint additions — tools registered after the original enum ──
+    READ_TIME("Read Time"),
+    READ_BATTERY("Read Battery"),
+    VIEW_MEDIA("View Media"),
+    SHARE_MEDIA("Share Media"),
+    APP_ACTION("App Action"),
+
+    // ── Production tools that drifted off the allowlist ────────────────
+    CLIPBOARD("Clipboard"),
+    OPENCLAW_STATUS("OpenClaw Status"),
+    PERSONAL_FACT("Personal Fact"),
+    REPLY_NOTIFICATION("Reply to Notification"),
+    REPORT_ISSUE("Report Issue"),
+
+    // ── Voice-tool sprint: utilities, system toggles, comms readouts ──
+    CALCULATOR("Calculator"),
+    UNIT_CONVERSION("Unit Conversion"),
+    STOPWATCH("Stopwatch"),
+    BRIGHTNESS("Brightness"),
+    DND("Do Not Disturb"),
+    SCREEN_ROTATION("Screen Rotation"),
+    SCREENSHOT("Screenshot"),
+    SETTINGS_PANEL("Open Settings Panel"),
+    FIND_PHONE("Find Phone"),
+    SHARE_LOCATION("Share Location"),
+    READ_SMS("Read SMS"),
+    RECENT_CALLS("Recent Calls"),
+    CALENDAR_CREATE("Create Calendar Event");
 
     companion object {
         /**
@@ -122,7 +150,45 @@ enum class ActionType(val displayName: String) {
             "note_expectation"    to NOTE_EXPECTATION,
             "repeat_last_action"  to REPEAT_ACTION,
             "undo_last_action"    to UNDO_ACTION,
-            "export_conversation" to EXPORT_CONVERSATION
+            "export_conversation" to EXPORT_CONVERSATION,
+
+            // ── Sprint additions ───────────────────────────────────────
+            // Local-first tools added across the phone-reliability /
+            // Todoist / context follow-up sprints.  Missing entries
+            // here are the reason "show me the selfie" / "what time is
+            // it" silently denied at the policy gate.
+            "time"                to READ_TIME,
+            "battery"             to READ_BATTERY,
+            "view_media"          to VIEW_MEDIA,
+            "share_media"         to SHARE_MEDIA,
+            "app_action"          to APP_ACTION,
+
+            // ── Drift catch-up — tools long registered but never
+            // allowlisted.  Their first invocations have been silently
+            // denied at the policy gate ever since they were added.
+            "clipboard"           to CLIPBOARD,
+            "openclaw_status"     to OPENCLAW_STATUS,
+            "personal_fact"       to PERSONAL_FACT,
+            "reply_notification"  to REPLY_NOTIFICATION,
+            "report_issue"        to REPORT_ISSUE,
+
+            // Voice-tool sprint additions — utilities, system toggles,
+            // comms readouts.  Every new Tool MUST land here at the
+            // same time as its registration in ToolRegistry, otherwise
+            // ActionPolicyAllowlistTest fails the build.
+            "calculator"          to CALCULATOR,
+            "unit_conversion"     to UNIT_CONVERSION,
+            "stopwatch"           to STOPWATCH,
+            "brightness"          to BRIGHTNESS,
+            "dnd"                 to DND,
+            "screen_rotation"     to SCREEN_ROTATION,
+            "screenshot"          to SCREENSHOT,
+            "settings_panel"      to SETTINGS_PANEL,
+            "find_phone"          to FIND_PHONE,
+            "share_location"      to SHARE_LOCATION,
+            "read_sms"            to READ_SMS,
+            "recent_calls"        to RECENT_CALLS,
+            "calendar_create"     to CALENDAR_CREATE,
         )
 
         fun fromToolName(toolName: String): ActionType? = APPROVED_TOOL_MAP[toolName]

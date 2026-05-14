@@ -70,16 +70,18 @@ class CameraCaptureTool(
 
         /**
          * FRONT / selfie triggers.
-         * Covers: "selfie", "take a selfie", "take my selfie", "take me a selfie",
-         *         "snap a selfie", "take a quick selfie", "take a front photo", etc.
-         * Checked FIRST because "selfie" is unambiguous.
          *
-         * The `selfie\b` catch-all at the end ensures ANY transcript that contains
-         * the word "selfie" maps to the front camera, regardless of phrasing.
+         * REQUIRES a capture verb (take / snap / capture / grab).  An
+         * earlier version had a bare `|selfie\b` catch-all so ANY
+         * utterance containing "selfie" matched — which made
+         * "show me the selfie" fire the camera AGAIN instead of
+         * routing to ViewMediaTool.  That was the reported bug.
+         *
+         * Accepts the "another / new / one more" qualifiers so
+         * "take another selfie" still routes here.
          */
         private val FRONT_TRIGGERS = Regex(
-            """(?:take|snap|capture)\s+(?:(?:me\s+a?|my|a|an|the)\s+)?(?:quick\s+)?(?:selfie|front\s+(?:photo|pic(?:ture)?|image|shot))""" +
-            """|selfie\b""",
+            """(?:take|snap|capture|grab)\s+(?:(?:me\s+a?|my|a|an|the|another)\s+)?(?:quick\s+|new\s+|one\s+more\s+)?(?:selfie|front\s+(?:photo|pic(?:ture)?|image|shot))""",
             RegexOption.IGNORE_CASE
         )
 
@@ -119,7 +121,23 @@ class CameraCaptureTool(
         return when (val result = captureManager.capturePhoto(lensFacing)) {
             is CaptureResult.Success -> {
                 Log.i(TAG, "$label saved: ${result.file.name}")
-                ToolResult.Success("Got it, $label taken.")
+                // Publish the captured file path so contextual
+                // follow-ups ("show me the selfie", "share that")
+                // resolve against this capture.  rawData carries the
+                // path back to the runtime so RecentActionContextStore
+                // picks it up without reaching into MediaContextStore.
+                com.jarvis.assistant.tools.device.media.MediaContextStore.record(
+                    com.jarvis.assistant.tools.device.media.MediaContextStore.Entry(
+                        filePath  = result.file.absolutePath,
+                        mimeType  = "image/jpeg",
+                        kind      = if (isFront) "selfie" else "photo",
+                    )
+                )
+                Log.d(TAG, "[MEDIA_URI_CAPTURED] kind=$label path=${result.file.absolutePath}")
+                ToolResult.Success(
+                    spokenFeedback = "Got it, $label taken.",
+                    rawData        = result.file.absolutePath,
+                )
             }
             is CaptureResult.Failure -> {
                 Log.w(TAG, "$label failed: ${result.reason}")

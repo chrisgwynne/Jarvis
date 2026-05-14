@@ -12,7 +12,9 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -69,6 +71,11 @@ class CallCoordinatorTest {
     )
 
     @Before fun setUp() {
+        // Install the test dispatcher as Dispatchers.Main so any
+        // `withContext(Dispatchers.Main)` inside production code dispatches
+        // to the same TestScheduler the test drives via advanceUntilIdle.
+        kotlinx.coroutines.Dispatchers.setMain(testDispatcher)
+
         ttsEngine     = mock()
         speechCapture = mock()
         machine       = JarvisStateMachine()
@@ -79,6 +86,10 @@ class CallCoordinatorTest {
 
         // Start state machine in a valid starting state
         machine.forceTransition(JarvisState.IdleWake)
+    }
+
+    @org.junit.After fun tearDown() {
+        kotlinx.coroutines.Dispatchers.resetMain()
     }
 
     // ── Known contact call: user says "answer" ────────────────────────────────

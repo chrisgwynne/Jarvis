@@ -319,6 +319,14 @@ class AppResolver(
     /** Force a reload of the cached launcher list — call on PACKAGE_ADDED / REMOVED. */
     fun invalidateLauncherCache() { launchersCache = null }
 
+    /**
+     * Returns every launchable app's display label (lower-cased).  Used by
+     * [com.jarvis.assistant.audio.stt.VocabularyBiaser] to know the user's
+     * real installed-app vocabulary for STT candidate scoring.  Backed by
+     * the same 30 s cache as [launchers].
+     */
+    fun launcherLabels(): Set<String> = launchers().map { it.second }.toSet()
+
     private fun launchers(): List<Pair<ResolveInfo, String>> {
         val snapshot = launchersCache
         val now = System.currentTimeMillis()

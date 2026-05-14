@@ -39,6 +39,13 @@ class ToolDispatcher(
      */
     private val killSwitchProvider: () -> Boolean = { false },
     /**
+     * Supplies the current "voice strict mode" setting.  Default false
+     * — owner is assumed; voice identity is an upgrade signal, not a
+     * blocker.  See [com.jarvis.assistant.speaker.trust.VoiceTrustState]
+     * for the policy matrix backing this flag.
+     */
+    private val voiceStrictModeProvider: () -> Boolean = { false },
+    /**
      * Supplies the shared action ledger at dispatch time. Lambda rather
      * than direct injection so JarvisRuntime can construct the dispatcher
      * before ProactiveEngine (which currently owns the ledger). Returns
@@ -142,11 +149,26 @@ class ToolDispatcher(
         sessionSpeaker: SpeakerSessionContext,
         transcript: String,
         skipConfirmation: Boolean = false,
+        /**
+         * Confidence tier from [com.jarvis.assistant.audio.stt.TranscriptCorrector].
+         * Used in the confirmation gate so:
+         *   - HIGH-risk tools always confirm regardless of tier.
+         *   - MEDIUM-risk tools confirm ONLY when tier is not HIGH.
+         *   - LOW-risk tools never confirm.
+         * Pass null to fall back to legacy "always confirm if not LOW" behaviour.
+         */
+        confidenceTier: com.jarvis.assistant.audio.stt.TranscriptCorrector.ConfidenceTier? = null,
     ): DispatchResult {
         val hints = BrainHints(tool.name, input)
 
         // ── Speaker permission gate ────────────────────────────────────────────
-        val speakerDecision = SpeakerPermissionPolicy.evaluate(sessionSpeaker.result, tool.name)
+        // Honours the user's "voice strict mode" setting.  Default OFF
+        // means low-confidence / unknown voices are treated as
+        // OWNER_ASSUMED for LOW + MEDIUM risk commands — no lockouts.
+        val speakerDecision = SpeakerPermissionPolicy.evaluate(
+            sessionSpeaker.result, tool.name,
+            strictMode = voiceStrictModeProvider(),
+        )
         if (!speakerDecision.allowed) {
             return DispatchResult.Denied(speakerDecision.denyReason ?: "I can't do that right now.")
         }
@@ -170,11 +192,26 @@ class ToolDispatcher(
         }
 
         // ── Confirmation gate ─────────────────────────────────────────────────
-        if (!skipConfirmation && confirmationGate != null &&
-            tool.riskClass != com.jarvis.assistant.tools.framework.RiskClass.LOW
-        ) {
-            val registered = confirmationGate.registerPending(tool, input, transcript)
-            Log.d(TAG, "Confirmation required for ${tool.name} (risk=${tool.riskClass}) pending=${registered.pending.id}")
+        // Tier × Risk matrix:
+        //   LOW risk       → never confirm (auto-execute)
+        //   MEDIUM risk    → confirm only when confidence is NOT HIGH
+        //   HIGH risk      → always confirm
+        // Legacy callers (no tier passed in) fall back to the old behaviour:
+        // confirm anything that isn't LOW.
+        val risk = tool.riskClass
+        val needsConfirmation = !skipConfirmation && confirmationGate != null && when (risk) {
+            com.jarvis.assistant.tools.framework.RiskClass.LOW    -> false
+            com.jarvis.assistant.tools.framework.RiskClass.HIGH   -> true
+            com.jarvis.assistant.tools.framework.RiskClass.MEDIUM ->
+                confidenceTier != com.jarvis.assistant.audio.stt.TranscriptCorrector.ConfidenceTier.HIGH
+        }
+        if (risk == com.jarvis.assistant.tools.framework.RiskClass.LOW && !skipConfirmation) {
+            Log.d(TAG, "[LOW_RISK_AUTO_EXECUTE] tool=${tool.name}")
+        }
+        if (needsConfirmation) {
+            val registered = confirmationGate!!.registerPending(tool, input, transcript)
+            Log.d(TAG, "[CONFIRMATION_PENDING_CREATED] tool=${tool.name} risk=$risk " +
+                "tier=$confidenceTier pending=${registered.pending.id}")
             return DispatchResult.NeedsConfirmation(
                 prompt = registered.prompt,
                 pendingId = registered.pending.id,

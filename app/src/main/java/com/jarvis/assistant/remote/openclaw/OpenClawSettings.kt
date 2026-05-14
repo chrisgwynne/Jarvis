@@ -17,6 +17,15 @@ data class OpenClawSettings(
     val deviceId:     String  = "",
     val deviceToken:  String  = "",
     /**
+     * Optional one-shot pairing code shown on the OpenClaw gateway side
+     * during initial approval.  When non-blank, sent in the `connect`
+     * frame's `auth.pairingCode` field so the gateway can auto-approve
+     * this device instead of waiting for `openclaw devices approve`.
+     * Cleared after a successful pairing (the gateway returns a
+     * deviceToken which is persisted instead).
+     */
+    val pairingCode:  String  = "",
+    /**
      * When non-blank, overrides the LLM endpoint base URL (e.g. "http://host:8642").
      * The gateway (WebSocket node) always uses the primary host:port above.
      */
@@ -35,6 +44,8 @@ data class OpenClawSettings(
 /** Live connection status for the OpenClaw node (inbound gateway WebSocket). */
 enum class OpenClawNodeStatus(val displayLabel: String) {
     DISABLED("Disabled"),
+    /** Device identity (keypair / signed nonce) not yet available — cannot pair. */
+    UNPAIRED("Device not paired"),
     CONNECTING("Connecting…"),
     PENDING_APPROVAL("Awaiting admin approval"),
     CONNECTED("Connected as node"),

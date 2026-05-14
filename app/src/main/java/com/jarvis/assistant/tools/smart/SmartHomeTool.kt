@@ -76,7 +76,25 @@ class SmartHomeTool(private val settings: SettingsStore) : Tool {
         }
         QUERY_PATTERN.find(t)?.let { m ->
             val name = (m.groupValues[1].ifBlank { m.groupValues[2] }).trim()
-            if (name.isNotBlank()) return ToolInput(t, mapOf("action" to "status", "entity_name" to name, "value" to "", "domain_hint" to ""))
+            if (name.isNotBlank()) {
+                // Infer the domain from the question word so a query like
+                // "is the front door locked" hits lock.front_door rather than
+                // a same-named binary_sensor / camera / light entity.
+                // (Issue #25 — front door lock discrepancy.)
+                val lower = t.lowercase()
+                val statusDomainHint = when {
+                    "locked"   in lower || "unlocked" in lower            -> "lock"
+                    "open"     in lower || "closed"   in lower            -> "cover"
+                    "running"  in lower                                    -> "script"
+                    else                                                   -> ""
+                }
+                return ToolInput(t, mapOf(
+                    "action"       to "status",
+                    "entity_name"  to name,
+                    "value"        to "",
+                    "domain_hint"  to statusDomainHint
+                ))
+            }
         }
 
         val lower = t.lowercase()
@@ -143,8 +161,12 @@ class SmartHomeTool(private val settings: SettingsStore) : Tool {
             ?: return ToolResult.Failure("No '$entityName' in your setup.")
 
         if (action == "status") {
-            val state = client.getEntityState(match.entityId)
-            val stateStr = state?.state ?: match.state
+            // Refresh the entity state at query time so we never report a stale
+            // value from the initial getStates() cache.  (Issue #25.)
+            val freshState = client.getEntityState(match.entityId)
+            val stateStr   = freshState?.state ?: match.state
+            Log.d("SmartHomeTool", "[HA_STATUS_SELECTED] entity=${match.entityId} " +
+                "domain=${match.domain} raw_state=\"$stateStr\" hint=\"$domainHint\"")
             return ToolResult.Success("${match.friendlyName} is ${describeState(match.domain, stateStr)}.")
         }
 
@@ -237,14 +259,39 @@ class SmartHomeTool(private val settings: SettingsStore) : Tool {
         else     -> "Updated ${entity.friendlyName}."
     }
 
-    private fun describeState(domain: String, state: String): String = when {
-        domain == "lock"    -> if (state == "locked") "locked" else "unlocked"
-        domain == "cover"   -> if (state == "open") "open" else "closed"
-        domain == "climate" -> "set to $state"
-        domain == "fan"     -> if (state == "on") "on" else "off"
-        state == "on"       -> "on"
-        state == "off"      -> "off"
-        else                -> state
+    private fun describeState(domain: String, state: String): String {
+        // Unknown / unavailable / empty must never be reported as a default
+        // good-case state.  Bug #25: lock.front_door returning "unavailable"
+        // was being read out as "unlocked", which is the opposite of correct.
+        val s = state.lowercase().trim()
+        if (s.isBlank() || s == "unknown" || s == "unavailable" || s == "none") {
+            Log.w("SmartHomeTool", "[HA_STATE_INDETERMINATE] domain=$domain raw_state=\"$state\"")
+            return "showing as $s, so I can't tell for sure"
+        }
+        return when (domain) {
+            "lock"    -> when (s) {
+                "locked"   -> "locked"
+                "unlocked" -> "unlocked"
+                "locking"  -> "still locking"
+                "unlocking"-> "still unlocking"
+                "jammed"   -> "jammed"
+                else       -> "in an unknown state ($s)"
+            }
+            "cover"   -> when (s) {
+                "open"   -> "open"
+                "closed" -> "closed"
+                "opening"-> "opening"
+                "closing"-> "closing"
+                else     -> "in state $s"
+            }
+            "climate" -> "set to $s"
+            "fan"     -> if (s == "on") "on" else "off"
+            else -> when (s) {
+                "on"  -> "on"
+                "off" -> "off"
+                else  -> s
+            }
+        }
     }
 
     private fun findBestEntity(

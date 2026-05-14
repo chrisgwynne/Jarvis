@@ -103,15 +103,22 @@ class BargeInDetector(
             return
         }
 
+        // Best-effort software AEC / AGC / NS on top of the VOICE_COMMUNICATION
+        // source.  AEC in particular is essential for reliable barge-in when
+        // TTS is playing through the same hardware output.
+        val effects = AudioEffectsAttach.attach(record, TAG)
+
         try {
             record.startRecording()
         } catch (e: IllegalStateException) {
             // Device denied the record start (mic held by another app, focus lost
             // mid-init, etc.).  Release the claim so we don't pin the hardware.
             Log.w(TAG, "AudioRecord.startRecording() threw — releasing", e)
+            AudioEffectsAttach.release(effects)
             record.release()
             return
         }
+        Log.d(TAG, "[BARGE_IN_ARMED] threshold=$energyThreshold holdMs=$holdMs")
         Log.d(TAG, "Monitoring started (threshold=$energyThreshold, holdMs=$holdMs)")
 
         detectJob = scope.launch {
@@ -152,6 +159,7 @@ class BargeInDetector(
                     }
                 }
             } finally {
+                AudioEffectsAttach.release(effects)
                 record.stop()
                 record.release()
                 Log.d(TAG, "Monitoring stopped")

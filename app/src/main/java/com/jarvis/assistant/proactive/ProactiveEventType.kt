@@ -43,7 +43,26 @@ enum class ProactiveEventType {
     LEFT_HOME,
 
     /** User arrived at a recurring known (but non-home) place. */
-    ARRIVED_KNOWN_PLACE;
+    ARRIVED_KNOWN_PLACE,
+
+    // ── Scheduled reminders (Calendar / Todoist / local) ──────────────────
+    // Each upstream item produces two events: one at 30 minutes before
+    // and one at 10 minutes before, allowing the engine to score and
+    // suppress them independently (e.g. the user may want only the 10m
+    // nudge during quiet hours).  Source is encoded in the type so the
+    // user can disable per-source via category toggles.
+    /** Google / system Calendar event scheduled to start in ~30 minutes. */
+    CALENDAR_EVENT_30M,
+    /** Google / system Calendar event scheduled to start in ~10 minutes. */
+    CALENDAR_EVENT_10M,
+    /** Todoist task due in ~30 minutes. */
+    TODOIST_TASK_30M,
+    /** Todoist task due in ~10 minutes. */
+    TODOIST_TASK_10M,
+    /** Local (Jarvis) reminder due in ~30 minutes. */
+    LOCAL_REMINDER_30M,
+    /** Local (Jarvis) reminder due in ~10 minutes. */
+    LOCAL_REMINDER_10M;
 
     /**
      * Stable, lowercase key used to namespace this type inside [CooldownStore].
@@ -70,5 +89,11 @@ enum class ProactiveEventType {
         ARRIVED_HOME,
         LEFT_HOME,
         ARRIVED_KNOWN_PLACE -> "LOCATION"
+        CALENDAR_EVENT_30M,
+        CALENDAR_EVENT_10M -> "CALENDAR"
+        TODOIST_TASK_30M,
+        TODOIST_TASK_10M -> "TODOIST"
+        LOCAL_REMINDER_30M,
+        LOCAL_REMINDER_10M -> "REMINDER"
     }
 }

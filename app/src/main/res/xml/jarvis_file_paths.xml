@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Paths exported via the FileProvider authority
+  ${applicationId}.fileprovider.
+
+  Kept narrow on purpose: only the app's internal photo / recording
+  output directories are exposed.  Adding new entries here means
+  another category of file can be shared with other apps via
+  content:// URIs — review carefully when adding.
+-->
+<paths>
+    <!-- App-private cache (CameraCaptureManager writes JPEGs here on
+         older devices that don't permit MediaStore inserts). -->
+    <cache-path
+        name="jarvis_camera"
+        path="camera/" />
+
+    <!-- App-private files dir (RecordingTranscriber output, etc.). -->
+    <files-path
+        name="jarvis_recordings"
+        path="recordings/" />
+
+    <!-- External app-private directory — where CameraCaptureManager
+         publishes images on Android 10+ before they move to MediaStore. -->
+    <external-files-path
+        name="jarvis_external_camera"
+        path="camera/" />
+
+    <!-- Catch-all for the external files root — needed when MediaStore
+         returns a path under getExternalFilesDir(null). -->
+    <external-files-path
+        name="jarvis_external_root"
+        path="." />
+</paths>

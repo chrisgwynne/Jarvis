@@ -56,17 +56,24 @@ class OpenClawNodeClient(
         _sharedStatus.value = s
     }
 
-    private val scope   = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // A new scope is created each time start() is called so that stop() → start()
+    // works correctly.  stop() cancels the old scope; start() assigns a fresh one.
+    @Volatile private var scope: CoroutineScope = newScope()
     private val running = AtomicBoolean(false)
+
+    private fun newScope() = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Volatile private var ws: WebSocket? = null
     @Volatile private var pendingNonce: String = ""
 
-    // OkHttp client with no read timeout — WebSocket must stay open indefinitely
+    // OkHttp client with no read timeout — WebSocket must stay open indefinitely.
+    // pingInterval sends an OkHttp-level WebSocket ping frame every 30 s so NAT
+    // entries and intermediate firewalls don't silently drop the idle connection.
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .connectTimeout(15, TimeUnit.SECONDS)
+            .pingInterval(30, TimeUnit.SECONDS)
             .build()
     }
 
@@ -74,6 +81,12 @@ class OpenClawNodeClient(
 
     fun start() {
         if (running.getAndSet(true)) return
+        // Recreate the scope if the previous one was cancelled by stop().
+        // Without this, start() → stop() → start() would silently do nothing
+        // because scope.launch() is a no-op on a cancelled scope.
+        if (!scope.coroutineContext[Job]!!.isActive) {
+            scope = newScope()
+        }
         setStatus(OpenClawNodeStatus.CONNECTING)
         scope.launch { connectLoop() }
     }
@@ -92,10 +105,34 @@ class OpenClawNodeClient(
         var backoffMs = 1_000L
         while (running.get()) {
             val settings = settingsRepo.snapshot()
-            if (!settings.isFullyConfigured || !settings.nodeEnabled) {
+            if (!settings.isFullyConfigured) {
                 setStatus(OpenClawNodeStatus.DISABLED)
                 return
             }
+
+            // ── Pairing pre-flight ────────────────────────────────────────────
+            // The gateway's connect schema (v3+) requires `device.publicKey`
+            // AND `device.signature` — a signed challenge.  Until we wire
+            // Ed25519 keypair generation + nonce signing, those fields would
+            // ship blank and the gateway rejects every frame with code 1008.
+            // Reopening the socket every backoff cycle is wasted bandwidth
+            // *and* logs noise that drowns real failures.  When neither a
+            // persisted deviceToken nor a one-shot pairingCode is present
+            // we have nothing valid to send — stop and surface the state.
+            //
+            // Status drains to UNPAIRED so the Settings UI can offer a
+            // pairing-code field; flipping the flag again (or saving a code)
+            // calls start() which kicks the loop back to life.
+            if (!isPairingMaterialAvailable(settings)) {
+                Log.i(TAG, "[OPENCLAW_NODE_DISABLED_UNPAIRED] " +
+                    "deviceToken_blank=${settings.deviceToken.isBlank()} " +
+                    "pairingCode_blank=${settings.pairingCode.isBlank()} " +
+                    "deviceId_blank=${settings.deviceId.isBlank()} — " +
+                    "not opening WebSocket until pairing material is provided")
+                setStatus(OpenClawNodeStatus.UNPAIRED)
+                return
+            }
+
             setStatus(OpenClawNodeStatus.CONNECTING)
             connect(settings)
             if (!running.get()) break
@@ -105,6 +142,22 @@ class OpenClawNodeClient(
             delay(backoffMs)
             backoffMs = (backoffMs * 2).coerceAtMost(60_000L)
         }
+    }
+
+    /**
+     * Pairing pre-flight check.  We can connect when EITHER:
+     *   - A previously approved `deviceToken` is on disk (returning device), OR
+     *   - A one-shot `pairingCode` was entered in Settings.
+     *
+     * Without one of those the gateway will reject every attempt.  Note: in
+     * the longer term this gate should also require a generated Ed25519
+     * keypair so `device.publicKey` / `signature` are non-empty.  Until that
+     * lands the gate is a strict subset — pairing material alone is the
+     * minimum we need.
+     */
+    private fun isPairingMaterialAvailable(settings: OpenClawSettings): Boolean {
+        if (settings.deviceId.isBlank()) return false
+        return settings.deviceToken.isNotBlank() || settings.pairingCode.isNotBlank()
     }
 
     // Suspends until the WebSocket session ends (closed or failed).
@@ -119,8 +172,18 @@ class OpenClawNodeClient(
             ws = httpClient.newWebSocket(request, object : WebSocketListener() {
 
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    Log.d(TAG, "WebSocket open")
-                    // challenge event arrives next; connect req is sent in handleEvent
+                    Log.d(TAG, "[NODE_WS_OPEN] waiting for connect.challenge")
+                    // Assign the field so handleEvent / sendResult can find the
+                    // socket even on the OkHttp dispatcher thread before
+                    // newWebSocket()'s return value is visible to other threads.
+                    ws = webSocket
+                    // Do NOT send `connect` here.  The gateway always emits a
+                    // `connect.challenge` event with a nonce that we MUST sign
+                    // with the device private key (see handleEvent).  Sending
+                    // before the challenge produces a duplicate connect frame
+                    // and forces us to send an unsigned identity, which the
+                    // current gateway schema rejects with `must have required
+                    // property 'publicKey'`/`'signature'`.
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -133,13 +196,14 @@ class OpenClawNodeClient(
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    Log.w(TAG, "WebSocket failure: ${t.javaClass.simpleName}: ${t.message}")
+                    Log.w(TAG, "[NODE_WS_FAILURE] ${t.javaClass.simpleName}: ${t.message} " +
+                        "http=${response?.code ?: "-"}")
                     if (running.get()) setStatus(OpenClawNodeStatus.RECONNECTING)
                     if (cont.isActive) cont.resume(Unit)
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    Log.d(TAG, "WebSocket closed: $code")
+                    Log.d(TAG, "[NODE_WS_CLOSED] code=$code reason=\"$reason\"")
                     if (running.get()) setStatus(OpenClawNodeStatus.RECONNECTING)
                     if (cont.isActive) cont.resume(Unit)
                 }
@@ -150,23 +214,44 @@ class OpenClawNodeClient(
 
     // ── Outbound frame helpers ────────────────────────────────────────────────
 
-    private fun sendConnect(settings: OpenClawSettings) {
+    /**
+     * Send the initial `connect` request frame.  Callers from inside the
+     * [WebSocketListener] callbacks MUST pass [target] (the `webSocket`
+     * parameter), because the [ws] field may not yet be assigned when
+     * `onOpen` fires — `httpClient.newWebSocket()` returns the WebSocket
+     * synchronously, but the listener can run on the OkHttp dispatcher
+     * thread before that assignment is visible.  Without this, the
+     * `ws?.send(...)` was a silent no-op and the gateway logged
+     * "closed before connect" on every reconnect.
+     */
+    private fun sendConnect(settings: OpenClawSettings, target: WebSocket? = ws) {
         val correlationId = "connect-${UUID.randomUUID()}"
         // Use stored deviceToken on reconnect; empty string on first connect
         val authToken = settings.deviceToken.ifBlank { settings.authToken }
 
+        // Schema-aligned with the omi-bridge reference client (the only known
+        // accepted connect frame):
+        //  - protocol 3 (we previously sent 1, which the live gateway rejects)
+        //  - client.id "cli" (gateway has an enum of allowed values; ours
+        //    was custom; "cli" is the proven-working value, and the role
+        //    field below still marks us as a node)
+        //  - device.publicKey / .signature / .signedAt are OMITTED when
+        //    empty (gateway schema requires non-empty when present, and
+        //    accepts the connect with the field absent)
+        //  - device.id remains so the gateway can pair us to a stable
+        //    identity across reconnects
         val frame = JSONObject().apply {
             put("type", "req")
             put("id", correlationId)
             put("method", "connect")
             put("params", JSONObject().apply {
-                put("minProtocol", 1)
-                put("maxProtocol", 1)
+                put("minProtocol", 3)
+                put("maxProtocol", 3)
                 put("client", JSONObject().apply {
-                    put("id", "jarvis-android")
-                    put("version", "1.0.0")
+                    put("id",       "cli")
+                    put("version",  "1.0.0")
                     put("platform", "android")
-                    put("mode", "node")
+                    put("mode",     "cli")
                 })
                 put("role", "node")
                 put("scopes",  org.json.JSONArray())
@@ -175,20 +260,37 @@ class OpenClawNodeClient(
                 put("permissions", JSONObject())
                 put("auth", JSONObject().apply {
                     if (authToken.isNotBlank()) put("token", authToken)
+                    // One-shot pairing code from Settings UI.  When the
+                    // gateway sees this field it auto-approves the device
+                    // instead of requiring `openclaw devices approve`.
+                    if (settings.pairingCode.isNotBlank()) {
+                        put("pairingCode", settings.pairingCode)
+                    }
                 })
                 put("locale",    "en-US")
-                put("userAgent", "Jarvis/1.0 Android")
+                put("userAgent", "Jarvis-Android/1.0")
+                // Device block: include `id` (always) and `nonce` (when the
+                // gateway has sent us one).  publicKey / signature / signedAt
+                // are omitted entirely until we wire keypair signing — the
+                // schema rejects empty-string placeholders for these fields.
                 put("device", JSONObject().apply {
-                    put("id",          settings.deviceId)
-                    put("publicKey",   "")
-                    put("signature",   "")
-                    put("signedAt",    0)
-                    put("nonce",       pendingNonce)
+                    put("id", settings.deviceId)
+                    if (pendingNonce.isNotBlank()) put("nonce", pendingNonce)
                 })
             })
         }
-        ws?.send(frame.toString())
-        Log.d(TAG, "Sent connect req (id=$correlationId, commands=${availableCommands().size})")
+        val payload = frame.toString()
+        // Prefer the explicit target (passed from onOpen) — see KDoc above
+        // for the race-condition rationale.  Fall back to the field for
+        // callers outside the listener (e.g. handleEvent re-sending after
+        // a challenge arrives).
+        val effective = target ?: ws
+        val sent = effective?.send(payload) ?: false
+        Log.d(TAG, "[NODE_CONNECT_REQ_SENT] ok=$sent ws_null=${effective == null} " +
+            "id=$correlationId commands=${availableCommands().size} " +
+            "pairing=${if (settings.pairingCode.isNotBlank()) "yes" else "no"} " +
+            "deviceToken=${if (settings.deviceToken.isNotBlank()) "yes" else "no"} " +
+            "bytes=${payload.length}")
     }
 
     private fun sendResult(requestId: String, result: String) {
@@ -235,8 +337,8 @@ class OpenClawNodeClient(
         when (event) {
             "connect.challenge" -> {
                 pendingNonce = json.optJSONObject("payload")?.optString("nonce") ?: ""
-                Log.d(TAG, "Got challenge, nonce=${pendingNonce.take(8)}…")
-                sendConnect(settings)
+                Log.d(TAG, "[NODE_CHALLENGE_RX] nonce=${pendingNonce.take(8)}…")
+                sendConnect(settings, target = ws)
             }
             "tick" -> {
                 // Gateway keepalive — no reply needed, just log at verbose level

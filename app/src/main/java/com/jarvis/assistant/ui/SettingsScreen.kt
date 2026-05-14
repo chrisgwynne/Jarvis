@@ -61,6 +61,16 @@ fun SettingsScreen(
         composable(SettingsCategory.Proactivity.route) {
             ProactivitySettingsScreen(onBack = popToRoot, onClose = onBack)
         }
+        composable(SettingsCategory.Todoist.route) {
+            com.jarvis.assistant.ui.settings.screens.TodoistSettingsScreen(
+                onBack = popToRoot, onClose = onBack
+            )
+        }
+        composable(SettingsCategory.LocalDiagnostics.route) {
+            com.jarvis.assistant.ui.settings.screens.LocalDiagnosticsScreen(
+                onBack = popToRoot, onClose = onBack
+            )
+        }
         composable(SettingsCategory.ActionsApps.route) {
             ActionsAppsSettingsScreen(vm = vm, onBack = popToRoot, onClose = onBack)
         }
@@ -78,6 +88,11 @@ fun SettingsScreen(
         }
         composable(SettingsCategory.Advanced.route) {
             AdvancedSettingsScreen(vm = vm, onBack = popToRoot, onClose = onBack)
+        }
+        composable(SettingsCategory.ExperimentalFlags.route) {
+            com.jarvis.assistant.ui.settings.screens.ExperimentalFlagsSettingsScreen(
+                onBack = popToRoot, onClose = onBack
+            )
         }
         composable(SettingsCategory.Faq.route) {
             FaqSettingsScreen(onBack = popToRoot, onClose = onBack)

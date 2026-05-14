@@ -29,31 +29,35 @@ class ProactiveEngineTest {
      * needing multiple constructor arguments.
      */
     private data class FakeContext(
-        val batteryLevel: Int                        = 100,
-        val isCharging: Boolean                      = false,
+        // Constructor vals renamed with leading underscore to avoid Kotlin 2.2
+        // platform-declaration clashes — `val batteryLevel: Int` would compile
+        // to `getBatteryLevel(): Int`, the same JVM signature as the override
+        // below.  Named-arg callers also use the underscored names.
+        val _batteryLevel: Int                       = 100,
+        val _isCharging: Boolean                     = false,
         val screenOn: Boolean                        = true,
         val isSpeaking: Boolean                      = false,
         val isListening: Boolean                     = false,
         val lastUserInteractionMs: Long?             = null,
         val nextReminderAtMs: Long?                  = null,
         val pendingReminderCount: Int                = 0,
-        val missedCallInfo: MissedCallInfo?          = null,
-        val locationName: String?                    = null,
+        val _missedCallInfo: MissedCallInfo?         = null,
+        val _locationName: String?                   = null,
         val networkAvailable: Boolean                = true
     ) : BatteryContextSource, ReminderContextSource, CallContextSource, SpeechStateSource {
 
-        override fun getBatteryLevel(): Int = batteryLevel
-        override fun isCharging(): Boolean = isCharging
+        override fun getBatteryLevel(): Int = _batteryLevel
+        override fun isCharging(): Boolean = _isCharging
         override fun isScreenOn(): Boolean = screenOn
         override fun isNetworkAvailable(): Boolean = networkAvailable
-        override fun getLocationName(): String? = locationName
+        override fun getLocationName(): String? = _locationName
 
         override suspend fun getNextPendingReminder(): NextReminderInfo? =
             nextReminderAtMs?.let { NextReminderInfo(triggerAtMillis = it, label = "Test Reminder") }
 
         override suspend fun getPendingReminderCount(): Int = pendingReminderCount
 
-        override fun getMissedCallInfo(): MissedCallInfo? = missedCallInfo
+        override fun getMissedCallInfo(): MissedCallInfo? = _missedCallInfo
 
         override fun getSpeechState(): JarvisSpeechState = JarvisSpeechState(
             isSpeaking            = isSpeaking,
@@ -94,7 +98,7 @@ class ProactiveEngineTest {
             missedCallsCount              = missedCall?.count ?: 0,
             lastMissedCallAtMillis        = missedCall?.lastCallAtMillis,
             lastMissedCallContactName     = missedCall?.contactName,
-            currentLocationName           = ctx.locationName,
+            currentLocationName           = ctx._locationName,
             networkAvailable              = ctx.networkAvailable
         )
     }
@@ -117,7 +121,7 @@ class ProactiveEngineTest {
      */
     @Test
     fun testLowBatteryGeneratesActiveWhenCritical() {
-        val ctx = FakeContext(batteryLevel = 3, isCharging = false)
+        val ctx = FakeContext(_batteryLevel = 3, _isCharging = false)
         val action = scoreAndDecide(ctx)
         assertTrue(
             "Expected SpeakAction for critical battery, got $action",
@@ -131,7 +135,7 @@ class ProactiveEngineTest {
      */
     @Test
     fun testLowBatteryGeneratesNoneWhenCharging() {
-        val ctx = FakeContext(batteryLevel = 3, isCharging = true)
+        val ctx = FakeContext(_batteryLevel = 3, _isCharging = true)
         val action = scoreAndDecide(ctx)
         assertTrue(
             "Expected NoAction when battery is low but charging",
@@ -147,7 +151,7 @@ class ProactiveEngineTest {
      */
     @Test
     fun testLowBatteryGeneratesNoneWhenCooldownActive() {
-        val ctx = FakeContext(batteryLevel = 3, isCharging = false)
+        val ctx = FakeContext(_batteryLevel = 3, _isCharging = false)
         val snapshot = buildSnapshot(ctx)
         val events = generator.generate(snapshot)
 
@@ -245,7 +249,7 @@ class ProactiveEngineTest {
     fun testMissedCallHighRelevanceWhenRecent() {
         val recentCallMs = System.currentTimeMillis() - 2 * 60_000L  // 2 min ago
         val ctx = FakeContext(
-            missedCallInfo = MissedCallInfo(
+            _missedCallInfo = MissedCallInfo(
                 count            = 1,
                 lastCallAtMillis = recentCallMs,
                 contactName      = "Alice"
@@ -275,7 +279,7 @@ class ProactiveEngineTest {
     fun testMissedCallLowRelevanceWhenOld() {
         val oldCallMs = System.currentTimeMillis() - 2 * 60 * 60_000L  // 2 hours ago
         val ctx = FakeContext(
-            missedCallInfo = MissedCallInfo(
+            _missedCallInfo = MissedCallInfo(
                 count            = 1,
                 lastCallAtMillis = oldCallMs,
                 contactName      = null
@@ -301,10 +305,10 @@ class ProactiveEngineTest {
     @Test
     fun testNoActionWhenNothingTriggered() {
         val ctx = FakeContext(
-            batteryLevel     = 80,
-            isCharging       = true,
+            _batteryLevel = 80,
+            _isCharging = true,
             nextReminderAtMs = null,
-            missedCallInfo   = null
+            _missedCallInfo = null
         )
         val action = scoreAndDecide(ctx)
         assertTrue("Should be NoAction when all clear", action is ProactiveAction.NoAction)
@@ -319,7 +323,7 @@ class ProactiveEngineTest {
     @Test
     fun testGlobalGapEnforcedBetweenActions() {
         // First tick: critical battery
-        val ctx1 = FakeContext(batteryLevel = 3, isCharging = false)
+        val ctx1 = FakeContext(_batteryLevel = 3, _isCharging = false)
         val first = scoreAndDecide(ctx1)
         assertTrue("First action should be SpeakAction", first is ProactiveAction.SpeakAction)
         cooldownStore.markSurfaced((first as ProactiveAction.SpeakAction).dedupeKey)
@@ -327,8 +331,8 @@ class ProactiveEngineTest {
         // Second tick immediately: urgent reminder
         val urgentReminderMs = System.currentTimeMillis() + 30_000L
         val ctx2 = FakeContext(
-            batteryLevel     = 3,
-            isCharging       = false,
+            _batteryLevel = 3,
+            _isCharging = false,
             nextReminderAtMs = urgentReminderMs,
             pendingReminderCount = 1
         )
@@ -354,8 +358,8 @@ class ProactiveEngineTest {
 
         // Score with recent interaction
         val ctxWithInteraction = FakeContext(
-            batteryLevel           = 3,
-            isCharging             = false,
+            _batteryLevel = 3,
+            _isCharging = false,
             lastUserInteractionMs  = tenSecondsAgo
         )
         val snapshotWith = buildSnapshot(ctxWithInteraction)
@@ -367,7 +371,7 @@ class ProactiveEngineTest {
         cooldownStore.reset()
 
         // Score without recent interaction
-        val ctxWithout = FakeContext(batteryLevel = 3, isCharging = false)
+        val ctxWithout = FakeContext(_batteryLevel = 3, _isCharging = false)
         val snapshotWithout = buildSnapshot(ctxWithout)
         val eventsB         = generator.generate(snapshotWithout)
         val scoredWithout   = scorer.scoreAll(eventsB, snapshotWithout)
@@ -389,8 +393,8 @@ class ProactiveEngineTest {
     fun testBuildDailyBriefGroupsCorrectly() {
         val nineMinutesMs = System.currentTimeMillis() + 9 * 60_000L
         val ctx = FakeContext(
-            batteryLevel         = 3,
-            isCharging           = false,
+            _batteryLevel = 3,
+            _isCharging = false,
             nextReminderAtMs     = nineMinutesMs,
             pendingReminderCount = 1
         )

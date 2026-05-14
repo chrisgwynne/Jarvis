@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:docs.openclaw.ai)",
+      "mcp__Claude_in_Chrome__tabs_context_mcp",
+      "PowerShell(git -C \"C:\\\\Users\\\\admin\\\\Desktop\\\\jarvis\" credential fill 2>&1; [System.Environment]::GetEnvironmentVariable\\('GH_TOKEN'\\); [System.Environment]::GetEnvironmentVariable\\('GITHUB_TOKEN'\\))",
+      "PowerShell(./gradlew :app:compileDebugKotlin 2>&1)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr\"; $env:PATH = \"$env:JAVA_HOME\\\\bin;$env:PATH\"; ./gradlew :app:compileDebugKotlin --console=plain 2>&1 | Select-Object -Last 60)"
+    ]
+  }
+}

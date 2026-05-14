@@ -20,22 +20,30 @@ class ActionPolicyAllowlistTest {
 
     /**
      * Every tool name registered by the production [ToolRegistry].  Sourced
-     * from a `grep "override val name" tools/**` pass — keep alphabetised
+     * from a `grep "override val name" tools` pass — keep alphabetised
      * so review diffs show additions cleanly.
      */
     private val EXPECTED_TOOL_NAMES = setOf(
         "ImageGeneration",
         "analyze_camera_view",
+        "app_action",          // AppActionTool — open + search dispatch
         "audio_recording",
+        "battery",             // BatteryTool
+        "brightness",          // BrightnessTool
+        "calculator",          // CalculatorTool
         "calendar",
+        "calendar_create",     // CalendarCreateTool
         "call_contact",
         "camera_capture",
         "clear_notifications",
+        "clipboard",           // ClipboardTool
         "daily_briefing",
         "delete_routine",
         "directions",
+        "dnd",                 // DndTool
         "end_call",
         "export_conversation",
+        "find_phone",          // FindPhoneTool
         "flashlight",
         "help",
         "list_routines",
@@ -50,19 +58,34 @@ class ActionPolicyAllowlistTest {
         "nearest_place",
         "note_expectation",
         "open_app",
+        "openclaw_status",     // OpenClawStatusTool
+        "personal_fact",       // PersonalFactTool
         "read_notifications",
         "read_screen",
+        "read_sms",            // ReadSmsTool
+        "recent_calls",        // RecentCallsTool
         "repeat_last_action",
+        "reply_notification",  // ReplyNotificationTool
+        "report_issue",        // user-triggered bug report tool
         "run_routine",
         "save_routine",
+        "screen_rotation",     // ScreenRotationTool
+        "screenshot",          // ScreenshotTool
         "send_email",
         "send_sms",
         "set_alarm",
         "set_timer",
+        "settings_panel",      // SettingsPanelTool
+        "share_location",      // ShareLocationTool
+        "share_media",         // ShareMediaTool — Intent.ACTION_SEND chooser
         "shopping_list",
         "smart_home",
+        "stopwatch",           // StopwatchTool
         "tap_screen",
+        "time",                // TimeTool
         "undo_last_action",
+        "unit_conversion",     // UnitConversionTool
+        "view_media",          // ViewMediaTool — opens captured media
         "voice_shortcut",
         "volume_control",
         "weather",

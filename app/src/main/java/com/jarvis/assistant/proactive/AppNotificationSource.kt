@@ -1,6 +1,7 @@
 package com.jarvis.assistant.proactive
 
 import android.util.Log
+import com.jarvis.assistant.core.events.input.HomeAssistantNotificationClassifier
 import com.jarvis.assistant.notifications.JarvisNotificationListener
 
 /**
@@ -25,7 +26,17 @@ class AppNotificationSource : NotificationContextSource {
     @Volatile private var lastAcknowledgedAtMs: Long = System.currentTimeMillis()
 
     private fun unread() = JarvisNotificationListener.getRecent()
-        .filter { it.packageName != OWN_PKG && it.postedAt > lastAcknowledgedAtMs }
+        .filter { entry ->
+            entry.packageName != OWN_PKG &&
+                entry.postedAt > lastAcknowledgedAtMs &&
+                // Defensive: the listener already skips HA alerts at ingestion,
+                // but if a HA notification ever slipped through (e.g. a new
+                // companion package variant), we still refuse to surface it
+                // to the proactive engine here.
+                !HomeAssistantNotificationClassifier.isHomeAssistantAlert(
+                    entry.packageName, entry.title, entry.text
+                )
+        }
 
     override fun getUnreadCount(): Int = unread().size
 

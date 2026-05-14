@@ -1,5 +1,6 @@
 package com.jarvis.assistant.speaker
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull

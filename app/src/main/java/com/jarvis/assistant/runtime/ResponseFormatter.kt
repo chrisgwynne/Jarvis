@@ -100,7 +100,44 @@ object ResponseFormatter {
             }
         }
 
+        // ── Final safety net: SpeechSanitizer ────────────────────────────
+        // Stack traces, HTTP statuses, JSON error bodies, exception class
+        // names, package paths — any of these reaching TTS would speak the
+        // raw technical error to the user.  The sanitizer scans for those
+        // shapes and substitutes a calm friendly fallback.  When a leak is
+        // detected we ALSO file a GitHub issue via the existing reporter
+        // so the underlying bug gets fixed — the user just hears the
+        // safe text.
+        val sanitised = com.jarvis.assistant.core.safety
+            .SpeechSanitizer.sanitizeForSpeech(text)
+        if (sanitised.hadLeak) {
+            reportLeakedTtsContent(sanitised)
+            return sanitised.text
+        }
+
         return text
+    }
+
+    /**
+     * File a GitHub issue when a technical error escaped the friendly
+     * mapping and would have been spoken to the user.  Fire-and-forget
+     * — the reporter has its own dedupe / cooldown / queue, and failing
+     * to file an issue must NEVER itself surface to the user.
+     */
+    private fun reportLeakedTtsContent(
+        result: com.jarvis.assistant.core.safety.SpeechSanitizer.Result,
+    ) {
+        try {
+            com.jarvis.assistant.reporting.github.IssueReporter
+                .reportFatalSafe(
+                    subsystem = "tts",
+                    category  = "leaked_${result.leakKind ?: "unknown"}",
+                    message   = "Raw technical content reached TTS sanitizer",
+                    snippet   = result.redactedSnippet,
+                )
+        } catch (_: Throwable) {
+            // Never let issue-filing break the speech path.
+        }
     }
 
     /** Format a tool result for voice — usually just the feedback string. */

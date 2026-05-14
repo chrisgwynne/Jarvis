@@ -9,6 +9,7 @@ import com.jarvis.assistant.audio.BluetoothScoManager
 import com.jarvis.assistant.audio.GoogleWakeWordDetector
 import com.jarvis.assistant.audio.SpeechCapture
 import com.jarvis.assistant.audio.TFLiteWakeWordDetector
+import com.jarvis.assistant.JarvisApp
 import com.jarvis.assistant.audio.TtsEngine
 import com.jarvis.assistant.audio.WakeWordDetector
 import com.jarvis.assistant.call.CallCoordinator
@@ -85,6 +86,15 @@ import com.jarvis.assistant.llm.LlmResult
 import com.jarvis.assistant.llm.Message
 import com.jarvis.assistant.llm.NetworkClient
 import com.jarvis.assistant.tools.ContactLookup
+import com.jarvis.assistant.audio.stt.TranscriptCorrector
+import com.jarvis.assistant.audio.stt.VocabularyBiaser
+import com.jarvis.assistant.tools.device.AppAliasStore
+import com.jarvis.assistant.tools.device.AppResolver
+import com.jarvis.assistant.modes.JarvisMode
+import com.jarvis.assistant.voice.attention.AttentionDecision
+import com.jarvis.assistant.voice.attention.AttentionGate
+import com.jarvis.assistant.voice.attention.AttentionSignals
+import com.jarvis.assistant.core.events.input.HomeAssistantNotificationClassifier
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolRegistry
 import com.jarvis.assistant.runtime.DrivingModeManager
@@ -238,7 +248,124 @@ class JarvisRuntime(
 
     // Audio pipeline
     private val speechCapture  = SpeechCapture(context)
+    // Shared contact-aware STT post-processor.  Wired into [speechCapture]'s
+    // N-best selector hook during start() so every captured utterance flows
+    // through vocabulary biasing + phonetic correction + contact repair
+    // before any intent parsing sees it.
+    // Tier A2 — ONE shared ContactLookup for the whole runtime.  Passed to
+    // ToolRegistry.buildDefault, FollowUpCoordinator, and TranscriptCorrector
+    // so contact resolution is consistent and the Jaro-Winkler full-scan
+    // cache is computed once per session.
+    private val sharedContactLookup: ContactLookup = ContactLookup(context)
+        .also {
+            Log.d(TAG, "[CONTACT_LOOKUP_SHARED_INSTANCE_CREATED] " +
+                "owner=JarvisRuntime consumers=stt,followup,tools")
+        }
+    // Kept as a separate field name for the TranscriptCorrector consumer to
+    // remain greppable, but it is the same object as [sharedContactLookup].
+    private val sttContactLookup: ContactLookup get() = sharedContactLookup
+    private val aliasLearningStore =
+        com.jarvis.assistant.voice.learning.AliasLearningStore(context)
+    private val transcriptCorrector =
+        TranscriptCorrector(sharedContactLookup, aliasLearningStore)
     private val ttsEngine      = TtsEngine(context)
+    // AttentionGate decides whether each captured transcript was meant for
+    // Jarvis or was overheard human-to-human speech.  Gated by
+    // VoiceFeatureFlags.ATTENTION_GATE_ENABLED (default ON).
+    private val attentionGate  = AttentionGate()
+    // ── Pending messaging follow-up ─────────────────────────────────────
+    // When a messaging command arrives with missing slots ("send a WhatsApp"
+    // with no recipient/body), we park a PendingMessageIntent and intercept
+    // the NEXT user utterance before AttentionGate filters it.  Cleared on
+    // execute, decline, or 20s expiry.
+    @Volatile private var pendingMessageIntent:
+        com.jarvis.assistant.tools.device.messaging.PendingMessageIntent? = null
+
+    /**
+     * Same idea as [pendingMessageIntent] but for Todoist reminder/task
+     * flows.  When the parser produces a usable match that's missing a
+     * time (or other follow-up slot), the runtime parks one of these,
+     * speaks a short prompt, and intercepts the NEXT user turn before
+     * any other routing.  Cleared on execute / expiry.
+     */
+    @Volatile private var pendingTodoistTask:
+        com.jarvis.assistant.todoist.PendingTodoistTask? = null
+
+    /**
+     * Todoist orchestrator.  Pure of UI / TTS — returns
+     * [com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction]
+     * the runtime translates into [speakAndRecord] + state changes.
+     */
+    /** UI-facing drain of the Todoist offline queue. */
+    suspend fun todoistDrainOfflineQueue(): Int =
+        todoistReminderRouter.drainOfflineQueue()
+
+    private val todoistReminderRouter by lazy {
+        val store = settings
+        com.jarvis.assistant.todoist.TodoistReminderRouter(
+            client = {
+                com.jarvis.assistant.todoist.TodoistClient(
+                    tokenProvider = { store.todoistApiToken }
+                )
+            },
+            settingsProvider = {
+                com.jarvis.assistant.todoist.TodoistSettingsRepository(store).snapshot()
+            },
+            offlineQueue = {
+                com.jarvis.assistant.todoist.TodoistOfflineQueue(context)
+            },
+        )
+    }
+    // Tier-B mode controller — owns the current JarvisMode and consumes
+    // ambient context snapshots to auto-switch (NORMAL ↔ DRIVING ↔ NIGHT).
+    // Gated by VoiceFeatureFlags.JARVIS_MODES_ENABLED (default OFF).
+    private val modeController = com.jarvis.assistant.modes.ModeController()
+    // Tier-C executive controller — task / goal / attention tracker.  Gated
+    // by VoiceFeatureFlags.EXECUTIVE_CONTROLLER_ENABLED (default OFF); when
+    // off, decide() returns SILENT_NOTIFY → dispatcher downgrades to
+    // notification (existing behaviour preserved).
+    private val executiveController = com.jarvis.assistant.executive.ExecutiveController()
+    // Tier-B ambient aggregator — single StateFlow producer of
+    // AmbientContextSnapshot.  Gated by AMBIENT_CONTEXT_ENABLED (default
+    // OFF).  Refreshed every 5 s by its own coroutine and pushed into
+    // [modeController] each tick so modes follow context automatically.
+    private val ambientContext = com.jarvis.assistant.context.AmbientContextAggregator(
+        refresh = { snapshotAmbientContext() }
+    )
+    // Set true by handleBargeIn() so any active stream-collection block can
+    // disambiguate "the user interrupted me" from "the first-token watchdog
+    // fired" inside a generic catch (CancellationException).  Reset before
+    // every new response stream.
+    private val bargeInFired = java.util.concurrent.atomic.AtomicBoolean(false)
+    // Instrumentation facade over ToolRegistry — emits the [ROUTE_*] logs
+    // the spec asks for at every routing inflection without changing the
+    // existing local-vs-OpenClaw branching.
+    private val localFirstRouter by lazy {
+        com.jarvis.assistant.voice.routing.LocalFirstRouter(toolRegistry)
+    }
+    /**
+     * InstantCommandRouter — the first gate after STT.  Local / device
+     * commands (time, battery, call, WhatsApp, alarm, smart-home, …)
+     * short-circuit here and NEVER reach OpenClaw / memory retrieval /
+     * the LLM.  Returns NoMatch for anything that isn't on the allowlist;
+     * the caller falls through to the existing LocalFirstRouter +
+     * OpenClaw + LLM cascade.
+     */
+    private val instantCommandRouter by lazy {
+        com.jarvis.assistant.voice.routing.InstantCommandRouter(toolRegistry)
+    }
+
+    /**
+     * RecentActionContextStore — populated after every successful
+     * local-tool dispatch.  Drives the contextual follow-up resolver:
+     *   - "turn off" after "turn the flashlight on"
+     *   - "show me the selfie" after a camera capture
+     *   - "do that again" after any action
+     */
+    private val recentActionContext = com.jarvis.assistant.runtime.context
+        .RecentActionContextStore()
+    // Stash the most recent TranscriptCorrector score so the gate can read it.
+    @Volatile private var lastCorrectorScore: Int = 0
     private val bargeIn        = BargeInDetector(onBargeIn = ::handleBargeIn)
     private var wakeDetector: WakeWordDetector? = null
 
@@ -246,6 +373,39 @@ class JarvisRuntime(
     private val callSource        = AppCallContextSource()
     private val speechStateSource = AppSpeechStateSource(machine)
     private lateinit var proactiveEngine   : ProactiveEngine
+    /**
+     * Scheduled-reminder engine — fires the 30m + 10m pre-warnings for
+     * Calendar / Todoist / local reminders.  Hands events to
+     * [scheduledReminderBridge] which dispatches through the shared
+     * [com.jarvis.assistant.proactive.settings.ProactivityGate] so all
+     * user policy (master / quiet / mode / cooldown) is honoured.
+     */
+    private var scheduledReminderEngine: com.jarvis.assistant.proactive.scheduled.ScheduledReminderEngine? = null
+    private var scheduledReminderBridge: com.jarvis.assistant.proactive.scheduled.ScheduledReminderDispatchBridge? = null
+
+    /**
+     * User-visible Proactivity settings repository.  Exposed so the
+     * Settings UI can collect updates against its StateFlow without
+     * needing a fresh repo instance.
+     */
+    lateinit var proactivityRepository
+        : com.jarvis.assistant.proactive.settings.ProactivitySettingsRepository
+        private set
+
+    /**
+     * Trace-log accessor for the Proactivity diagnostics screen.  Lazy
+     * because [proactiveEngine] is the writer and is constructed during
+     * intensive init.
+     */
+    val proactiveEventsLogQuery
+        : com.jarvis.assistant.proactive.settings.ProactiveEventsLogQuery by lazy {
+        com.jarvis.assistant.proactive.settings.ProactiveEventsLogQuery(
+            com.jarvis.assistant.core.telemetry.DecisionTraceStore(
+                com.jarvis.assistant.memory.db.JarvisDatabase
+                    .getInstance(context).decisionTraceDao()
+            )
+        )
+    }
 
     // Conversational follow-up + last-seen tracking
     private lateinit var lastSeenTracker   : LastSeenTracker
@@ -341,6 +501,16 @@ class JarvisRuntime(
     // Presence layer — rolling topics and short-term expectations the
     // system prompt and scoring can consult every turn.
     private val conversationThreads = com.jarvis.assistant.core.presence.ConversationThreads(context)
+
+    /**
+     * Short-lived carrier for the last fact-style reply (location, weather,
+     * battery, time-from-tool …).  Consumed by PromptAssembler on the next
+     * LLM turn so follow-ups like "what number?" / "and the postcode?"
+     * resolve against the previous answer instead of being misrouted to
+     * an unrelated tool (e.g. clock).
+     */
+    private val recentFactCarrier = com.jarvis.assistant.followup.RecentFactCarrier()
+
     private val expectationStore by lazy {
         com.jarvis.assistant.core.presence.ExpectationStore(
             com.jarvis.assistant.memory.db.JarvisDatabase.getInstance(context).expectationDao()
@@ -447,6 +617,7 @@ class JarvisRuntime(
             sanitizer = Sanitizer(),
             conversationThreads = conversationThreads,
             expectationStore = expectationStore,
+            recentFactCarrier = recentFactCarrier,
         )
 
         // Phase 7 — Orchestration
@@ -473,7 +644,10 @@ class JarvisRuntime(
             routineRepository      = routineRepository,
             recentToolCallBuffer   = recentToolCallBuffer,
             planRunnerProvider     = { if (::planRunner.isInitialized) planRunner else null },
-            expectationStore       = expectationStore
+            expectationStore       = expectationStore,
+            sharedContacts         = sharedContactLookup, // A2: one ContactLookup for whole runtime
+            openClawRepo           = openClawRepo,        // enables OpenClawStatusTool
+            profileMemory          = profileMemory,       // enables PersonalFactTool
         )
         toolDispatcher = ToolDispatcher(
             context,
@@ -481,6 +655,9 @@ class JarvisRuntime(
             machine,
             lastActionStore,
             killSwitchProvider = { settings.toolExecutionDisabled },
+            // Voice strict mode default OFF — owner is assumed; voice
+            // identity upgrades trust, never blocks LOW/MEDIUM risk.
+            voiceStrictModeProvider = { settings.voiceStrictMode },
             // Resolves to the engine's ledger once ProactiveEngine is built
             // below. Until then the lambda returns null and the dispatcher
             // records nothing, which matches legacy behaviour.
@@ -518,18 +695,36 @@ class JarvisRuntime(
         // Phase 8 — Context-aware follow-ups
         followUpCoordinator = FollowUpCoordinator(
             context             = context,
-            contactLookup       = ContactLookup(context),
+            contactLookup       = sharedContactLookup,  // A2: shared instance
             reminderRepository  = reminderRepo,
             settings            = settings
+        )
+
+        // User-visible Proactivity settings (master toggle, categories,
+        // quiet hours, sensitivity, interruption mode, cooldown).  We
+        // reuse the process-wide instance from JarvisApp so the UI and
+        // the runtime see the same snapshot.
+        proactivityRepository = com.jarvis.assistant.JarvisApp.proactivitySettings
+        val proactivityGate = com.jarvis.assistant.proactive.settings.ProactivityGate(
+            settingsProvider         = { proactivityRepository.snapshot() },
+            msSinceLastGlobalSurface = { sharedCooldownStore.msSinceLastGlobalSurface() },
         )
 
         // Proactive awareness engine.  Quiet hours enabled in production so
         // nightly suggestions stay suppressed unless the event is critical
         // (low battery, imminent reminder); tests construct their own config.
+        // Note: the user-facing quiet-hours toggle is applied by
+        // [ProactivityGate]; the values here are the engine-internal
+        // hardcoded defaults that act as a baseline.  Sensitivity scaling
+        // is applied to passiveThreshold / activeThreshold below.
+        val initialSettings = proactivityRepository.snapshot()
+        val sensitivityMult  = initialSettings.sensitivity.thresholdMultiplier
         proactiveEngine = ProactiveEngine(
             config               = ProactiveConfig(
                 quietHoursStartHour = 22,
-                quietHoursEndHour   = 7
+                quietHoursEndHour   = 7,
+                passiveThreshold    = (0.55f * sensitivityMult).coerceIn(0.20f, 0.95f),
+                activeThreshold     = (0.80f * sensitivityMult).coerceIn(0.40f, 0.99f),
             ),
             reminderSource       = AppReminderSource(reminderRepo),
             callSource           = callSource,
@@ -546,10 +741,14 @@ class JarvisRuntime(
                 placeLearner     = com.jarvis.assistant.location.PlaceLearner(context)
             ),
             dispatcher           = TtsProactiveDispatcher(
-                context              = context,
-                ttsEngine            = ttsEngine,
-                onPassiveAction      = { action -> Log.d(TAG, "Proactive passive: ${action.title}") },
-                voiceResponseEnabled = { settings.voiceResponse }
+                context               = context,
+                ttsEngine             = ttsEngine,
+                onPassiveAction       = { action -> Log.d(TAG, "Proactive passive: ${action.title}") },
+                voiceResponseEnabled  = { settings.voiceResponse },
+                executive             = executiveController,                // Tier C1
+                modeProvider          = { modeController.current },         // Tier C2
+                proactivityGate       = proactivityGate,                    // user policy
+                lastUserInteractionMs = { speechStateSource.lastInteractionMs() },
             ),
             isDrivingProvider    = { drivingModeManager.isDriving },
             cooldownDao          = db.proactiveCooldownDao(),
@@ -560,6 +759,48 @@ class JarvisRuntime(
             actionLedger         = sharedActionLedger,
             routineSynthesizer   = routineSynthesizer
         )
+
+        // ── Scheduled reminders (30m + 10m pre-warnings) ──────────────────
+        // The bridge constructs SpeakAction / PassiveAction directly and
+        // hands it to a fresh TtsProactiveDispatcher wired with the same
+        // ProactivityGate as the main engine, so every user policy is
+        // honoured (master switch, quiet hours, interruption mode,
+        // category, cooldown).  No direct TTS — by design.
+        val scheduledRemindersDispatcher = TtsProactiveDispatcher(
+            context               = context,
+            ttsEngine             = ttsEngine,
+            voiceResponseEnabled  = { settings.voiceResponse },
+            executive             = executiveController,
+            modeProvider          = { modeController.current },
+            proactivityGate       = proactivityGate,
+            lastUserInteractionMs = { speechStateSource.lastInteractionMs() },
+        )
+        scheduledReminderBridge = com.jarvis.assistant.proactive.scheduled
+            .ScheduledReminderDispatchBridge(
+                dispatcher       = scheduledRemindersDispatcher,
+                settingsProvider = { JarvisApp.scheduledReminderSettings.snapshot() },
+                lastInteractionMs = { speechStateSource.lastInteractionMs() },
+            )
+        scheduledReminderEngine = com.jarvis.assistant.proactive.scheduled
+            .ScheduledReminderEngine(
+                eventSink = { ev -> scheduledReminderBridge?.handle(ev) },
+                sources = listOf(
+                    com.jarvis.assistant.proactive.scheduled
+                        .CalendarReminderSource(context),
+                    com.jarvis.assistant.proactive.scheduled
+                        .TodoistReminderSource(
+                            clientProvider = {
+                                val token = settings.todoistApiToken
+                                if (token.isBlank()) null
+                                else com.jarvis.assistant.todoist
+                                    .TodoistClient(tokenProvider = { token })
+                            },
+                        ),
+                    com.jarvis.assistant.proactive.scheduled
+                        .LocalReminderSource(reminderRepo),
+                ),
+                settingsProvider = { JarvisApp.scheduledReminderSettings.snapshot() },
+            )
 
         // Conversational follow-up engine
         lastSeenTracker    = LastSeenTracker(context)
@@ -593,7 +834,9 @@ class JarvisRuntime(
         val brainDispatcher = TtsProactiveDispatcher(
             context              = context,
             ttsEngine            = ttsEngine,
-            voiceResponseEnabled = { settings.voiceResponse }
+            voiceResponseEnabled = { settings.voiceResponse },
+            executive            = executiveController,                 // Tier C1
+            modeProvider         = { modeController.current }           // Tier C2
         )
         brainEngine = com.jarvis.assistant.brain.BrainEngine(
             context       = context,
@@ -604,6 +847,29 @@ class JarvisRuntime(
             speechSource  = speechStateSource,
             lastSeen      = lastSeenTracker
         )
+
+        // ── Phone-reliability sprint: prove the remote-systems-disabled policy ──
+        // OpenClaw and Hermes default to OFF.  Surface the active state at
+        // startup so a logcat audit immediately confirms whether remote
+        // routing is in the path for this session.
+        if (!settings.openClawEnabled) Log.i(TAG, "[OPENCLAW_DISABLED] default policy — phone-first")
+        else                            Log.i(TAG, "[OPENCLAW_ENABLED] user opted in")
+        if (!settings.hermesEnabled)   Log.i(TAG, "[HERMES_DISABLED] default policy — phone-first")
+        else                            Log.i(TAG, "[HERMES_ENABLED] user opted in")
+
+        // ── Voice trust startup — prevents owner lockout ──────────────────
+        // The user pressed Start (or the service was launched).  Default
+        // policy: assume the owner is talking.  Voice identification
+        // becomes an UPGRADE signal (VOICE_MATCHED) — never a block.
+        if (settings.voiceAssumeOwnerOnStart) {
+            Log.i(TAG, "[OWNER_ASSUMED_ON_START] " +
+                "strictMode=${settings.voiceStrictMode} " +
+                "askWho=${settings.voiceAskWhoWhenUncertain}")
+            Log.i(TAG, "[VOICE_TRUST_STATE_SET] OWNER_ASSUMED")
+        } else {
+            Log.i(TAG, "[VOICE_TRUST_STATE_SET] strict_no_assume — " +
+                "user opted out of safe defaults")
+        }
 
         Log.d(TAG, "Intensive initialization complete in ${System.currentTimeMillis() - startTime}ms")
     }
@@ -623,6 +889,24 @@ class JarvisRuntime(
         scope.launch(Dispatchers.IO) {
             try { llmRouter.prewarmActiveProvider() }
             catch (e: Exception) { Log.d(TAG, "LLM prewarm failed: ${e.message}") }
+        }
+        // Pre-warm the OpenClaw/Hermes endpoint in parallel so the first
+        // routed query doesn't pay the connection setup cost.
+        scope.launch(Dispatchers.IO) {
+            try {
+                if (openClawRouter.shouldRoute()) {
+                    val settings = openClawRepo.snapshot()
+                    val url = com.jarvis.assistant.remote.openclaw.OpenClawConnectionBuilder
+                        .buildChatEndpoint(settings)
+                    // Fire a HEAD request — establishes DNS + TLS, discards the body.
+                    val req = okhttp3.Request.Builder().url(url).head().build()
+                    com.jarvis.assistant.llm.NetworkClient.http
+                        .newCall(req).execute().close()
+                    Log.d(TAG, "OpenClaw prewarm OK: $url")
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "OpenClaw prewarm failed (non-fatal): ${e.message}")
+            }
         }
 
         // Rehydrate action-class suppressions from persisted dislike facts.
@@ -677,12 +961,65 @@ class JarvisRuntime(
         cloudSyncService.start()
 
         proactiveEngine.start()       // Proactive awareness polling
+        scheduledReminderEngine?.start(scope)  // Scheduled reminders 30/10m
         convProactiveEngine.start()   // Conversational follow-up polling
         brainEngine.start()           // Behavioural learning system
-        if (settings.openClawNodeEnabled) openClawNode.start()  // OpenClaw node (inbound)
+        if (openClawRepo.snapshot().isFullyConfigured) openClawNode.start()  // OpenClaw node (inbound)
         drivingModeManager.start(context)  // Driving mode detection
+        // Tier-B ambient context + mode auto-switch.  Aggregator polls every 5 s
+        // and pushes each snapshot into ModeController so DRIVING / NIGHT modes
+        // engage without manual user intervention.  Both pieces no-op when
+        // their respective feature flags are off.
+        ambientContext.start(scope)
+        scope.launch {
+            ambientContext.snapshot.collect { snap -> modeController.consumeContext(snap) }
+        }
         followUpCoordinator.restorePersistedFlow()  // Restore any flow that survived a restart
         ttsEngine.applyVoice(settings.ttsVoiceName)
+
+        // ── STT post-processing wire-up ──────────────────────────────────────
+        // Route every SpeechCapture result through the N-best corrector so
+        // candidates like "send a what's up to mic" become "send a WhatsApp to
+        // Mike" before any tool matcher / LLM call sees them.
+        speechCapture.setNbestSelector { candidates, confidences ->
+            val r = transcriptCorrector.correct(candidates, confidences)
+            lastCorrectorScore = r?.score ?: 0
+            r?.text ?: candidates.firstOrNull() ?: ""
+        }
+        // Pre-load runtime vocabulary off the main thread.  Contacts + installed
+        // app labels go in; HA rooms get added by the HA client later when its
+        // entity cache warms up.
+        scope.launch(Dispatchers.IO) {
+            try {
+                val contactNames = sttContactLookup.allDisplayNames()
+                val appLabels    = try {
+                    AppResolver(context, AppAliasStore(context)).launcherLabels()
+                } catch (e: Exception) {
+                    Log.w(TAG, "STT vocab: AppResolver scan failed: ${e.message}")
+                    emptySet()
+                }
+                VocabularyBiaser.setRuntimeVocab(
+                    contacts = contactNames,
+                    apps     = appLabels
+                )
+                Log.d(TAG, "[STT_VOCAB_LOADED] contacts=${contactNames.size} apps=${appLabels.size}")
+
+                // Pull HA rooms/devices into the biaser on the same thread.
+                // Safe when HA isn't configured — the refresher early-outs.
+                try {
+                    val base  = settings.haBaseUrl
+                    val token = settings.haApiToken
+                    val haClient = if (base.isBlank() || token.isBlank()) null
+                        else com.jarvis.assistant.tools.smart.HomeAssistantClient(base, token)
+                    com.jarvis.assistant.audio.stt.HomeAssistantVocabRefresher.refresh(haClient)
+                } catch (e: Exception) {
+                    Log.w(TAG, "HA vocab refresh failed: ${e.message}")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "STT vocab population failed: ${e.message}")
+            }
+        }
+
         machine.transition(JarvisState.IdleWake)
         syncState(JarvisState.IdleWake)
         startWakeWordDetection()
@@ -791,6 +1128,35 @@ class JarvisRuntime(
     }
 
     /**
+     * Drive the OpenClaw node WebSocket from the Settings UI toggle.
+     *
+     * When [enabled] is true and the OpenClaw settings are fully configured
+     * (host + port + auth token), the persistent gateway WebSocket is
+     * started — same flow as at service onCreate.  When false, the
+     * WebSocket is closed and the node's status flips to DISABLED.
+     *
+     * Without this, the "Register as OpenClaw node" toggle in Settings
+     * only updated the persisted boolean — the actual WebSocket was only
+     * started once at service onCreate, gated on `isFullyConfigured`.
+     * Toggling after that did nothing visible (and the user reported
+     * "There's nothing even in the logs on OpenClaw to say anything's
+     * even tried to connect").
+     */
+    fun setOpenClawNodeEnabled(enabled: Boolean) {
+        Log.d(TAG, "[OPENCLAW_NODE_TOGGLE_RUNTIME] enabled=$enabled")
+        if (enabled) {
+            if (openClawRepo.snapshot().isFullyConfigured) {
+                openClawNode.start()
+            } else {
+                Log.w(TAG, "[OPENCLAW_NODE_TOGGLE_RUNTIME] settings not fully " +
+                    "configured — start request ignored")
+            }
+        } else {
+            openClawNode.stop()
+        }
+    }
+
+    /**
      * Switch to [voiceName] and speak a short test phrase so the user can audition it.
      * Suppresses and restores wake detection automatically.
      */
@@ -802,6 +1168,93 @@ class JarvisRuntime(
                 ttsEngine.speak("Hi, I'm Jarvis. This is how I sound.")
             } finally {
                 restoreWakeDetection()
+            }
+        }
+    }
+
+    /**
+     * Proactivity diagnostics — speak a fixed sample line *immediately* and
+     * bypass every Proactivity gate (master switch / quiet hours /
+     * interruption mode / category / cooldown).
+     *
+     * This is the production behaviour of the Settings "Test spoken message"
+     * button: the user is sitting in Settings, has just tapped Speak, and
+     * needs to verify the TTS path is alive end-to-end.  Funnelling this
+     * through the gate would be hostile — the whole point is to prove TTS
+     * works even when something further upstream would have muted normal
+     * proactive output.
+     *
+     * Returns once the TTS utterance is queued (it's fire-and-forget on
+     * the runtime scope so the UI never blocks).  [onResult] is invoked on
+     * an arbitrary dispatcher with either `null` (success) or a short
+     * human-friendly reason string when speech could not happen.
+     *
+     * Log markers:
+     *   [PROACTIVITY_TEST_SPEAK_REQUESTED]
+     *   [PROACTIVITY_TEST_SPEAK_BYPASS_GATE]
+     *   [PROACTIVITY_TEST_SPEAK_SUCCESS]
+     *   [PROACTIVITY_TEST_SPEAK_FAILED] reason=...
+     */
+    /**
+     * Dispatch a synthetic [ProactiveAction.SpeakAction] through the live
+     * [ProactivityGate] and report back what the gate decided.  Used by
+     * the Settings "Test normal proactivity decision" button so the user
+     * can see *which* gate (master / quiet / mode / cooldown) is the
+     * reason normal proactive output isn't being spoken.
+     */
+    fun dispatchProactivityGateTest(onResult: (String) -> Unit) {
+        scope.launch {
+            try {
+                val action = com.jarvis.assistant.proactive.ProactiveAction.SpeakAction(
+                    text       = "Proactivity gate test.",
+                    dedupeKey  = "diagnostics:gate_test:${System.currentTimeMillis()}",
+                    sourceType = com.jarvis.assistant.proactive.ProactiveEventType.BEHAVIORAL_LEARNING,
+                )
+                val gate = com.jarvis.assistant.proactive.settings.ProactivityGate(
+                    settingsProvider = { JarvisApp.proactivitySettings.snapshot() },
+                )
+                val verdict = gate.evaluate(action, lastUserInteractionMs = System.currentTimeMillis())
+                val human = when (verdict) {
+                    is com.jarvis.assistant.proactive.settings.ProactivityGate.Verdict.Allow ->
+                        "Would speak now (gate=Allow)."
+                    is com.jarvis.assistant.proactive.settings.ProactivityGate.Verdict.Downgrade ->
+                        "Would notify, not speak (gate=Downgrade, reason=${verdict.reason})."
+                    is com.jarvis.assistant.proactive.settings.ProactivityGate.Verdict.Suppress ->
+                        "Suppressed entirely (reason=${verdict.reason})."
+                }
+                Log.d(TAG, "[PROACTIVITY_TEST_GATE_VERDICT] $human")
+                onResult(human)
+            } catch (e: Throwable) {
+                Log.e(TAG, "Gate test failed", e)
+                onResult("Gate test failed: ${e.message ?: e::class.simpleName}")
+            }
+        }
+    }
+
+    fun speakProactivityTest(
+        text: String = "Proactivity test — if you can hear this, voice output is working.",
+        onResult: (failureReason: String?) -> Unit = {},
+    ) {
+        Log.d(TAG, "[PROACTIVITY_TEST_SPEAK_REQUESTED] text=\"$text\"")
+        Log.d(TAG, "[PROACTIVITY_TEST_SPEAK_BYPASS_GATE] reason=user_diagnostics_button")
+        scope.launch {
+            try {
+                if (!settings.voiceResponse) {
+                    val reason = "Voice response is disabled in Settings — turn it on first."
+                    Log.w(TAG, "[PROACTIVITY_TEST_SPEAK_FAILED] reason=voice_disabled")
+                    onResult(reason); return@launch
+                }
+                suppressWakeDetection()
+                try {
+                    ttsEngine.speak(text)
+                    Log.d(TAG, "[PROACTIVITY_TEST_SPEAK_SUCCESS]")
+                    onResult(null)
+                } finally {
+                    restoreWakeDetection()
+                }
+            } catch (e: Throwable) {
+                Log.e(TAG, "[PROACTIVITY_TEST_SPEAK_FAILED] reason=exception:${e.message}", e)
+                onResult("TTS error — ${e.message ?: e::class.simpleName}")
             }
         }
     }
@@ -922,6 +1375,7 @@ class JarvisRuntime(
         callMonitor.stop()              // Phase 6
         openClawNode.stop()             // OpenClaw node (inbound)
         proactiveEngine.stop()          // Proactive awareness
+        scheduledReminderEngine?.stop() // Scheduled reminder lanes
         convProactiveEngine.stop()      // Conversational follow-up
         brainEngine.stop()              // Behavioural learning system
         drivingModeManager.stop(context) // Driving mode
@@ -1080,27 +1534,25 @@ class JarvisRuntime(
     /**
      * Start the wake-word detection loop.
      *
-     * If a Bluetooth headset is connected, we activate SCO first so the
-     * SpeechRecognizer captures audio from the headset mic (which is right next
-     * to the user's mouth) rather than the phone's distant built-in mic.
-     * SCO connect is async (up to 4 s); we launch it as a coroutine so the
-     * caller is never blocked.  A new [wakeWordSetupJob] is created on every
-     * call — any previous in-flight setup is cancelled first.
+     * Always uses the device's built-in microphone — SCO is NOT activated here.
+     * Activating SCO (HFP/HSP Bluetooth phone-call channel) before the detector
+     * causes ERROR_AUDIO on most TWS earbuds and breaks audio routing. SCO is
+     * only activated in the pipeline after wake fires, for the active listening
+     * and TTS phases. A new [wakeWordSetupJob] is created on every call —
+     * any previous in-flight setup is cancelled first.
      */
     private fun startWakeWordDetection() {
         wakeDetector?.stop()
         wakeDetector = null
         wakeWordSetupJob?.cancel()
         wakeWordSetupJob = scope.launch {
-            if (bluetoothSco.isHeadsetConnected) {
-                Log.d(TAG, "BT headset connected — activating SCO before wake-word detector")
-                // Timeout guard: if SCO negotiation hangs past 5 s (broken
-                // Bluetooth stack), skip it and fall back to the built-in mic
-                // so the wake-word detector still starts instead of freezing.
-                val ok = withTimeoutOrNull(5_000L) { bluetoothSco.connect() } ?: false
-                Log.d(TAG, "SCO for wake-word: active=$ok")
-            }
-            // Bail if the runtime was stopped while we were waiting for SCO.
+            // Do NOT activate SCO here. SCO is the HFP phone-call audio channel
+            // (8 kHz narrowband). Activating it during wake-word detection routes
+            // the microphone through Bluetooth SCO instead of the device's built-in
+            // mic, which causes ERROR_AUDIO on most TWS earbuds and many Android
+            // devices. Wake detection always uses the built-in mic — this is how
+            // every major voice assistant (Google, Alexa, Siri) works. SCO is
+            // activated in the pipeline after wake fires (see connect() call below).
             if (!scope.isActive) return@launch
             // Prefer offline TFLite detector when model asset is present; fall back to Google STT.
             val tflite = TFLiteWakeWordDetector(context, ::onWakeWordDetected) { err ->
@@ -1165,13 +1617,14 @@ class JarvisRuntime(
                 wakeDetector?.stop()
                 wakeDetector = null
 
-                // Android's SpeechRecognizer.destroy() is asynchronous — the
-                // speech service releases the microphone in a separate process.
-                // Without a sufficient pause here, SpeechCapture.listen() creates a
-                // new SpeechRecognizer before the old one's mic session is gone,
-                // and the new session silently captures nothing.
-                // Bumped from 350ms to 800ms for hardware stability.
-                delay(800)
+                // Mic handoff: SpeechRecognizer.destroy() is asynchronous — the old
+                // wake-detector session may not have released the mic yet.  We no
+                // longer sleep blindly here; SpeechCapture.listen() retries on
+                // ERROR_AUDIO (up to 3 times with 150/150/200 ms gaps) so the
+                // expected wait is 0 ms when the mic is free, or ~150 ms on the
+                // first retry — much less than the previous flat 500 ms delay.
+                val micHandoffStart = android.os.SystemClock.elapsedRealtime()
+                Log.d(TAG, "[MIC_HANDOFF_START] t=+0ms (relative to mic handoff)")
 
                 // Phase 5: request audio focus before doing anything with audio
                 audioFocus.requestFocus()
@@ -1192,7 +1645,13 @@ class JarvisRuntime(
                 activeCapture?.release()
                 activeCapture = null
 
-                ttsEngine.playChime()
+                // Fire-and-forget: chime starts playing immediately and the mic
+                // opens in parallel.  The chime is 300 ms of audio; the thread
+                // inside startChimeAsync() releases the AudioTrack after 350 ms.
+                // This saves ~600 ms vs the old suspending playChime() call.
+                ttsEngine.startChimeAsync()
+                Log.d(TAG, "[CHIME_ASYNC] chime started, mic opening in parallel " +
+                    "+${android.os.SystemClock.elapsedRealtime() - micHandoffStart}ms")
 
                 // Load neural speaker encoder once (no-op on subsequent sessions).
                 SpeakerEmbeddingEngine.init(context)
@@ -1258,6 +1717,16 @@ class JarvisRuntime(
                     // system's recognition service has fully stabilized its 
                     // own AudioRecord before we open ours.
                     val listenStart = System.currentTimeMillis()
+                    // ── Latency session start ─────────────────────────────────
+                    // Reset on every utterance so STT_COMPLETE/total reflects
+                    // the CURRENT request, not the cumulative time since the
+                    // wake-word ages ago.  Without this, mid-conversation
+                    // utterances reported "total=12000ms" because the timer
+                    // had never been restarted.
+                    LatencyTracker.pipelineStart()
+                    Log.d(TAG, "[LATENCY_SESSION_START] " +
+                        "utterance_clock_started, prior_state=conversation_loop")
+                    Log.d(TAG, "[STT_BEGIN] forceOffline=${!contextEngine.isOnline()}")
                     // When offline, force the on-device recognizer (API 31+) so STT
                     // keeps working without network. On older APIs this flag is a
                     // no-op — the default intent already sets EXTRA_PREFER_OFFLINE.
@@ -1297,10 +1766,618 @@ class JarvisRuntime(
 
                     consecutiveFastFails = 0
                     LatencyTracker.mark("STT_COMPLETE")
+                    // [TRANSCRIPT_RAW] / [TRANSCRIPT_NORMALIZED] are the
+                    // canonical grep targets for routing audits — emit them
+                    // exactly once per turn, right after STT_COMPLETE.
+                    Log.d(TAG, "[TRANSCRIPT_RAW] \"$transcript\"")
+                    val transcriptNormalisedLog = com.jarvis.assistant.voice.routing
+                        .TranscriptNormalizer.normalizeForMatching(transcript)
+                    Log.d(TAG, "[TRANSCRIPT_NORMALIZED] \"$transcriptNormalisedLog\"")
+
+                    // ── Confirmation-first intercept ─────────────────────────
+                    // A pending "are you sure?" from the previous turn gets
+                    // first refusal on this utterance, BEFORE AttentionGate or
+                    // any routing.  Without this, a short reply like "yes" /
+                    // "no" gets dropped by the gate (zero command pattern, no
+                    // tool match) and the user perceives Jarvis as stalled.
+                    when (val v = confirmationGate.consume(transcript)) {
+                        is ConfirmationGate.Verdict.Affirmed -> {
+                            Log.d(TAG, "[CONFIRMATION_ACCEPTED] tool=${v.pending.toolName} " +
+                                "transcript=\"$transcript\"")
+                            val stashedTool = toolRegistry.findByName(v.pending.toolName)
+                            if (stashedTool != null) {
+                                val r = toolDispatcher.dispatch(
+                                    stashedTool, v.pending.input, sessionSpeaker,
+                                    v.pending.originatingTranscript, skipConfirmation = true
+                                )
+                                Log.d(TAG, "[CONFIRMATION_EXECUTED] tool=${v.pending.toolName} " +
+                                    "result=${r::class.simpleName}")
+                                when (r) {
+                                    is ToolDispatcher.DispatchResult.Done ->
+                                        if (r.spokenFeedback.isNotBlank()) speakAndRecord(r.spokenFeedback)
+                                    is ToolDispatcher.DispatchResult.Failed -> speakAndRecord(r.message)
+                                    is ToolDispatcher.DispatchResult.Denied -> speakAndRecord(r.message)
+                                    is ToolDispatcher.DispatchResult.SilentExit,
+                                    is ToolDispatcher.DispatchResult.AugmentedLlm,
+                                    is ToolDispatcher.DispatchResult.LlmFollowUp,
+                                    is ToolDispatcher.DispatchResult.NeedsConfirmation -> Unit
+                                }
+                            } else {
+                                speakAndRecord("That tool's gone — skipping it.")
+                            }
+                            machine.transition(JarvisState.Listening)
+                            syncState(JarvisState.Listening)
+                            continue
+                        }
+                        is ConfirmationGate.Verdict.Declined -> {
+                            Log.d(TAG, "[CONFIRMATION_CANCELLED] tool=${v.pending.toolName}")
+                            speakAndRecord("Dropped it.")
+                            machine.transition(JarvisState.Listening)
+                            syncState(JarvisState.Listening)
+                            continue
+                        }
+                        ConfirmationGate.Verdict.None -> Unit
+                    }
+
+                    // ── Messaging follow-up intercept ────────────────────────
+                    // If a previous turn parked a PendingMessageIntent ("send a
+                    // WhatsApp" → asked for recipient+body), the user's next
+                    // utterance is the answer to that question.  Merge slots
+                    // and run the pipeline directly — never AttentionGate
+                    // it, never OpenClaw it.
+                    pendingMessageIntent?.let { pending ->
+                        val followUpStartMs = System.currentTimeMillis()
+                        Log.d(TAG, "[FOLLOWUP_RECEIVED] transcript=\"$transcript\" " +
+                            "channel=${pending.channel} +0ms")
+                        if (pending.isExpired()) {
+                            Log.d(TAG, "[FOLLOWUP_EXPIRED] pending dropped")
+                            pendingMessageIntent = null
+                            // Fall through to normal routing.
+                            return@let
+                        }
+                        Log.d(TAG, "[FOLLOWUP_PENDING_INTENT_FOUND] channel=${pending.channel}")
+                        Log.d(TAG, "[FOLLOWUP_MERGE_START]")
+                        val merged = com.jarvis.assistant.tools.device.messaging
+                            .PendingMessageIntent.merge(pending, transcript)
+                        pendingMessageIntent = null   // consume now; merged drives the rest
+
+                        if (!merged.isReady) {
+                            // Still missing something — ask again, re-park.
+                            Log.d(TAG, "[FOLLOWUP_STILL_INCOMPLETE] recipient=\"${merged.recipient}\" body=\"${merged.body}\"")
+                            val askAgain = when {
+                                merged.recipient.isBlank() -> "Who should I send it to?"
+                                else                        -> "What should it say?"
+                            }
+                            pendingMessageIntent = merged.copy(
+                                createdMs   = System.currentTimeMillis(),
+                                expiresAtMs = System.currentTimeMillis() +
+                                    com.jarvis.assistant.tools.device.messaging
+                                        .PendingMessageIntent.TTL_MS
+                            )
+                            speakAndRecord(askAgain)
+                            machine.transition(JarvisState.Listening)
+                            syncState(JarvisState.Listening)
+                            continue
+                        }
+
+                        // All slots filled — dispatch through the matching tool
+                        // so the pipeline + adapter run with the correct
+                        // execution + log markers.  Tool selection follows the
+                        // channel stored on the pending intent.
+                        val toolName = when (merged.channel) {
+                            com.jarvis.assistant.tools.device.MessageIntentParser
+                                .Channel.WHATSAPP -> "whatsapp_message"
+                            com.jarvis.assistant.tools.device.MessageIntentParser
+                                .Channel.SMS      -> "send_sms"
+                        }
+                        val tool  = toolRegistry.findByName(toolName)
+                        if (tool == null) {
+                            Log.w(TAG, "[FOLLOWUP_TOOL_MISSING] tool=$toolName " +
+                                "— cannot complete merged message")
+                            speakAndRecord("I can't send that right now.")
+                            machine.transition(JarvisState.Listening)
+                            syncState(JarvisState.Listening)
+                            continue
+                        }
+                        val input = com.jarvis.assistant.tools.framework.ToolInput(
+                            transcript,
+                            mapOf("name" to merged.recipient, "message" to merged.body)
+                        )
+                        val dispatchStartMs = System.currentTimeMillis()
+                        Log.d(TAG, "[FOLLOWUP_DISPATCH_START] tool=$toolName " +
+                            "+${dispatchStartMs - followUpStartMs}ms")
+                        val r = toolDispatcher.dispatch(
+                            tool, input, sessionSpeaker, transcript,
+                            skipConfirmation = true,        // user already gave consent
+                            confidenceTier   = com.jarvis.assistant.audio.stt
+                                .TranscriptCorrector.ConfidenceTier.HIGH
+                        )
+                        Log.d(TAG, "[FOLLOWUP_DISPATCH_DONE] tool=$toolName " +
+                            "+${System.currentTimeMillis() - followUpStartMs}ms " +
+                            "result=${r::class.simpleName}")
+                        when (r) {
+                            is ToolDispatcher.DispatchResult.Done ->
+                                if (r.spokenFeedback.isNotBlank()) speakAndRecord(r.spokenFeedback)
+                            is ToolDispatcher.DispatchResult.Failed -> speakAndRecord(r.message)
+                            is ToolDispatcher.DispatchResult.Denied -> speakAndRecord(r.message)
+                            else -> Unit
+                        }
+                        machine.transition(JarvisState.Listening)
+                        syncState(JarvisState.Listening)
+                        continue
+                    }
+
+                    // ── Todoist follow-up intercept ──────────────────────────
+                    // A parked PendingTodoistTask from the previous turn (e.g.
+                    // we asked "When should I remind you?") wins over every
+                    // other route — the user's reply is the answer to that
+                    // question.  Cleared on execute / decline / expiry.
+                    pendingTodoistTask?.let { pending ->
+                        if (pending.isExpired()) {
+                            Log.d(TAG, "[TODOIST_PENDING_EXPIRED] " +
+                                "content=\"${pending.content}\" slot=${pending.awaitingSlot}")
+                            Log.d(TAG, "[TODOIST_FOLLOWUP_EXPIRED] dropped")
+                            pendingTodoistTask = null
+                            return@let
+                        }
+                        Log.d(TAG, "[TODOIST_FOLLOWUP_RECEIVED] slot=${pending.awaitingSlot}")
+                        speechStateSource.recordUserInteraction()
+                        DeviceStateStore.update { copy(lastUserUtterance = transcript) }
+                        scope.launch(Dispatchers.IO) {
+                            memoryWriter.writeTurn(sessionId, "user", transcript)
+                        }
+                        val action = todoistReminderRouter.handleFollowUp(pending, transcript)
+                        pendingTodoistTask = null
+                        when (action) {
+                            is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.Speak ->
+                                speakAndRecord(action.text)
+                            is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.ParkPending -> {
+                                pendingTodoistTask = action.pending
+                                speakAndRecord(action.askPrompt)
+                            }
+                            is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.NotApplicable ->
+                                Unit
+                        }
+                        machine.transition(JarvisState.Listening)
+                        syncState(JarvisState.Listening)
+                        continue
+                    }
+
+                    // ── Todoist conversational edit intercept ───────────────
+                    // "move that to tomorrow", "make that urgent",
+                    // "delete that", "actually 9pm" — referring to the
+                    // most recently created task.  Runs BEFORE the fresh-
+                    // reminder check because edits don't start with a
+                    // reminder verb.
+                    if (com.jarvis.assistant.todoist.edit
+                            .ConversationalEditParser.looksLikeEdit(transcript)
+                    ) {
+                        Log.d(TAG, "[TODOIST_EDIT_DETECTED] transcript=\"${transcript.take(60)}\"")
+                        speechStateSource.recordUserInteraction()
+                        DeviceStateStore.update { copy(lastUserUtterance = transcript) }
+                        scope.launch(Dispatchers.IO) {
+                            memoryWriter.writeTurn(sessionId, "user", transcript)
+                        }
+                        val editAction = todoistReminderRouter.handleEdit(transcript)
+                        when (editAction) {
+                            is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.Speak -> {
+                                speakAndRecord(editAction.text)
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                            is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.ParkPending,
+                            is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.NotApplicable ->
+                                Unit  // fall through to fresh / other routing
+                        }
+                    }
+
+                    // ── Contextual follow-up intercept ───────────────────────
+                    // Resolves bare follow-ups against the last action:
+                    //   "turn off"          after flashlight-on
+                    //   "show me the selfie" after camera capture
+                    //   "do that again"     after any action
+                    // Runs BEFORE InstantCommandRouter so "turn off"
+                    // (with no prior verb) doesn't try to match a raw
+                    // smart-home intent with an empty target.
+                    Log.d(TAG, "[ROUTER_ORDER_CHECK] " +
+                        "contextual_followup_before_instant_router")
+                    if (com.jarvis.assistant.runtime.context
+                            .ContextualFollowupParser.looksLikeFollowup(transcript)
+                    ) {
+                        val resolution = com.jarvis.assistant.runtime.context
+                            .ContextualFollowupResolver.resolve(transcript, recentActionContext)
+                        when (resolution) {
+                            is com.jarvis.assistant.runtime.context
+                                .ContextualFollowupResolver.Resolution.Dispatch -> {
+                                Log.d(TAG, "[CONTEXT_FOLLOWUP_DISPATCH] " +
+                                    "tool=${resolution.toolName} " +
+                                    "followup=${resolution.originatingFollowup::class.simpleName}")
+                                val tool = toolRegistry.findByName(resolution.toolName)
+                                if (tool != null) {
+                                    speechStateSource.recordUserInteraction()
+                                    DeviceStateStore.update {
+                                        copy(lastUserUtterance = transcript)
+                                    }
+                                    val input = com.jarvis.assistant.tools.framework
+                                        .ToolInput(transcript, resolution.params)
+                                    val r = toolDispatcher.dispatch(
+                                        tool, input, sessionSpeaker, transcript,
+                                        skipConfirmation = true,
+                                        confidenceTier = com.jarvis.assistant.audio.stt
+                                            .TranscriptCorrector.ConfidenceTier.HIGH,
+                                    )
+                                    when (r) {
+                                        is ToolDispatcher.DispatchResult.Done ->
+                                            if (r.spokenFeedback.isNotBlank())
+                                                speakAndRecord(r.spokenFeedback)
+                                        is ToolDispatcher.DispatchResult.Failed ->
+                                            speakAndRecord(r.message)
+                                        is ToolDispatcher.DispatchResult.Denied ->
+                                            speakAndRecord(r.message)
+                                        else -> Unit
+                                    }
+                                    attentionGate.extendActiveWindow()
+                                    machine.transition(JarvisState.Listening)
+                                    syncState(JarvisState.Listening)
+                                    continue
+                                }
+                                Log.w(TAG, "[CONTEXT_FOLLOWUP_TOOL_MISSING] " +
+                                    "tool=${resolution.toolName} — falling through")
+                            }
+                            is com.jarvis.assistant.runtime.context
+                                .ContextualFollowupResolver.Resolution.Speak -> {
+                                speakAndRecord(resolution.text)
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                            is com.jarvis.assistant.runtime.context
+                                .ContextualFollowupResolver.Resolution.NotApplicable ->
+                                Unit   // fall through
+                        }
+                    }
+
+                    // ── Todoist list-query intercept ─────────────────────────
+                    // "what are my tasks", "show my todoist", "what's
+                    // overdue", "today's tasks" — strictly read-only,
+                    // local-only.  Without this the LLM fallback was
+                    // answering "I don't have a task list feature" even
+                    // though Todoist was connected.  See GH #36.
+                    if (com.jarvis.assistant.todoist.parse
+                            .TodoistListQueryParser.looksLikeListQuery(transcript)
+                    ) {
+                        Log.d(TAG, "[TODOIST_LIST_QUERY_DETECTED] " +
+                            "transcript=\"${transcript.take(60)}\"")
+                        speechStateSource.recordUserInteraction()
+                        DeviceStateStore.update { copy(lastUserUtterance = transcript) }
+                        scope.launch(Dispatchers.IO) {
+                            memoryWriter.writeTurn(sessionId, "user", transcript)
+                        }
+                        val listAction = todoistReminderRouter.handleListQuery(transcript)
+                        when (listAction) {
+                            is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.Speak -> {
+                                speakAndRecord(listAction.text)
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                            is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.NotApplicable,
+                            is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.ParkPending ->
+                                Unit
+                        }
+                    }
+
+                    // ── Todoist fresh-turn intercept ─────────────────────────
+                    // If the utterance looks like a reminder/task command,
+                    // route LOCALLY — no OpenClaw, no LLM, no memory.  The
+                    // looksLikeReminderCommand short-circuit is the same
+                    // predicate as the parser, so the cost of a false start
+                    // is one cheap regex.
+                    if (com.jarvis.assistant.todoist.parse
+                            .ReminderIntentParser.looksLikeReminderCommand(transcript)
+                    ) {
+                        // Cancel any prior pending — a fresh reminder
+                        // implicitly supersedes the old "what time?" /
+                        // "which project?" wait.
+                        pendingTodoistTask?.let {
+                            Log.d(TAG, "[TODOIST_PENDING_CANCELLED] " +
+                                "reason=new_reminder_intent content=\"${it.content}\"")
+                            pendingTodoistTask = null
+                        }
+                        Log.d(TAG, "[ROUTER_ORDER_CHECK] todoist_fresh_before_openclaw")
+                        Log.d(TAG, "[TODOIST_INTENT_DETECTED] transcript=\"${transcript.take(60)}\"")
+                        speechStateSource.recordUserInteraction()
+                        DeviceStateStore.update { copy(lastUserUtterance = transcript) }
+                        scope.launch(Dispatchers.IO) {
+                            memoryWriter.writeTurn(sessionId, "user", transcript)
+                        }
+                        val action = todoistReminderRouter.handleFresh(transcript)
+                        when (action) {
+                            is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.Speak -> {
+                                speakAndRecord(action.text)
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                            is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.ParkPending -> {
+                                pendingTodoistTask = action.pending
+                                speakAndRecord(action.askPrompt)
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                            is com.jarvis.assistant.todoist.TodoistReminderRouter.RouterAction.NotApplicable -> {
+                                // looksLikeReminderCommand triggered but the
+                                // strict parser declined — fall through.
+                                Log.d(TAG, "[TODOIST_FALLTHROUGH] " +
+                                    "looksLike=true but parser rejected — escalating")
+                            }
+                        }
+                    }
+
+                    // ── InstantCommandRouter — the deterministic local gate ──
+                    // Phone & device control must be instant and deterministic.
+                    // OpenClaw is the deeper brain, not the first stop.  If
+                    // the transcript matches an allowlisted local tool (time,
+                    // battery, call, WhatsApp, alarm, smart-home, …) we
+                    // execute IMMEDIATELY and return to Listening — no
+                    // AttentionGate, no OpenClaw, no LLM, no memory retrieval.
+                    //
+                    // Anything else returns NoMatch and falls through to the
+                    // existing LocalFirstRouter → OpenClaw → LLM cascade
+                    // below.  Conversational state intercepts above
+                    // (confirmation, messaging follow-up) already ran, so
+                    // genuine stateful continuations are not bypassed.
+                    val instantOnline = contextEngine.isOnline()
+                    val instantResult = instantCommandRouter.route(transcript, instantOnline)
+                    if (instantResult is com.jarvis.assistant.voice.routing
+                            .InstantCommandRouter.InstantRouteResult.Match
+                    ) {
+                        Log.d(TAG, "[LOCAL_TOOL_EXECUTE] tool=${instantResult.tool.name} " +
+                            "intent=${instantResult.intent}")
+                        // Record the user turn (so memory + conversation
+                        // history stay coherent) but do NOT retrieve memory
+                        // or call the LLM — local commands answer from the
+                        // device alone.
+                        speechStateSource.recordUserInteraction()
+                        lastSeenTracker.touchUserTurn()
+                        DeviceStateStore.update { copy(lastUserUtterance = transcript) }
+                        scope.launch(Dispatchers.IO) {
+                            memoryWriter.writeTurn(sessionId, "user", transcript)
+                        }
+
+                        val dispatch = toolDispatcher.dispatch(
+                            instantResult.tool,
+                            instantResult.input,
+                            sessionSpeaker,
+                            transcript,
+                            confidenceTier = com.jarvis.assistant.audio.stt
+                                .TranscriptCorrector.ConfidenceTier.HIGH,
+                        )
+                        // ── Standardised LOCAL_* log markers ─────────────
+                        // Replaces the older instant-router-specific tags
+                        // with the sprint-spec contract so every local
+                        // command has a uniform observability trail.
+                        val localTStart = System.currentTimeMillis()
+                        Log.d(TAG, "[LOCAL_ROUTE_MATCH] intent=${instantResult.intent} " +
+                            "tool=${instantResult.tool.name}")
+                        Log.d(TAG, "[LOCAL_TOOL_EXECUTE] tool=${instantResult.tool.name} " +
+                            "intent=${instantResult.intent}")
+                        // Consult the SessionContinuationPolicy BEFORE the
+                        // dispatcher's silent/done flags decide for us.
+                        // Volume / flashlight / time etc. must keep the
+                        // session alive even when they return silent=true
+                        // — the user is still in active conversation.
+                        val continuation = com.jarvis.assistant.runtime.session
+                            .SessionContinuationPolicy.decide(
+                                toolName       = instantResult.tool.name,
+                                transcript     = transcript.lowercase(),
+                                ttsIsSpeaking  = machine.isIn<JarvisState.Speaking>(),
+                            )
+                        Log.d(TAG, "[SESSION_CONTINUE_DECISION] $continuation " +
+                            "tool=${instantResult.tool.name}")
+                        when (val r = dispatch) {
+                            is ToolDispatcher.DispatchResult.Done -> {
+                                if (r.spokenFeedback.isNotBlank()) {
+                                    rememberFactReplyIfApplicable(
+                                        r.hints?.toolName, r.spokenFeedback
+                                    )
+                                    speakAndRecord(r.spokenFeedback)
+                                }
+                            }
+                            is ToolDispatcher.DispatchResult.Failed ->
+                                speakAndRecord(r.message)
+                            is ToolDispatcher.DispatchResult.Denied ->
+                                speakAndRecord(r.message)
+                            is ToolDispatcher.DispatchResult.NeedsConfirmation -> {
+                                Log.d(TAG, "[CONFIRMATION_LISTEN_STARTED] " +
+                                    "tool=${r.toolName} pending=${r.pendingId} " +
+                                    "(via InstantCommandRouter)")
+                                speakAndRecord(r.prompt)
+                            }
+                            is ToolDispatcher.DispatchResult.SilentExit -> {
+                                // The tool returned silent=true.  Whether we
+                                // ACTUALLY exit the session is determined by
+                                // the policy above — volume/flashlight stay
+                                // listening, only true session-ending tools
+                                // (open_app, end_call, camera_capture) tear
+                                // down.  Note: speakAndRecord is intentionally
+                                // skipped here — silent=true means no speech.
+                                if (continuation ==
+                                    com.jarvis.assistant.runtime.session
+                                        .SessionContinuationPolicy.Verdict.STOP_LISTENING
+                                ) {
+                                    Log.d(TAG, "[LISTENING_STOP_REQUESTED] " +
+                                        "tool=${instantResult.tool.name}")
+                                    Log.d(TAG, "[LISTENING_STOP_REASON] " +
+                                        "session_ending_tool")
+                                    closeSessionAsync()
+                                    releaseResources()
+                                    backToWakeWord()
+                                    return@launch
+                                }
+                                // Default: silent + continue listening.
+                                Log.d(TAG, "[LISTENING_RESTART_REQUESTED] " +
+                                    "reason=silent_local_command tool=${instantResult.tool.name}")
+                            }
+                            is ToolDispatcher.DispatchResult.AugmentedLlm,
+                            is ToolDispatcher.DispatchResult.LlmFollowUp -> {
+                                // These dispatch outcomes are reserved for
+                                // tools that intentionally need LLM help to
+                                // shape their reply (e.g. ReadScreenTool).
+                                // None of the INSTANT_TOOL_INTENTS produce
+                                // them; if a future allowlisted tool does,
+                                // it's a deliberate signal to fall through
+                                // to the LLM path — which is fine.
+                                Unit
+                            }
+                        }
+                        // ── Latency + diagnostics trail ─────────────────
+                        val totalMs = System.currentTimeMillis() - localTStart
+                        val resultLabel = when (dispatch) {
+                            is ToolDispatcher.DispatchResult.Done             -> "success"
+                            is ToolDispatcher.DispatchResult.SilentExit       -> "success_silent"
+                            is ToolDispatcher.DispatchResult.Failed           -> "failure(${dispatch.message.take(40)})"
+                            is ToolDispatcher.DispatchResult.Denied           -> "denied(${dispatch.message.take(40)})"
+                            is ToolDispatcher.DispatchResult.NeedsConfirmation -> "needs_confirmation"
+                            else                                              -> "other(${dispatch::class.simpleName})"
+                        }
+                        if (resultLabel.startsWith("success")) {
+                            Log.d(TAG, "[LOCAL_TOOL_SUCCESS] tool=${instantResult.tool.name}")
+                        } else {
+                            Log.w(TAG, "[LOCAL_TOOL_FAILURE] tool=${instantResult.tool.name} " +
+                                "result=$resultLabel")
+                        }
+                        Log.d(TAG, "[LOCAL_LATENCY_TOTAL_MS] tool=${instantResult.tool.name} " +
+                            "ms=$totalMs")
+                        // Record for the Diagnostics screen — phone-capable
+                        // intents always have remoteTouched=false at this
+                        // point; the in-memory ring buffer is the audit trail.
+                        com.jarvis.assistant.diagnostics.LocalRouteDiagnostics.record(
+                            transcript           = transcript,
+                            normalisedTranscript = transcriptNormalisedLog,
+                            intent               = instantResult.intent,
+                            tool                 = instantResult.tool.name,
+                            slots                = instantResult.input.params
+                                .mapValues { it.value.toString() },
+                            result               = resultLabel,
+                            latencyMs            = totalMs,
+                            remoteTouched        = false,
+                            route                = "LOCAL_ONLY",
+                        )
+
+                        // ── Record into RecentActionContextStore on success ─
+                        // Drives the contextual follow-up router: a bare
+                        // "turn off" after flashlight-on now resolves to
+                        // the flashlight tool with direction=off.
+                        if (resultLabel.startsWith("success")) {
+                            recordRecentActionForFollowup(
+                                instantResult.intent,
+                                instantResult.tool.name,
+                                instantResult.input.params,
+                            )
+                        }
+
+                        // ── Wake-window extension after successful local command ──
+                        // Keep the user in the active conversation window so
+                        // a follow-up command ("now turn the lights off")
+                        // doesn't need a fresh "Jarvis".
+                        if (continuation == com.jarvis.assistant.runtime.session
+                                .SessionContinuationPolicy.Verdict.CONTINUE_LISTENING
+                        ) {
+                            attentionGate.extendActiveWindow()
+                            Log.d(TAG, "[ATTENTION_ACTIVE_WINDOW_EXTENDED] " +
+                                "reason=successful_local_command tool=${instantResult.tool.name}")
+                            Log.d(TAG, "[LISTENING_RESTART_SUCCESS] " +
+                                "tool=${instantResult.tool.name}")
+                        }
+                        machine.transition(JarvisState.Listening)
+                        syncState(JarvisState.Listening)
+                        continue
+                    }
+                    Log.d(TAG, "[INSTANT_ROUTER_NO_MATCH] " +
+                        "reason=${(instantResult as com.jarvis.assistant.voice.routing
+                            .InstantCommandRouter.InstantRouteResult.NoMatch).reason} " +
+                        "— escalating to LocalFirstRouter / OpenClaw / LLM")
+
+                    // ── Single-pass routing setup (Tier A3) ──────────────────
+                    // One ToolRegistry.match per turn, reused by both the
+                    // AttentionGate signal builder and the actual route call.
+                    val turnIsOnline = contextEngine.isOnline()
+                    val turnToolMatch: Pair<com.jarvis.assistant.tools.framework.Tool,
+                        com.jarvis.assistant.tools.framework.ToolInput>? =
+                        toolRegistry.match(transcript, turnIsOnline)
+                    val turnConfidenceTier: TranscriptCorrector.ConfidenceTier =
+                        com.jarvis.assistant.audio.stt.TranscriptCorrector
+                            .scoreToTier(lastCorrectorScore)
+
+                    // ── AttentionGate ────────────────────────────────────────
+                    // Score the transcript against context (mode, active
+                    // conversation window, TTS echo, phone call, notification
+                    // text, local-command match) BEFORE we record it as a user
+                    // turn.  Anything that the gate marks as IGNORE is dropped
+                    // silently: no transcript log, no memory write, no TTS.
+                    run {
+                        val toolMatch = turnToolMatch
+                        val signals = AttentionSignals(
+                            transcript               = transcript,
+                            sttConfidence            = 0f,
+                            mode                     = modeController.current,   // B3
+                            activeWindowUntilMs      = attentionGate.activeWindowUntilMs,
+                            lastJarvisResponseMs     = 0L,
+                            nowMs                    = System.currentTimeMillis(),
+                            isInCall                 = pendingCallInfo != null,
+                            isMediaPlaying           = false,
+                            isHeadsetConnected       = bluetoothSco.isHeadsetConnected,
+                            screenOn                 = true,
+                            isTtsActive              = machine.isIn<JarvisState.Speaking>(),
+                            lastTtsText              = ttsEngine.lastSpokenText,
+                            localCommandMatch        = toolMatch != null,
+                            localCommandToolName     = toolMatch?.first?.name,
+                            transcriptCorrectorScore = lastCorrectorScore,
+                            looksLikeNotificationText =
+                                HomeAssistantNotificationClassifier
+                                    .isHomeAssistantAlert("", null, transcript)
+                        )
+                        when (val decision = attentionGate.gate(signals)) {
+                            is AttentionDecision.Ignore -> {
+                                Log.d(TAG, "[ATTENTION_DROPPED] target=${decision.target} " +
+                                    "reason=${decision.reason} score=${"%.2f".format(decision.score)}")
+                                // Stay in Listening; do NOT record this as a user turn.
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                            is AttentionDecision.AskIfForMe -> {
+                                Log.d(TAG, "[ATTENTION_ASK_BRIEF] \"${decision.prompt}\"")
+                                ttsEngine.speak(decision.prompt)
+                                machine.transition(JarvisState.Listening)
+                                syncState(JarvisState.Listening)
+                                continue
+                            }
+                            is AttentionDecision.Accept -> {
+                                // Fall through to existing turn-handling.
+                                // Extend the active conversation window so
+                                // natural follow-ups skip the gate.
+                                attentionGate.extendActiveWindow()
+                            }
+                        }
+                    }
+
                     speechStateSource.recordUserInteraction()
                     lastSeenTracker.touchUserTurn()  // track presence for gap check-ins
                     DeviceStateStore.update { copy(lastUserUtterance = transcript) }
-                    val implicitMemoryStored = memoryWriter.writeTurn(sessionId, "user", transcript)
+                    // B5 — move the conversation-turn DAO insert + implicit-
+                    // memory detection off the Main coroutine.  The
+                    // [implicitMemoryStoredDeferred] is awaited ~900 lines
+                    // down when the "Noted." cue is being decided; by then
+                    // the IO has long since completed.  Saves 80–200 ms of
+                    // perceived pause "after I finish speaking".
+                    val implicitMemoryStoredDeferred: kotlinx.coroutines.Deferred<Boolean> =
+                        scope.async(Dispatchers.IO) {
+                            memoryWriter.writeTurn(sessionId, "user", transcript)
+                        }
                     brainEngine.collector.onUserMessage(transcript)
                     // Resolve any pending follow-ups whose topic comes up naturally
                     scope.launch(Dispatchers.IO) { followUpRepo.maybeResolveFromTranscript(transcript) }
@@ -1396,7 +2473,22 @@ class JarvisRuntime(
                                 // their clarifying question is answered.
                             }
                             InterruptionType.CORRECTION,
-                            InterruptionType.REPLACEMENT,
+                            InterruptionType.REPLACEMENT -> {
+                                // A5 — learn from the user's correction so the same
+                                // mishear doesn't happen twice.  We extract:
+                                //   heard    = the closest-matching token in the
+                                //              previously-heard transcript
+                                //   intended = the content of the correction phrase
+                                //              ("no I meant X" → "X")
+                                //   ctx      = inferred from the original utterance
+                                //              (messaging / contact / app / device)
+                                com.jarvis.assistant.voice.learning.AliasLearnHelper.tryRecord(
+                                    previousTranscript = resumable.userTranscript,
+                                    correctionUtter    = transcript,
+                                    store              = aliasLearningStore
+                                )
+                                lastInterrupted = null
+                            }
                             InterruptionType.UNRELATED -> {
                                 lastInterrupted = null
                             }
@@ -1882,20 +2974,68 @@ class JarvisRuntime(
                     LatencyTracker.mark("INTENT_CLASSIFIED_CONV")
 
                     // ── Tool dispatch ──────────────────────────────────────────
-                    val isOnline = contextEngine.isOnline()
+                    // Reuse the match that the AttentionGate signal builder
+                    // already computed for this turn (A3).  Avoids a second
+                    // ToolRegistry.match regex sweep over the same transcript.
+                    val isOnline = turnIsOnline
                     // Gate: PERSONAL_UPDATE and CASUAL_CHAT skip tools entirely.
                     val matched = if (ToolUsePolicy.allowsTools(convIntent)) {
-                        toolRegistry.match(transcript, isOnline)
+                        turnToolMatch
                     } else {
                         null
                     }
                     LatencyTracker.mark("TOOL_MATCHED")
 
+                    // Route through LocalFirstRouter so the verdict + reason
+                    // are loggable and we can branch on ConfidenceTier (A4).
+                    // The router never re-runs match() — we hand it the
+                    // precomputed result.
+                    val routeOutcome = localFirstRouter.route(
+                        transcript        = transcript,
+                        isOnline          = isOnline,
+                        precomputedMatch  = matched,
+                        tier              = turnConfidenceTier
+                    )
+                    when (routeOutcome) {
+                        is com.jarvis.assistant.voice.routing.LocalFirstRouter.RouteOutcome.Clarify -> {
+                            // Medium confidence + risky tool, OR low confidence.
+                            // Echo back what we'd do and ask for explicit go/no-go.
+                            Log.d(TAG, "[CONFIDENCE_CONFIRM_MEDIUM_RISKY] " +
+                                "tool=${routeOutcome.tool.name} tier=${routeOutcome.tier}")
+                            ttsEngine.speak(routeOutcome.confirmPrompt)
+                            machine.transition(JarvisState.Listening)
+                            syncState(JarvisState.Listening)
+                            continue
+                        }
+                        is com.jarvis.assistant.voice.routing.LocalFirstRouter.RouteOutcome.Ignore -> {
+                            Log.d(TAG, "[CONFIDENCE_CLARIFY_LOW] route=Ignore " +
+                                "reason=${routeOutcome.reason}")
+                            machine.transition(JarvisState.Listening)
+                            syncState(JarvisState.Listening)
+                            continue
+                        }
+                        is com.jarvis.assistant.voice.routing.LocalFirstRouter.RouteOutcome.Local -> {
+                            Log.d(TAG, "[CONFIDENCE_EXECUTE_HIGH] tool=${routeOutcome.tool.name} " +
+                                "tier=${routeOutcome.tier}")
+                            // fall through to dispatch path below
+                        }
+                        is com.jarvis.assistant.voice.routing.LocalFirstRouter.RouteOutcome.OpenClawFallback -> {
+                            // fall through — existing OpenClaw block handles this
+                        }
+                    }
+
                     if (matched != null) {
                         val (tool, input) = matched
+                        // ROUTE_LOCAL_MATCH / ROUTE_LOCAL_EXECUTE — explicit
+                        // grep targets for the local-first routing path.
+                        Log.d(TAG, "[ROUTE_LOCAL_MATCH] tool=${tool.name} transcript=\"$transcript\"")
+                        localFirstRouter.logLocalExecute(tool.name)
                         syncState(machine.current)
 
-                        val dispatchResult = toolDispatcher.dispatch(tool, input, sessionSpeaker, transcript)
+                        val dispatchResult = toolDispatcher.dispatch(
+                            tool, input, sessionSpeaker, transcript,
+                            confidenceTier = turnConfidenceTier      // gate confirmations by tier
+                        )
 
                         // Brain: log tool-triggered events for any dispatch that ran the tool
                         dispatchResult.let { r ->
@@ -1937,7 +3077,10 @@ class JarvisRuntime(
                                 return@launch
                             }
                             is ToolDispatcher.DispatchResult.Done -> {
-                                if (r.spokenFeedback.isNotBlank()) speakAndRecord(r.spokenFeedback)
+                                if (r.spokenFeedback.isNotBlank()) {
+                                    rememberFactReplyIfApplicable(r.hints?.toolName, r.spokenFeedback)
+                                    speakAndRecord(r.spokenFeedback)
+                                }
                                 machine.transition(JarvisState.Listening)
                                 syncState(JarvisState.Listening)
                                 continue
@@ -1956,6 +3099,8 @@ class JarvisRuntime(
                                 continue
                             }
                             is ToolDispatcher.DispatchResult.NeedsConfirmation -> {
+                                Log.d(TAG, "[CONFIRMATION_LISTEN_STARTED] tool=${r.toolName} " +
+                                    "pending=${r.pendingId}")
                                 speakAndRecord(r.prompt)
                                 machine.transition(JarvisState.Listening)
                                 syncState(JarvisState.Listening)
@@ -1968,7 +3113,62 @@ class JarvisRuntime(
                         }
                     }
 
+                    // ── Messaging hard guard ──────────────────────────────────────
+                    // Messaging utterance with missing slots — never OpenClaw.
+                    // Park a PendingMessageIntent so the user's NEXT utterance
+                    // ("Mike saying hello") is intercepted at the top of the
+                    // next turn and merged in directly, without going through
+                    // AttentionGate or the OpenClaw fallback.
+                    if (matched == null &&
+                        com.jarvis.assistant.tools.device.MessageIntentParser
+                            .looksLikeMessagingCommand(transcript)
+                    ) {
+                        Log.d(TAG, "[MSG_INCOMPLETE_LOCAL_CLARIFY] transcript=\"$transcript\"")
+                        val isWa = Regex("""\bwhatsapp|whats\s+app|\bwa\b""",
+                            RegexOption.IGNORE_CASE).containsMatchIn(transcript)
+                        val channel = if (isWa)
+                            com.jarvis.assistant.tools.device.MessageIntentParser.Channel.WHATSAPP
+                        else
+                            com.jarvis.assistant.tools.device.MessageIntentParser.Channel.SMS
+                        pendingMessageIntent = com.jarvis.assistant.tools.device.messaging
+                            .PendingMessageIntent.create(channel = channel)
+                        Log.d(TAG, "[MSG_PENDING_PARKED] channel=$channel ttl_ms=20000")
+                        val askPrompt = if (isWa)
+                            "Who should I send the WhatsApp to and what should it say?"
+                        else
+                            "Who should I send the message to and what should it say?"
+                        speakAndRecord(askPrompt)
+                        machine.transition(JarvisState.Listening)
+                        syncState(JarvisState.Listening)
+                        continue
+                    }
+
                     // ── OpenClaw remote routing (before local LLM fallback) ────────
+                    // At this point no local tool matched.  Emit the explicit
+                    // ROUTE_OPENCLAW_FALLBACK log so the routing trail is
+                    // grep-able end-to-end.
+                    if (matched == null) {
+                        Log.d(TAG, "[ROUTE_NO_LOCAL_MATCH] transcript=\"$transcript\"")
+                        localFirstRouter.logOpenClawFallback("no_local_tool_matched")
+                    }
+                    // ── Phone-capable tripwire ────────────────────────────────
+                    // Sprint mission: if Android can do it locally, it MUST.
+                    // The InstantCommandRouter runs first; if a phone-capable
+                    // transcript STILL reaches the remote routing path that
+                    // is a regression — log loudly, file a bug, and refuse
+                    // to escalate.
+                    if (com.jarvis.assistant.voice.routing.PhoneCapableIntents
+                            .isInvalidRemoteRoute(transcript, remoteSubsystem = "openclaw")
+                    ) {
+                        speakAndRecord("That didn't work — I've logged it.")
+                        machine.transition(JarvisState.Listening)
+                        syncState(JarvisState.Listening)
+                        continue
+                    }
+                    if (!openClawRouter.shouldRoute()) {
+                        Log.d(TAG, "[OPENCLAW_DISABLED] " +
+                            "shouldRoute=false — staying local-only for this turn")
+                    }
                     if (openClawRouter.shouldRoute()) {
                         val route = openClawRouter.classify(transcript)
 
@@ -1988,11 +3188,52 @@ class JarvisRuntime(
                         )
 
                         if (streamFlow != null) {
-                            val fullResponse    = StringBuilder()
-                            var speakingStarted = false
+                            val fullResponse           = StringBuilder()
+                            var speakingStarted        = false
+                            // Tracks whether the 3 s first-token watchdog fired.
+                            // Lets the CancellationException handler distinguish
+                            // "no tokens in 3 s → fall through to local LLM" from
+                            // "barge-in cancellation → rethrow".
+                            val firstTokenTimeoutFired = java.util.concurrent.atomic.AtomicBoolean(false)
+                            var firstTokenReceived     = false
+                            // Arm the barge-in tracker for this stream.  If
+                            // handleBargeIn fires while the stream is in flight,
+                            // [bargeInFired] flips to true and the catch block
+                            // below logs BARGE_IN_STREAM_CANCELLED instead of
+                            // mis-attributing the cancel to a timeout.
+                            bargeInFired.set(false)
+                            Log.d(TAG, "[BARGE_IN_ARMED] for_openclaw_stream")
+                            LatencyTracker.mark("OPENCLAW_REQUEST_START")
                             try {
                                 withTimeout(openClawRepo.snapshot().timeoutMs) {
+                                    // ── First-token watchdog ──────────────────────────────
+                                    // If the remote endpoint doesn't yield a sentence within
+                                    // 3 s we cancel this scope and fall through to the local
+                                    // LLM rather than keeping the user waiting silently.
+                                    val timeoutScopeJob = coroutineContext[kotlinx.coroutines.Job]!!
+                                    val watchdogJob = launch {
+                                        // Tightened from 3 s → 1.5 s per the
+                                        // local-first refactor: OpenClaw is
+                                        // the deeper brain, not the first
+                                        // stop.  If the remote endpoint
+                                        // hasn't produced a sentence in
+                                        // 1.5 s, fail fast to the local LLM
+                                        // rather than keep the user waiting.
+                                        delay(1_500L)
+                                        if (!firstTokenReceived) {
+                                            firstTokenTimeoutFired.set(true)
+                                            Log.w(TAG, "[OPENCLAW_FIRST_TOKEN_TIMEOUT] no sentence in 1.5 s " +
+                                                "— cancelling stream, falling through to local LLM")
+                                            LatencyTracker.mark("OPENCLAW_FIRST_TOKEN_TIMEOUT")
+                                            timeoutScopeJob.cancel()
+                                        }
+                                    }
                                     streamFlow.collect { sentence ->
+                                        if (!firstTokenReceived) {
+                                            firstTokenReceived = true
+                                            watchdogJob.cancel()
+                                            LatencyTracker.mark("OPENCLAW_FIRST_TOKEN")
+                                        }
                                         fullResponse.append(sentence).append(" ")
                                         if (!speakingStarted) {
                                             speakingStarted = true
@@ -2028,10 +3269,13 @@ class JarvisRuntime(
                                 // Empty stream — fall through to local LLM
 
                             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                                Log.d(TAG, "[OPENCLAW_CANCEL_BEGIN] cause=timeout " +
+                                    "timeoutMs=${openClawRepo.snapshot().timeoutMs}")
                                 if (speakingStarted) {
                                     if (settings.voiceResponse) bargeIn.stop()
                                     DeviceStateStore.update { copy(ttsPlaying = false) }
                                 }
+                                Log.d(TAG, "[OPENCLAW_CANCEL_DONE] cause=timeout — fall through path next")
                                 if (keywordTriggered) {
                                     speakAndRecord(com.jarvis.assistant.remote.openclaw.OpenClawError.TimedOut.spokenMessage)
                                     machine.transition(JarvisState.Listening)
@@ -2045,7 +3289,32 @@ class JarvisRuntime(
                                     if (settings.voiceResponse) bargeIn.stop()
                                     DeviceStateStore.update { copy(ttsPlaying = false) }
                                 }
-                                throw e
+                                // Disambiguate the cancellation cause:
+                                //   bargeInFired  → user spoke over Jarvis
+                                //   firstTokenTimeoutFired → 3 s watchdog
+                                //   else          → upstream cancel (caller)
+                                if (bargeInFired.get()) {
+                                    Log.d(TAG, "[BARGE_IN_STREAM_CANCELLED] openclaw")
+                                    Log.d(TAG, "[BARGE_IN_CANCEL_CAUSE_CONFIRMED] cause=barge_in")
+                                    // Barge-in already handled state transitions
+                                    // (Interrupted → Listening).  Skip the rest.
+                                    continue
+                                }
+                                if (firstTokenTimeoutFired.get()) {
+                                    // First-token watchdog fired — treat like an auto-routed
+                                    // timeout: surface error to user only if keyword-triggered,
+                                    // otherwise fall through silently to local LLM.
+                                    if (keywordTriggered) {
+                                        speakAndRecord(com.jarvis.assistant.remote.openclaw.OpenClawError.TimedOut.spokenMessage)
+                                        machine.transition(JarvisState.Listening)
+                                        syncState(JarvisState.Listening)
+                                        continue
+                                    }
+                                    // Auto-routed first-token timeout — fall through to local LLM
+                                } else {
+                                    // Genuine cancellation (e.g. barge-in) — propagate upward.
+                                    throw e
+                                }
 
                             } catch (e: Exception) {
                                 if (speakingStarted) {
@@ -2071,11 +3340,20 @@ class JarvisRuntime(
                     }
 
                     // ── LLM inference via PromptAssembler + streaming ─────────────
+                    Log.d(TAG, "[FALLBACK_LOCAL_LLM_BEGIN] " +
+                        "reason=openclaw_unavailable_or_no_local_match")
+                    Log.d(TAG, "[MEMORY_RETRIEVE_BEGIN] transcript=\"${transcript.take(60)}\"")
                     LatencyTracker.mark("LLM_REQUEST_START")
+                    Log.d(TAG, "[LLM_REQUEST_START] online=$isOnline")
                     streamAndSpeak(transcript, isOnline)
+                    Log.d(TAG, "[MEMORY_RETRIEVE_DONE] (folded into streamAndSpeak)")
 
                     // If an implicit memory was stored from this turn, give a brief
                     // verbal cue so the user knows something was retained.
+                    // B5: the deferred is almost always already complete by now
+                    // (the LLM stream above takes hundreds of ms) so the await
+                    // here is effectively free.
+                    val implicitMemoryStored = implicitMemoryStoredDeferred.await()
                     if (implicitMemoryStored && settings.voiceResponse) {
                         ttsEngine.speak("Noted.")
                     }
@@ -2141,8 +3419,11 @@ class JarvisRuntime(
      */
     private fun handleBargeIn() {
         if (!machine.isIn<JarvisState.Speaking>()) return
-        Log.d(TAG, "Barge-in — cancelling TTS")
+        val tBarge = android.os.SystemClock.elapsedRealtime()
+        Log.d(TAG, "[BARGE_IN_TRIGGERED] t=$tBarge")
+        bargeInFired.set(true)
         ttsEngine.stopSpeaking()
+        Log.d(TAG, "[BARGE_IN_TTS_STOPPED] +${android.os.SystemClock.elapsedRealtime() - tBarge}ms")
         bargeIn.stop()
 
         // Snapshot unfinished reply so the next turn can decide whether to resume
@@ -2162,6 +3443,7 @@ class JarvisRuntime(
         syncState(JarvisState.Interrupted)
         machine.transition(JarvisState.Listening)
         syncState(JarvisState.Listening)
+        Log.d(TAG, "[BARGE_IN_LISTEN_STARTED]")
     }
 
     // ── LLM call ─────────────────────────────────────────────────────────────
@@ -2433,6 +3715,17 @@ class JarvisRuntime(
 
         } catch (e: CancellationException) {
             throw e
+        } catch (e: com.jarvis.assistant.llm.LlmRateLimitedException) {
+            // ── HTTP 429 / rate-limit fallback ──────────────────────────────
+            // Don't stall, don't crash, don't retry against the same provider
+            // — say a short message and let the next turn try again.  If the
+            // utterance is a simple intent it should have matched a local
+            // tool higher up; getting here means the LLM was genuinely the
+            // right route, so we just tell the user to wait.
+            Log.w(TAG, "[LLM_RATE_LIMITED] ${e.message}")
+            bargeIn.stop()
+            DeviceStateStore.update { copy(ttsPlaying = false) }
+            speakAndRecord("I'm hitting a rate limit on the cloud model right now. Give me a minute.")
         } catch (e: Exception) {
             Log.e(TAG, "LLM streaming error: ${e.message}", e)
             bargeIn.stop()
@@ -2557,6 +3850,105 @@ class JarvisRuntime(
      * Returns a morning briefing string if this is the first wake of the day before 10 am,
      * null otherwise (so the caller falls back to a random ack).
      */
+    /**
+     * Map a successful local-tool dispatch into a [RecentActionContextStore]
+     * entry.  Different tools want different action types — flashlight
+     * and smart_home are DEVICE_TOGGLE so "turn off" resolves, camera
+     * is MEDIA_CAPTURE so "show me the selfie" resolves, etc.
+     *
+     * Pure / cheap.  Called fire-and-forget after every Success — never
+     * throws.
+     */
+    private fun recordRecentActionForFollowup(
+        intent: String,
+        toolName: String,
+        params: Map<String, String>,
+    ) = runCatching {
+        val type = when (intent) {
+            "FLASHLIGHT"             -> com.jarvis.assistant.runtime.context
+                .RecentActionContextStore.ActionType.DEVICE_TOGGLE
+            "HOME_ASSISTANT_DEVICE"  -> com.jarvis.assistant.runtime.context
+                .RecentActionContextStore.ActionType.SMART_HOME
+            "VOLUME"                 -> com.jarvis.assistant.runtime.context
+                .RecentActionContextStore.ActionType.VOLUME
+            "MEDIA"                  -> com.jarvis.assistant.runtime.context
+                .RecentActionContextStore.ActionType.MEDIA_PLAYBACK
+            "CAMERA"                 -> com.jarvis.assistant.runtime.context
+                .RecentActionContextStore.ActionType.MEDIA_CAPTURE
+            "OPEN_APP"               -> com.jarvis.assistant.runtime.context
+                .RecentActionContextStore.ActionType.OPEN_APP
+            "CALL", "END_CALL"       -> com.jarvis.assistant.runtime.context
+                .RecentActionContextStore.ActionType.CALL
+            "SEND_MESSAGE"           -> com.jarvis.assistant.runtime.context
+                .RecentActionContextStore.ActionType.MESSAGING
+            "LOCATION"               -> com.jarvis.assistant.runtime.context
+                .RecentActionContextStore.ActionType.NAVIGATION
+            "CALENDAR"               -> com.jarvis.assistant.runtime.context
+                .RecentActionContextStore.ActionType.CALENDAR
+            else                     -> com.jarvis.assistant.runtime.context
+                .RecentActionContextStore.ActionType.OTHER
+        }
+        // Friendly "target" — what the action touched.  For flashlight
+        // / volume / media this is the tool's own short name; for
+        // smart_home it's the entity slot.
+        val target = params["target"] ?: params["entity"] ?: params["app"]
+            ?: when (toolName) {
+                "flashlight"      -> "flashlight"
+                "volume_control"  -> "volume"
+                "media_control"   -> "media"
+                else              -> null
+            }
+        // ── Media URI propagation ─────────────────────────────────────
+        // Camera captures publish their file path to MediaContextStore.
+        // Pull it back here so the contextual follow-up resolver can
+        // hand a real URI to ViewMediaTool / ShareMediaTool when the
+        // user says "show me the selfie" / "share that".  Without
+        // this, resolveShowMedia always returned NotApplicable and
+        // the camera tool fired a second time.
+        val mediaUri = if (type == com.jarvis.assistant.runtime.context
+                .RecentActionContextStore.ActionType.MEDIA_CAPTURE) {
+            com.jarvis.assistant.tools.device.media.MediaContextStore
+                .peek()?.filePath
+        } else null
+        val enrichedParams = if (mediaUri != null && type == com.jarvis.assistant
+                .runtime.context.RecentActionContextStore.ActionType.MEDIA_CAPTURE) {
+            params + mapOf("kind" to (params["facing"]?.let {
+                if (it == "front") "selfie" else "photo"
+            } ?: "photo"))
+        } else params
+
+        recentActionContext.record(
+            type     = type,
+            tool     = toolName,
+            target   = target,
+            params   = enrichedParams,
+            mediaUri = mediaUri,
+        )
+    }.getOrNull()
+
+    /**
+     * Tool names whose spoken result is a *fact-style* answer — the kind of
+     * reply the user typically follows up on with a short clarifier ("what
+     * number?", "and the postcode?", "how far?").  Each entry maps to a
+     * short topic tag for the prompt fragment.  Anything not in this map
+     * is intentionally ignored: tool acknowledgements like "Timer set." or
+     * "Opening Spotify." do not seed follow-up context.
+     */
+    private val FACT_REPLY_TOOLS: Map<String, String> = mapOf(
+        "where_am_i" to "location",
+        "weather"    to "weather",
+        "battery"    to "battery",
+        "time"       to "time",
+        "date"       to "date",
+        "calendar_lookup" to "calendar",
+    )
+
+    private fun rememberFactReplyIfApplicable(toolName: String?, spoken: String) {
+        val topic = toolName?.let { FACT_REPLY_TOOLS[it] } ?: return
+        recentFactCarrier.remember(topic, spoken)
+        Log.d(TAG, "[RECENT_FACT_REMEMBERED] tool=$toolName topic=$topic")
+    }
+
     private suspend fun tryMorningBriefing(): String? {
         val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
         if (hour >= 10) return null
@@ -2611,7 +4003,40 @@ class JarvisRuntime(
         )
     }
 
+    /**
+     * Tier-B ambient snapshot.  Cheap, no I/O; reads from already-cached
+     * sources.  Called every 5 s by [AmbientContextAggregator] and once per
+     * turn from the attention-signals builder.
+     */
+    private fun snapshotAmbientContext(): com.jarvis.assistant.context.AmbientContextSnapshot {
+        val now         = System.currentTimeMillis()
+        val speech      = speechStateSource.getSpeechState()
+        val lastUserMs  = lastSeenTracker.lastUserTurnMs.takeIf { it > 0L } ?: 0L
+        val msSinceUser = if (lastUserMs > 0L) now - lastUserMs else Long.MAX_VALUE
+        return com.jarvis.assistant.context.AmbientContextSnapshot(
+            timestampMs            = now,
+            isDriving              = drivingModeManager.isDriving,
+            isInCall               = pendingCallInfo != null,
+            isJarvisSpeaking       = speech.isSpeaking,
+            isJarvisListening      = speech.isListening,
+            batteryPercent         = null,    // wire BatteryEventAdapter signal later
+            isCharging             = false,
+            screenOn               = true,    // wire ScreenStateReceiver later
+            isHeadsetConnected     = bluetoothSco.isHeadsetConnected,
+            isMediaPlaying         = false,   // wire AudioManager.isMusicActive later
+            foregroundAppPackage   = null,
+            isOnline               = contextEngine.isOnline(),
+            presence               = currentPresence(),
+            msSinceLastInteraction = msSinceUser
+        )
+    }
+
     private fun backToWakeWord() {
+        // B4 — drop the AttentionGate active conversation window whenever
+        // we return to wake-word mode.  Without this, a 15 s "natural follow-
+        // up" window outlives the conversation and can swallow human speech
+        // in the same room when the user has already moved on.
+        attentionGate.closeActiveWindow()
         // CallRecovery → IdleWake is in the validated transition graph.
         // All other call states use forceTransition: an exception can abort
         // the call coordinator at any intermediate state (IncomingCallAlert,

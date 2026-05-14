@@ -66,4 +66,12 @@ interface LlmProvider {
 }
 
 /** Wraps provider-level errors with a readable message. */
-class LlmException(message: String, cause: Throwable? = null) : Exception(message, cause)
+open class LlmException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+/**
+ * Thrown when the cloud LLM provider returns an HTTP 429 / rate_limit_error.
+ * The runtime catches this specifically so we can give a short, friendly
+ * fallback instead of stack-tracing or stalling.
+ */
+class LlmRateLimitedException(message: String, cause: Throwable? = null) :
+    LlmException(message, cause)

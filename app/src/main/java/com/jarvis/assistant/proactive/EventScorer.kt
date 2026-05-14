@@ -206,5 +206,16 @@ class EventScorer(
         ProactiveEventType.ARRIVED_HOME          -> config.cooldownLocationTransitionMs
         ProactiveEventType.LEFT_HOME             -> config.cooldownLocationTransitionMs
         ProactiveEventType.ARRIVED_KNOWN_PLACE   -> config.cooldownLocationTransitionMs
+        // Scheduled-reminder lanes — the ScheduledReminderEngine owns
+        // its own dedupe so we don't need a per-type cooldown beyond
+        // the global one.  Reuse the existing upcoming-reminder window
+        // as a safe upper bound for any case where one of these events
+        // does land in this scorer path (e.g. a future direct inject).
+        ProactiveEventType.CALENDAR_EVENT_30M,
+        ProactiveEventType.CALENDAR_EVENT_10M,
+        ProactiveEventType.TODOIST_TASK_30M,
+        ProactiveEventType.TODOIST_TASK_10M,
+        ProactiveEventType.LOCAL_REMINDER_30M,
+        ProactiveEventType.LOCAL_REMINDER_10M    -> config.cooldownUpcomingReminderMs
     }
 }

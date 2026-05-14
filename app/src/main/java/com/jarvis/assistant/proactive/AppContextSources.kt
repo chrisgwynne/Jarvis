@@ -196,6 +196,15 @@ class AppSpeechStateSource(
         Log.v(TAG, "User interaction recorded at ${lastInteractionMs}ms")
     }
 
+    /**
+     * Snapshot of the most recent user-voice interaction, or null when no
+     * interaction has been recorded.  Consumed by
+     * [com.jarvis.assistant.proactive.TtsProactiveDispatcher]'s SPEAK_WHEN_ACTIVE
+     * gate so the dispatcher can decide whether to speak or downgrade to
+     * a notification.
+     */
+    fun lastInteractionMs(): Long? = lastInteractionMs
+
     override fun getSpeechState(): JarvisSpeechState {
         val current = machine.current
         return JarvisSpeechState(

@@ -65,6 +65,7 @@ internal fun AdvancedSettingsScreen(
     val openClawStatusDetail by vm.openClawStatusDetail.collectAsStateWithLifecycle()
     val openClawNodeEnabled  by vm.openClawNodeEnabled.collectAsStateWithLifecycle()
     val openClawNodeStatus   by vm.openClawNodeStatus.collectAsStateWithLifecycle()
+    val openClawPairingCode  by vm.openClawPairingCode.collectAsStateWithLifecycle()
 
     val hermesEnabled  by vm.hermesEnabled.collectAsStateWithLifecycle()
     val hermesHost     by vm.hermesHost.collectAsStateWithLifecycle()
@@ -426,6 +427,15 @@ internal fun AdvancedSettingsScreen(
                 )
                 if (openClawNodeEnabled) {
                     SettingsRowDivider()
+                    SettingsTextFieldRow(
+                        title       = "Pairing code",
+                        description = "Optional one-shot code from the OpenClaw " +
+                            "gateway.  Skips the CLI approve step.",
+                        value       = openClawPairingCode,
+                        onValueChange = vm::setOpenClawPairingCode,
+                        placeholder = "leave blank if not pairing",
+                    )
+                    SettingsRowDivider()
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -443,7 +453,8 @@ internal fun AdvancedSettingsScreen(
                     }
                     if (openClawNodeStatus == com.jarvis.assistant.remote.openclaw.OpenClawNodeStatus.PENDING_APPROVAL) {
                         Text(
-                            text = "Run: openclaw devices approve <requestId> on the gateway to complete pairing",
+                            text = "Either enter the pairing code above, OR run " +
+                                "`openclaw devices approve <requestId>` on the gateway.",
                             color = SettingsTheme.TextMuted,
                             fontSize = 12.sp,
                             modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp),
@@ -471,5 +482,9 @@ private fun nodeStatusColor(status: com.jarvis.assistant.remote.openclaw.OpenCla
     com.jarvis.assistant.remote.openclaw.OpenClawNodeStatus.RECONNECTING,
     com.jarvis.assistant.remote.openclaw.OpenClawNodeStatus.PENDING_APPROVAL  -> SettingsTheme.Cyan
     com.jarvis.assistant.remote.openclaw.OpenClawNodeStatus.ERROR             -> SettingsTheme.Destructive
+    // UNPAIRED is an actionable state — the user needs to enter a pairing
+    // code — so colour it amber/destructive to nudge them rather than
+    // hiding it in the muted "disabled" bucket.
+    com.jarvis.assistant.remote.openclaw.OpenClawNodeStatus.UNPAIRED          -> SettingsTheme.Destructive
     com.jarvis.assistant.remote.openclaw.OpenClawNodeStatus.DISABLED          -> SettingsTheme.TextMuted
 }

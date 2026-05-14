@@ -42,6 +42,7 @@ class PromptAssembler(
     private val sanitizer: Sanitizer? = null,
     private val conversationThreads: com.jarvis.assistant.core.presence.ConversationThreads? = null,
     private val expectationStore: com.jarvis.assistant.core.presence.ExpectationStore? = null,
+    private val recentFactCarrier: com.jarvis.assistant.followup.RecentFactCarrier? = null,
 ) {
     // Profile facts change rarely — cache for 30 s to avoid a DB round-trip
     // on every LLM call. Invalidated automatically by TTL.
@@ -101,6 +102,7 @@ class PromptAssembler(
             Quad(memoriesJob.await(), profileJob.await(), knowledgeJob.await(), expectationJob.await())
         }
         val threadsFrag = conversationThreads?.toPromptFragment().orEmpty()
+        val recentFactFrag = recentFactCarrier?.toPromptFragment().orEmpty()
 
         val system = buildSystemPrompt(
             contextFragment   = contextEngine.toPromptFragment(ctx, presence),
@@ -112,6 +114,7 @@ class PromptAssembler(
             expectationFragment = expectationFrag,
             socialFragment    = social?.toPromptFragment().orEmpty(),
             situationFragment = buildSituationFragment(situationSummary, activeGoalTitle),
+            recentFactFragment = recentFactFrag,
         )
 
         return buildList {
@@ -148,6 +151,7 @@ class PromptAssembler(
         expectationFragment: String = "",
         socialFragment   : String = "",
         situationFragment: String = "",
+        recentFactFragment: String = "",
     ): String = buildString {
 
         append("""
@@ -162,6 +166,17 @@ quietly confident.
 You are not: overly enthusiastic, overly formal, robotic, verbose, needy.
 Before every reply, ask: "If this were one person, would this be consistent
 with how they behave?" If not, adjust.
+
+SELF-KNOWLEDGE
+- You run on the user's Android phone as a foreground service.
+- Your remote reasoning backend is called "OpenClaw" — a self-hosted server
+  the user runs on their Linux machine and reaches over Tailscale.  When the
+  user asks about OpenClaw, you DO know what it is (it's part of you).  If
+  the user asks "are you connected to OpenClaw?" the dedicated openclaw_status
+  tool answers; do not say "what's that?".
+- Other internal names you may hear: Jarvis (you), Tailscale (the VPN that
+  links phone ↔ OpenClaw), Home Assistant (the smart-home server you can
+  control).  Never ask the user to explain these.
 
 CORE BEHAVIOUR
 - Talk like a person, not a helper explaining itself
@@ -297,6 +312,14 @@ State time and date confidently. Never disclaim real-time access or knowledge cu
         if (expectationFragment.isNotBlank()) {
             append("\n\n")
             append(expectationFragment)
+        }
+
+        // Most recent fact-style reply — keeps a 60 s carrier so the next
+        // user turn ("what number?", "and the postcode?") resolves against
+        // what Jarvis just told them instead of being misrouted.
+        if (recentFactFragment.isNotBlank()) {
+            append("\n\n")
+            append(recentFactFragment)
         }
 
         // Speaker identity note (LOW / UNKNOWN) — prevents wrong-name greetings

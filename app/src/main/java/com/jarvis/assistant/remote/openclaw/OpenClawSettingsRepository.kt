@@ -21,10 +21,17 @@ class OpenClawSettingsRepository(private val store: SettingsStore) {
         nodeEnabled = store.openClawNodeEnabled,
         deviceId    = store.openClawDeviceId,
         deviceToken = store.openClawDeviceToken,
+        pairingCode = store.openClawPairingCode,
         llmBaseUrl  = store.openClawLlmBaseUrl,
     )
 
-    fun saveDeviceToken(token: String) { store.openClawDeviceToken = token }
+    fun saveDeviceToken(token: String) {
+        store.openClawDeviceToken = token
+        // A successful approval should always clear the one-shot pairing
+        // code so future reconnects don't keep re-sending it.
+        if (store.openClawPairingCode.isNotBlank()) store.openClawPairingCode = ""
+    }
+    fun clearPairingCode() { store.openClawPairingCode = "" }
 
     /** True when OpenClaw is enabled AND a host has been entered. */
     fun isConfigured(): Boolean = snapshot().isFullyConfigured

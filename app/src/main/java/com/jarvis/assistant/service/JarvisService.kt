@@ -70,10 +70,19 @@ class JarvisService : Service() {
          * Passes [EXTRA_VOICE_NAME].
          */
         const val ACTION_APPLY_VOICE       = "com.jarvis.assistant.ACTION_APPLY_VOICE"
+        /**
+         * Settings UI toggled "Register as OpenClaw node".  Boolean
+         * [EXTRA_ENABLED] tells the service to start (true) or stop (false)
+         * the persistent gateway WebSocket.  Without this action, toggling
+         * the switch was purely cosmetic — the WebSocket was only started
+         * once at service onCreate.
+         */
+        const val ACTION_OPENCLAW_NODE_TOGGLE = "com.jarvis.assistant.ACTION_OPENCLAW_NODE_TOGGLE"
 
         const val EXTRA_REMINDER_ID    = "reminder_id"
         const val EXTRA_REMINDER_LABEL = "reminder_label"
         const val EXTRA_VOICE_NAME     = "voice_name"
+        const val EXTRA_ENABLED        = "enabled"
 
         // Broadcasts FROM the service to the UI
         const val BROADCAST_STATE_CHANGED   = "com.jarvis.assistant.STATE_CHANGED"
@@ -129,6 +138,22 @@ class JarvisService : Service() {
             )
         }
 
+        /**
+         * Trigger the OpenClaw node WebSocket to (re)start when [enabled]
+         * is true, or stop cleanly when false.  Called from
+         * `SettingsViewModel.setOpenClawNodeEnabled` so flipping the toggle
+         * actually changes the runtime behaviour instead of only writing
+         * the setting.
+         */
+        fun toggleOpenClawNode(context: Context, enabled: Boolean) {
+            context.startService(
+                Intent(context, JarvisService::class.java).apply {
+                    action = ACTION_OPENCLAW_NODE_TOGGLE
+                    putExtra(EXTRA_ENABLED, enabled)
+                }
+            )
+        }
+
         /** Switch the live TTS engine to [voiceName] without restarting the service. */
         fun applyVoice(context: Context, voiceName: String) {
             context.startService(
@@ -162,6 +187,19 @@ class JarvisService : Service() {
          */
         private val running = AtomicBoolean(false)
 
+        /**
+         * Process-wide reference to the live [JarvisRuntime] when the
+         * service is up.  Read-only — settings UI uses this for diagnostic
+         * queries (e.g. last 10 proactive events) without needing a
+         * bound-service connection.  Null when the service hasn't started
+         * yet or has already torn down.
+         */
+        @Volatile
+        private var instance: JarvisRuntime? = null
+
+        /** Public accessor mirroring the volatile [instance]. */
+        fun runtimeOrNull(): JarvisRuntime? = instance
+
         fun isRunning(@Suppress("UNUSED_PARAMETER") context: Context): Boolean = running.get()
     }
 
@@ -194,22 +232,34 @@ class JarvisService : Service() {
         // Only include a type flag when the corresponding runtime permission is actually
         // granted — on a fresh install neither RECORD_AUDIO nor CAMERA may be granted yet,
         // and passing an ungranted type throws SecurityException on Android 14+ (API 34+).
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            var serviceType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE
-            if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
-                    android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                serviceType = serviceType or
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            }
-            if (checkSelfPermission(android.Manifest.permission.CAMERA) ==
-                    android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                serviceType = serviceType or
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-            }
-            startForeground(NOTIFICATION_ID, buildNotification(), serviceType)
-        } else {
-            startForeground(NOTIFICATION_ID, buildNotification())
-        }
+        //
+        // KEY EDGE CASE (issues #19-#23, #26-#28):
+        //   If NEITHER permission is granted, [serviceType] is FOREGROUND_SERVICE_TYPE_NONE (0).
+        //   On Android 14+ the manifest declares foregroundServiceType="microphone|camera",
+        //   so calling startForeground(id, notif, 0) throws
+        //   MissingForegroundServiceTypeException, which the framework reports as
+        //   "Unable to create service ... : java...".
+        //   We fall back to the 2-arg form in that case and wrap the call in try/catch
+        //   so a permission-denied launch fails gracefully rather than crashing the process.
+        // ── Foreground-service start sequence ────────────────────────────────
+        // Two-stage defensive ladder, in priority order:
+        //
+        //   1. TYPED — startForeground(id, notif, MICROPHONE|CAMERA) using
+        //      whatever runtime permissions are currently granted.
+        //
+        //   2. UNTYPED — startForeground(id, notif), the 2-arg form, when (1)
+        //      throws a SecurityException.  This happens on Android 14 (API 34+)
+        //      when the app is started from a background context — even with
+        //      RECORD_AUDIO granted, the OS demands an "eligible state" for
+        //      a microphone FGS, which the boot receiver / deferred start
+        //      does not satisfy.  The 2-arg form keeps the service alive so
+        //      the user can open the app (foreground) and the service can be
+        //      promoted later; without it the process crashes outright.
+        //
+        // If BOTH paths throw we stop the service cleanly so the framework
+        // does not loop on `Unable to create service…`.
+        val startedOk: Boolean = tryStartForegroundSequence()
+        if (!startedOk) return
 
         serviceScope.launch {
             try {
@@ -231,6 +281,7 @@ class JarvisService : Service() {
                 val initMs = System.currentTimeMillis() - startTime
                 Log.i(TAG, "startup: JarvisRuntime initialized in ${initMs}ms (since onCreate: ${System.currentTimeMillis() - t0}ms)")
                 runtime = r
+                instance = r           // expose to companion-object accessor
                 runtimeDeferred.complete(r)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initialize JarvisRuntime", e)
@@ -304,6 +355,11 @@ class JarvisService : Service() {
                 val label = intent.getStringExtra(EXTRA_REMINDER_LABEL) ?: return
                 r.speakLocationReminder(label)
             }
+            ACTION_OPENCLAW_NODE_TOGGLE -> {
+                val enabled = intent.getBooleanExtra(EXTRA_ENABLED, false)
+                Log.d(TAG, "[OPENCLAW_NODE_TOGGLE] enabled=$enabled")
+                r.setOpenClawNodeEnabled(enabled)
+            }
             else -> {
                 // ACTION_START or null (system restarted us)
                 broadcast(BROADCAST_SERVICE_STARTED)
@@ -317,12 +373,83 @@ class JarvisService : Service() {
         serviceScope.cancel()
         runtime?.stop()  // stop() is idempotent; safe even if ACTION_STOP path already fired
         runtime = null
+        instance = null  // clear companion accessor so UI sees "no runtime"
         running.set(false)
         broadcast(BROADCAST_SERVICE_STOPPED)
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    // ── Foreground start helper ───────────────────────────────────────────────
+
+    /**
+     * Run the [TYPED → UNTYPED → stopSelf] ladder.  Returns true once any
+     * `startForeground` call has succeeded; false when both paths have
+     * failed and the service has stopped itself.
+     */
+    private fun tryStartForegroundSequence(): Boolean {
+        // STAGE 1 — typed startForeground.
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                var serviceType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE
+                if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+                        android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    serviceType = serviceType or
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                }
+                if (checkSelfPermission(android.Manifest.permission.CAMERA) ==
+                        android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    serviceType = serviceType or
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                }
+                if (serviceType == android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE) {
+                    Log.w(TAG, "[SERVICE_NO_FGS_TYPE] No mic/camera permission yet — " +
+                        "starting as plain foreground service; UI must request permissions")
+                    startForeground(NOTIFICATION_ID, buildNotification())
+                } else {
+                    startForeground(NOTIFICATION_ID, buildNotification(), serviceType)
+                }
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification())
+            }
+            Log.d(TAG, "[SERVICE_START] typed startForeground ok")
+            return true
+        } catch (e: Throwable) {
+            // Android 14+ throws SecurityException when starting a microphone
+            // FGS from a background context even with RECORD_AUDIO granted.
+            // Other failure modes: MissingForegroundServiceTypeException,
+            // ForegroundServiceStartNotAllowedException, IllegalStateException.
+            Log.w(TAG, "[SERVICE_FGS_TYPED_FAILED] ${e.javaClass.simpleName}: ${e.message} — " +
+                "falling back to untyped foreground service")
+        }
+
+        // STAGE 2 — untyped fallback.  Service stays alive but can't claim
+        // microphone/camera; the runtime / UI must promote it later by calling
+        // startForegroundService(...) again from a foreground state.
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification())
+            Log.w(TAG, "[SERVICE_START_UNTYPED] Running without FGS type — " +
+                "mic/camera tools will be unavailable until app is opened from launcher")
+            return true
+        } catch (e: Throwable) {
+            Log.e(TAG, "[SERVICE_FGS_FAILED] Untyped fallback also threw — stopping service", e)
+            try {
+                com.jarvis.assistant.reporting.github.IssueReporter.get()?.reportFatal(
+                    subsystem = "service_startup",
+                    category  = "FOREGROUND_SERVICE_START_FAILED",
+                    message   = "Both typed and untyped startForeground threw on " +
+                        "JarvisService.onCreate.",
+                    throwable = e
+                )
+            } catch (_: Throwable) {
+                // reporter is best-effort; never throw from a recover path
+            }
+            running.set(false)
+            stopSelf()
+            return false
+        }
+    }
 
     // ── Notification ──────────────────────────────────────────────────────────
 

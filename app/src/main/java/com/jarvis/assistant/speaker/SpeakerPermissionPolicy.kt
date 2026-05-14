@@ -58,39 +58,72 @@ object SpeakerPermissionPolicy {
     /**
      * Decide whether the current session's speaker may execute [toolName].
      *
-     * [result] should be the [SpeakerSessionContext.result] from the active session.
+     * **Owner-lockout fix.**  Previously this method denied every
+     * PERSONAL action unless the speaker scored HIGH_CONFIDENCE_MATCH.
+     * On app restart with a saved profile that hadn't loaded yet, or
+     * any low-audio / no-enrolment / corrupt-profile scenario, the
+     * owner was hard-locked out of basic commands like "send WhatsApp"
+     * or "remind me".  This was the user-reported regression.
+     *
+     * The fix:
+     *   - LOW_CONFIDENCE / UNKNOWN are now treated as OWNER_ASSUMED.
+     *   - Deny only runs when [strictMode] is on AND the command is
+     *     HIGH_RISK in the richer policy.  Strict mode defaults to OFF.
+     *   - Even then we prefer asking "Who is this?" over speaking a
+     *     hostile denial — wired in JarvisRuntime via
+     *     [com.jarvis.assistant.speaker.trust.CommandPermissionPolicy].
+     *
+     * Kept for back-compat with existing call sites that still pass
+     * SpeakerIdentityResult + toolName.  New code should call
+     * CommandPermissionPolicy directly.
      */
-    fun evaluate(result: SpeakerIdentityResult, toolName: String): PolicyDecision {
+    fun evaluate(
+        result: SpeakerIdentityResult,
+        toolName: String,
+        strictMode: Boolean = false,
+    ): PolicyDecision {
+        // PUBLIC tools always allowed regardless of identity.
         if (classifyAction(toolName) == ActionClass.PUBLIC)
             return PolicyDecision(allowed = true)
 
-        return when (result.band) {
+        // Map the recogniser's three-band result to the richer trust
+        // state.  HIGH_CONFIDENCE → VOICE_MATCHED, the two ambiguous
+        // bands → OWNER_ASSUMED (safe fallback that does NOT lock out).
+        val trust = when (result.band) {
             SpeakerIdentityResult.ConfidenceBand.HIGH_CONFIDENCE_MATCH ->
-                PolicyDecision(allowed = true)
-
-            SpeakerIdentityResult.ConfidenceBand.LOW_CONFIDENCE_OR_AMBIGUOUS ->
-                PolicyDecision(
-                    allowed    = false,
-                    denyReason = "I'm not sure who I'm talking to. " +
-                                 "I can help with general questions, but for personal actions " +
-                                 "I need to be sure of your identity."
-                )
-
+                com.jarvis.assistant.speaker.trust.VoiceTrustState.VOICE_MATCHED
+            SpeakerIdentityResult.ConfidenceBand.LOW_CONFIDENCE_OR_AMBIGUOUS,
             SpeakerIdentityResult.ConfidenceBand.UNKNOWN ->
-                // This branch is only reached when voice profiles ARE enrolled but the
-                // current speaker wasn't recognised.  JarvisRuntime applies owner trust
-                // mode (HIGH_CONFIDENCE synthetic result) when nobody is enrolled yet,
-                // so this message is only ever spoken to a genuinely unrecognised voice.
-                PolicyDecision(
-                    allowed    = false,
-                    denyReason = "I don't recognise your voice. " +
-                                 "I can answer general questions, but personal actions like " +
-                                 "calls or messages require voice identification."
-                )
+                com.jarvis.assistant.speaker.trust.VoiceTrustState.OWNER_ASSUMED
+        }
+
+        val decision = com.jarvis.assistant.speaker.trust
+            .CommandPermissionPolicy.evaluate(
+                toolName   = toolName,
+                trust      = trust,
+                strictMode = strictMode,
+            )
+        return when (decision) {
+            is com.jarvis.assistant.speaker.trust
+                .CommandPermissionPolicy.Decision.Allow ->
+                PolicyDecision(allowed = true)
+            is com.jarvis.assistant.speaker.trust
+                .CommandPermissionPolicy.Decision.Deny ->
+                PolicyDecision(allowed = false, denyReason = decision.reason)
+            is com.jarvis.assistant.speaker.trust
+                .CommandPermissionPolicy.Decision.ReauthRequired ->
+                // Old contract has no "reauth" verdict; surface as
+                // not-allowed-yet so legacy callers speak the friendly
+                // prompt.  New callers use CommandPermissionPolicy
+                // directly for the full pending-command resume flow.
+                PolicyDecision(allowed = false, denyReason = decision.prompt)
         }
     }
 
     /** Convenience: true if the tool is allowed for this result. */
-    fun isAllowed(result: SpeakerIdentityResult, toolName: String): Boolean =
-        evaluate(result, toolName).allowed
+    fun isAllowed(
+        result: SpeakerIdentityResult,
+        toolName: String,
+        strictMode: Boolean = false,
+    ): Boolean = evaluate(result, toolName, strictMode).allowed
 }

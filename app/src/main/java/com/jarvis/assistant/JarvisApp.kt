@@ -20,10 +20,75 @@ class JarvisApp : Application() {
 
     companion object {
         const val NOTIFICATION_CHANNEL_ID = "jarvis_service_channel"
+
+        /**
+         * Process-wide singleton so the Settings UI and JarvisRuntime both
+         * read / write through the same store.  Initialised in [onCreate];
+         * never null after the Application object is constructed.
+         */
+        @Volatile
+        lateinit var featureFlagStore: com.jarvis.assistant.voice.FeatureFlagStore
+            private set
+
+        /**
+         * Process-wide Proactivity settings repository — same pattern as
+         * [featureFlagStore].  Backed by [com.jarvis.assistant.util.SettingsStore],
+         * exposes a [kotlinx.coroutines.flow.StateFlow] of the current
+         * [com.jarvis.assistant.proactive.settings.ProactivitySettings] so
+         * the UI and the [com.jarvis.assistant.proactive.settings.ProactivityGate]
+         * see the same value at the same time.
+         */
+        @Volatile
+        lateinit var proactivitySettings
+            : com.jarvis.assistant.proactive.settings.ProactivitySettingsRepository
+            private set
+
+        /**
+         * Todoist integration settings — same pattern as [featureFlagStore]
+         * and [proactivitySettings].  Read by the Settings UI and by
+         * [com.jarvis.assistant.todoist.TodoistReminderRouter].
+         */
+        @Volatile
+        lateinit var todoistSettings
+            : com.jarvis.assistant.todoist.TodoistSettingsRepository
+            private set
+
+        /**
+         * Scheduled-reminders settings — backs the
+         * [com.jarvis.assistant.proactive.scheduled.ScheduledReminderEngine]
+         * AND the matching settings rows on the Proactivity screen.
+         */
+        @Volatile
+        lateinit var scheduledReminderSettings
+            : com.jarvis.assistant.proactive.scheduled.ScheduledReminderSettingsRepository
+            private set
     }
 
     override fun onCreate() {
         super.onCreate()
+        // Load any persisted feature-flag overrides BEFORE any other subsystem
+        // reads `VoiceFeatureFlags.isEnabled(...)`.  Cheap: a single
+        // SharedPreferences open + a small map mirror.
+        featureFlagStore = com.jarvis.assistant.voice.FeatureFlagStore(this).also {
+            it.loadAtStartup()
+        }
+        // Same lifecycle for the Proactivity repository — a SettingsStore
+        // open + an immutable snapshot.  The Settings UI binds against its
+        // StateFlow, the runtime constructs a ProactivityGate against the
+        // same instance, so reads stay coherent.
+        proactivitySettings = com.jarvis.assistant.proactive.settings
+            .ProactivitySettingsRepository(
+                com.jarvis.assistant.util.SettingsStore(this)
+            )
+        // Todoist repository wired to the same SettingsStore.  Cheap —
+        // EncryptedSharedPreferences open is amortised across all repos.
+        todoistSettings = com.jarvis.assistant.todoist.TodoistSettingsRepository(
+            com.jarvis.assistant.util.SettingsStore(this)
+        )
+        scheduledReminderSettings = com.jarvis.assistant.proactive.scheduled
+            .ScheduledReminderSettingsRepository(
+                com.jarvis.assistant.util.SettingsStore(this)
+            )
         createNotificationChannel()
         // Install the GitHub issue reporter FIRST so it wraps the thread
         // default uncaught-exception handler before any other subsystem has a

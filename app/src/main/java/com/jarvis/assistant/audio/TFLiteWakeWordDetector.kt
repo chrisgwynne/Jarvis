@@ -125,6 +125,26 @@ class TFLiteWakeWordDetector(
         val outputTensor = Array(1) { FloatArray(1) }
         var lastDetectionMs = 0L
 
+        // Attach software NS / AGC to the VOICE_RECOGNITION source — cuts down
+        // false wakes from steady-state background noise (fan, traffic).
+        val effects = AudioEffectsAttach.attach(recorder, TAG)
+
+        // ── Tier C3 — adaptive threshold ─────────────────────────────────────
+        // When ADAPTIVE_WAKE_THRESHOLD_ENABLED is on we maintain a rolling
+        // ambient-RMS estimate per frame and lift the detection threshold in
+        // noisy environments.  When off, the base 0.5 threshold is used.
+        val adaptiveOn = com.jarvis.assistant.voice.VoiceFeatureFlags.isEnabled(
+            com.jarvis.assistant.voice.VoiceFeatureFlags.Flag.ADAPTIVE_WAKE_THRESHOLD_ENABLED
+        )
+        val noiseEst   = com.jarvis.assistant.audio.wake.AmbientNoiseEstimator()
+        val thresholdAdaptor = com.jarvis.assistant.audio.wake.WakeThresholdAdaptor(
+            base = DETECT_THRESHOLD
+        )
+        if (adaptiveOn) {
+            Log.d(TAG, "[WAKE_THRESHOLD_BASE] base=$DETECT_THRESHOLD adaptive=true")
+        }
+        var loggedAdjustment = DETECT_THRESHOLD
+
         try {
             recorder.startRecording()
             Log.d(TAG, "AudioRecord started — listening for wake word")
@@ -141,17 +161,46 @@ class TFLiteWakeWordDetector(
                 interpreter.run(inputTensor, outputTensor)
                 val score = outputTensor[0][0]
 
+                // Update ambient estimate AFTER inference so the frame already
+                // contributed to the score it'll be compared against.
+                val effectiveThreshold = if (adaptiveOn) {
+                    noiseEst.observe(pcmBuffer, read)
+                    val noise = noiseEst.noiseLevel()
+                    val newT  = thresholdAdaptor.adapt(noise)
+                    // Log only on noticeable change to avoid log spam (one
+                    // adjustment per second is enough for diagnostics).
+                    if (kotlin.math.abs(newT - loggedAdjustment) >= 0.02f) {
+                        Log.d(TAG, "[WAKE_AMBIENT_RMS] noise=${"%.3f".format(noise)} " +
+                            "rms_raw=${"%.0f".format(noiseEst.rawRms())}")
+                        Log.d(TAG, "[WAKE_THRESHOLD_ADJUSTED] " +
+                            "${"%.2f".format(loggedAdjustment)} → ${"%.2f".format(newT)}")
+                        loggedAdjustment = newT
+                    }
+                    newT
+                } else {
+                    DETECT_THRESHOLD
+                }
+
                 val now = System.currentTimeMillis()
-                if (score >= DETECT_THRESHOLD && now - lastDetectionMs > COOLDOWN_MS) {
+                if (score >= effectiveThreshold && now - lastDetectionMs > COOLDOWN_MS) {
                     lastDetectionMs = now
-                    Log.d(TAG, "Wake word detected (score=${"%.2f".format(score)}) — firing callback")
+                    Log.d(TAG, "Wake word detected (score=${"%.2f".format(score)} " +
+                        "threshold=${"%.2f".format(effectiveThreshold)}) — firing callback")
                     // Switch to Main to call onDetected (matches GoogleWakeWordDetector behaviour)
                     kotlinx.coroutines.withContext(Dispatchers.Main) { onDetected() }
                     // Stop after detection — JarvisRuntime will call start() again
                     return
+                } else if (adaptiveOn && score >= DETECT_THRESHOLD && score < effectiveThreshold) {
+                    // The base threshold WOULD have triggered, but the lifted
+                    // threshold did not.  This is the false-positive suppression
+                    // we are after — log so we can measure how often it fires.
+                    Log.d(TAG, "[WAKE_FALSE_POSITIVE_SUPPRESSED] score=${"%.2f".format(score)} " +
+                        "base=${"%.2f".format(DETECT_THRESHOLD)} " +
+                        "adjusted=${"%.2f".format(effectiveThreshold)}")
                 }
             }
         } finally {
+            AudioEffectsAttach.release(effects)
             recorder.stop()
             recorder.release()
             interpreter.close()

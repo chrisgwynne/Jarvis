@@ -69,3 +69,4 @@ api_keys.properties
 .env.*
 *.pem
 *.p12
+.claude/worktrees/

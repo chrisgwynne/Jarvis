@@ -60,6 +60,33 @@ class MetaWearablesManager(
     /** Latest captured visual context.  Null when none in the TTL window. */
     fun peekRecentVisualContext(): RecentVisualContext? = contextProvider.peekRecent()
 
+    /** Friendly summary of the SDK's registration state (real backend
+     *  only).  Empty string for stub / mock / disabled. */
+    val registrationStatusLabel: String get() = deviceProvider.registrationStatusLabel
+
+    /** Number of paired/reachable glasses the SDK currently sees.
+     *  0 for stub / mock / disabled. */
+    val visibleDeviceCount: Int get() = deviceProvider.visibleDeviceCount
+
+    /** Link-state label for the first visible device (e.g.
+     *  "CONNECTED" / "DISCONNECTED" / "CONNECTING").  Empty when no
+     *  devices visible.  Distinct from [stateFlow] which describes
+     *  the SESSION, not the BLE link. */
+    val firstDeviceLinkLabel: String get() = deviceProvider.firstDeviceLinkLabel
+
+    /** Last user-safe error message surfaced by the active backend. */
+    val lastError: String? get() = deviceProvider.lastError
+
+    /**
+     * Trigger Meta AI's app-registration flow.  This is the prerequisite
+     * for [connect] to succeed against real hardware — the SDK won't
+     * surface any device until the user has explicitly approved Jarvis
+     * via Meta AI.  Returns true when the registration intent was
+     * launched; false when the active backend doesn't support it.
+     */
+    fun startRegistration(activity: android.app.Activity): Boolean =
+        deviceProvider.startRegistration(activity)
+
     /**
      * Re-pick the provider after a settings change (e.g. "Use mock
      * Meta glasses" toggled).  Disconnects the old one first.

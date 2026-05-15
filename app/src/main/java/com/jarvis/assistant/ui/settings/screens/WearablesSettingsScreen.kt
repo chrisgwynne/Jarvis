@@ -86,6 +86,72 @@ internal fun WearablesSettingsScreen(
                 value       = devState.name,
                 description = "Live state from the wearables manager.",
             )
+            SettingsRowDivider()
+            SettingsValueRow(
+                title       = "Registration status",
+                value       = mgr.registrationStatusLabel.ifBlank { "—" },
+                description = "Whether Jarvis is approved via the Meta AI " +
+                    "companion app to use the glasses.",
+            )
+            SettingsRowDivider()
+            SettingsValueRow(
+                title       = "Visible devices",
+                value       = mgr.visibleDeviceCount.toString(),
+                description = "Glasses paired in Meta AI that the SDK can see. " +
+                    "Zero means the glasses aren't paired or aren't on.",
+            )
+            // Device link state — critical when "couldn't connect" but
+            // the device count is > 0.  CONNECTED here means the BLE
+            // link is up and AutoDeviceSelector will accept it.
+            // DISCONNECTED here means the glasses are paired in Meta
+            // AI but not actively reachable right now — wake them up
+            // (open the case, wear them, open Meta AI).
+            mgr.firstDeviceLinkLabel.takeIf { it.isNotBlank() }?.let { link ->
+                SettingsRowDivider()
+                SettingsValueRow(
+                    title       = "Device link state",
+                    value       = link,
+                    description = "BLE link health for the first visible device. " +
+                        "CONNECTED = ready; DISCONNECTED = paired but offline " +
+                        "(wake the glasses).",
+                )
+            }
+            mgr.lastError?.takeIf { it.isNotBlank() }?.let { err ->
+                SettingsRowDivider()
+                SettingsValueRow(
+                    title       = "Last error",
+                    value       = err.take(120),
+                    description = "Most recent failure from the SDK (logged " +
+                        "with [META_WEARABLES_ERROR] in logcat).",
+                )
+            }
+        }
+
+        SettingsGroup(
+            title = "App registration",
+            description = "Required before the SDK can find your glasses",
+        ) {
+            SettingsActionRow(
+                title       = "Register with Meta AI",
+                description = "Opens the Meta AI companion app so you can " +
+                    "approve Jarvis as a registered glasses app.  " +
+                    "Required once before the first connect.",
+                actionLabel = "Register",
+                onAction    = {
+                    val activity = (context as? android.app.Activity)
+                    if (activity == null) {
+                        Toast.makeText(context,
+                            "Open Settings from the main Jarvis screen so " +
+                                "we have an Activity to launch from.",
+                            Toast.LENGTH_LONG).show()
+                    } else if (!mgr.startRegistration(activity)) {
+                        Toast.makeText(context,
+                            "Registration unavailable — DAT SDK not active. " +
+                                "Check master toggle + mock toggle.",
+                            Toast.LENGTH_LONG).show()
+                    }
+                },
+            )
         }
 
         SettingsGroup(title = "Behaviour", description = "How Jarvis uses the glasses") {
@@ -172,9 +238,16 @@ internal fun WearablesSettingsScreen(
                 onAction    = {
                     scope.launch {
                         val ok = mgr.connect(withCamera = true)
-                        Toast.makeText(context,
-                            if (ok) "Connected." else "Couldn't connect (state=${mgr.currentState}).",
-                            Toast.LENGTH_SHORT).show()
+                        val message = if (ok) {
+                            "Connected."
+                        } else {
+                            val err = mgr.lastError
+                            if (!err.isNullOrBlank())
+                                "Couldn't connect: $err"
+                            else
+                                "Couldn't connect (state=${mgr.currentState})."
+                        }
+                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                     }
                 },
             )

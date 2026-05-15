@@ -13,6 +13,7 @@ import com.meta.wearable.dat.camera.types.VideoFrame
 import com.meta.wearable.dat.camera.types.VideoQuality
 import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.selectors.AutoDeviceSelector
+import com.meta.wearable.dat.core.selectors.SpecificDeviceSelector
 import com.meta.wearable.dat.core.session.DeviceSession
 import com.meta.wearable.dat.core.types.DeviceSessionError
 import com.meta.wearable.dat.core.session.DeviceSessionState
@@ -91,6 +92,33 @@ class RealMetaWearablesProvider(
     @Volatile override var batteryPercent: Int? = null;      private set
     @Volatile override var lastError: String? = null;        private set
 
+    /**
+     * Mirror of `Wearables.registrationState` collapsed to a short
+     * human-readable label so the Settings UI doesn't need to import
+     * the SDK type itself.  Updated by the collector started in
+     * `init`; default "unknown" until the first emit.
+     */
+    @Volatile override var registrationStatusLabel: String = "unknown"
+        private set
+
+    /**
+     * Count of devices visible to the SDK.  Updated by a collector
+     * on `Wearables.devices`; default 0 until the first emit.
+     */
+    @Volatile override var visibleDeviceCount: Int = 0
+        private set
+
+    /**
+     * Link/health label for the first visible device.  Critical for
+     * diagnosing "registered + 1 visible but connect fails" — most
+     * often the device is visible-but-disconnected and the user
+     * needs to wake / re-pair it.
+     */
+    @Volatile override var firstDeviceLinkLabel: String = ""
+        private set
+
+    private var deviceStateWatchJob: Job? = null
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutex = Mutex()
     private val recent = AtomicReference<RecentVisualContext?>(null)
@@ -112,12 +140,85 @@ class RealMetaWearablesProvider(
         // null == success.  initialize returns DatResult<Unit,...>;
         // success "value" is just Unit so we don't need to capture it.
         val initErr = Wearables.initialize(context).errorOrNull()
-        if (initErr == null) {
-            Log.d(TAG, "[META_WEARABLES_INIT] Wearables.initialize → Success")
-        } else {
-            Log.w(TAG, "[META_WEARABLES_ERROR] init failed: $initErr")
-            lastError = initErr.toString()
-            _stateFlow.value = MetaWearablesState.ERROR
+        when {
+            initErr == null -> {
+                Log.d(TAG, "[META_WEARABLES_INIT] Wearables.initialize → Success")
+                startRegistryObservers()
+            }
+            // The DAT SDK's `Wearables` object has a static initializer
+            // that runs on class load — and our sdkPresent() probe loads
+            // the class via Class.forName before we ever call init.  By
+            // the time this init() fires, the SDK has self-initialised
+            // and returns ALREADY_INITIALIZED.  That's a no-op success
+            // for our purposes — the SDK is up; we just didn't drive
+            // the bring-up.  Proceed to wire observers + stay at
+            // DISCONNECTED so connect() can run normally.
+            initErr.toString().contains("ALREADY_INITIALIZED", ignoreCase = true) -> {
+                Log.d(TAG, "[META_WEARABLES_INIT] Wearables.initialize → ALREADY_INITIALIZED " +
+                    "(SDK self-init via class loader) — proceeding as success")
+                startRegistryObservers()
+            }
+            else -> {
+                Log.w(TAG, "[META_WEARABLES_ERROR] init failed: $initErr")
+                lastError = initErr.toString()
+                _stateFlow.value = MetaWearablesState.ERROR
+            }
+        }
+    }
+
+    /**
+     * Mirror `Wearables.registrationState` + `Wearables.devices` into
+     * our user-visible fields so Settings → Wearables can show "Not
+     * registered" / "1 device visible" without importing SDK types.
+     * Also surfaces what `connect()` would actually see — the major
+     * "couldn't connect → DISCONNECTED" symptom is
+     * [DeviceSessionError.NO_ELIGIBLE_DEVICE], which means either
+     * `Wearables.devices` is empty (glasses not paired in Meta AI)
+     * OR registration hasn't happened (app not authorised by user).
+     */
+    private fun startRegistryObservers() {
+        scope.launch {
+            Wearables.registrationState.collect { state ->
+                val label = state.toString()
+                registrationStatusLabel = label
+                Log.d(TAG, "[META_WEARABLES_REGISTRATION_STATE] $label")
+            }
+        }
+        scope.launch {
+            Wearables.devices.collect { set ->
+                visibleDeviceCount = set.size
+                val first = set.firstOrNull()
+                Log.d(TAG, "[META_WEARABLES_DEVICES] count=${set.size} first=$first")
+                // Re-arm the device-state watch on whatever the
+                // current first device is, dropping any previous one.
+                deviceStateWatchJob?.cancel()
+                if (first != null) {
+                    deviceStateWatchJob = scope.launch {
+                        try {
+                            Wearables.getDeviceState(first).collect { ds ->
+                                firstDeviceLinkLabel = ds.toString()
+                                Log.d(TAG, "[META_WEARABLES_DEVICE_STATE] device=$first state=$ds")
+                            }
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "getDeviceState collector failed", t)
+                        }
+                    }
+                } else {
+                    firstDeviceLinkLabel = ""
+                }
+            }
+        }
+    }
+
+    override fun startRegistration(activity: android.app.Activity): Boolean {
+        return try {
+            Log.d(TAG, "[META_WEARABLES_REGISTRATION_START]")
+            Wearables.startRegistration(activity)
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "[META_WEARABLES_ERROR] startRegistration threw: ${t.message}")
+            lastError = t.message
+            false
         }
     }
 
@@ -143,11 +244,51 @@ class RealMetaWearablesProvider(
         // JVM level so the compiler can't disambiguate by signature.
         // We sidestep by using `getOrNull` + `errorOrNull` — both are
         // DatResult members with no kotlin.Result namesake.
-        val createRes = Wearables.createSession(AutoDeviceSelector())
-        val newSession: DeviceSession = createRes.getOrNull() ?: run {
+        // Pre-flight diagnostic: dump what the SDK can actually see
+        // and what AutoDeviceSelector picks.  Most "couldn't connect"
+        // failures are NO_ELIGIBLE_DEVICE because the device is paired
+        // + visible but not actively connected over BLE — the selector
+        // filters those out.  Surfacing this explicitly in logcat +
+        // lastError makes the difference user-actionable.
+        val visibleSet = Wearables.devices.value
+        val autoSel = AutoDeviceSelector()
+        val autoPick = autoSel.activeDevice()
+        Log.d(TAG, "[META_WEARABLES_PRECHECK] " +
+            "visible=${visibleSet.size} autoSelectorPick=$autoPick " +
+            "firstDeviceLink=$firstDeviceLinkLabel")
+
+        var createRes = Wearables.createSession(autoSel)
+        var newSession: DeviceSession? = createRes.getOrNull()
+
+        // Fallback: when AutoDeviceSelector picked nothing but we
+        // CAN see a paired device, try targeting it explicitly.
+        // The SDK may have a stricter "compatible AND connected"
+        // requirement than what the user expects.  SpecificDevice
+        // Selector only checks visibility; if that also fails we
+        // surface a clearer "device not actively connected" error.
+        if (newSession == null && autoPick == null && visibleSet.isNotEmpty()) {
+            val target = visibleSet.first()
+            Log.d(TAG, "[META_WEARABLES_FALLBACK] AutoDeviceSelector empty — " +
+                "retrying with SpecificDeviceSelector($target)")
+            createRes = Wearables.createSession(SpecificDeviceSelector(target))
+            newSession = createRes.getOrNull()
+        }
+
+        if (newSession == null) {
             val err = createRes.errorOrNull() as? DeviceSessionError
-            Log.w(TAG, "[META_WEARABLES_ERROR] createSession failed: $err")
-            lastError = err.toString()
+            val hint = when {
+                err == DeviceSessionError.NO_ELIGIBLE_DEVICE && visibleSet.isEmpty() ->
+                    "no paired glasses visible — pair them in the Meta AI app"
+                err == DeviceSessionError.NO_ELIGIBLE_DEVICE && visibleSet.isNotEmpty() ->
+                    "$err — glasses visible but not actively connected " +
+                        "(linkState=$firstDeviceLinkLabel); wake the glasses " +
+                        "(open case / wear them), or check Meta AI shows them online"
+                err == DeviceSessionError.SESSION_ALREADY_EXISTS ->
+                    "$err — another app holds the session; force-stop Meta AI then retry"
+                else -> err.toString()
+            }
+            Log.w(TAG, "[META_WEARABLES_ERROR] createSession failed: $hint")
+            lastError = hint
             _stateFlow.value = when (err) {
                 DeviceSessionError.NO_ELIGIBLE_DEVICE     -> MetaWearablesState.DISCONNECTED
                 DeviceSessionError.SESSION_ALREADY_EXISTS -> MetaWearablesState.CONNECTED

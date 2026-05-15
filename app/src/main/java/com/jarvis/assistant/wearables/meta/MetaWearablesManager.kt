@@ -1,0 +1,158 @@
+package com.jarvis.assistant.wearables.meta
+
+import android.content.Context
+import android.util.Log
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/**
+ * MetaWearablesManager — the single entry point the rest of Jarvis
+ * uses to talk to the Meta Wearables module.  Holds one
+ * [WearableDeviceProvider] / [WearableCameraProvider] /
+ * [WearableContextProvider] (all three are the same object today —
+ * the stub and the mock implement all three) chosen at construction
+ * time based on:
+ *
+ *   1. Is the Meta DAT SDK present on the classpath?  (Detection
+ *      is a `Class.forName("com.facebook.mwdat.core.MwDatClient")`
+ *      probe; success → use the real backend.  Today the real
+ *      backend doesn't exist yet, so this branch is left as a
+ *      `TODO(...)` slot in [pickProvider].)
+ *   2. Is the developer's "Use mock Meta glasses" toggle ON?  →
+ *      [MockMetaWearablesProvider].
+ *   3. Otherwise → [StubMetaWearablesProvider] (state pinned at
+ *      SDK_UNAVAILABLE).
+ *
+ * Why three interfaces, one object today: the real DAT SDK exposes
+ * device + camera + context as distinct sessions, so the interface
+ * split mirrors how the real implementation will be structured.
+ * Today the stub and mock implement all three for convenience.
+ *
+ * Wired as a JarvisApp-level singleton (see JarvisApp.metaWearables);
+ * the Settings UI reads `manager.stateFlow` directly and the runtime
+ * dispatches capture commands via [capturePhoto] / [startCameraSession].
+ */
+class MetaWearablesManager(
+    private val context: Context,
+    private val settingsProvider: () -> WearablesSettings,
+) {
+
+    /**
+     * Currently-active backend.  Re-evaluated whenever the user
+     * toggles "Meta Wearables enabled" / "Use mock device" — call
+     * [refresh] from the settings repository on every write.
+     */
+    @Volatile private var providerImpl: WearableDeviceProvider = pickProvider()
+
+    val deviceProvider:  WearableDeviceProvider  get() = providerImpl
+    val cameraProvider:  WearableCameraProvider  get() = providerImpl as WearableCameraProvider
+    val contextProvider: WearableContextProvider get() = providerImpl as WearableContextProvider
+
+    val stateFlow: Flow<MetaWearablesState>  get() = deviceProvider.stateFlow
+
+    /** Latest state without subscribing to the flow. */
+    val currentState: MetaWearablesState get() = deviceProvider.currentState
+
+    /** Latest captured visual context.  Null when none in the TTL window. */
+    fun peekRecentVisualContext(): RecentVisualContext? = contextProvider.peekRecent()
+
+    /**
+     * Re-pick the provider after a settings change (e.g. "Use mock
+     * Meta glasses" toggled).  Disconnects the old one first.
+     */
+    suspend fun refresh() {
+        val old = providerImpl
+        old.disconnect()
+        providerImpl = pickProvider()
+        Log.d(TAG, "[META_WEARABLES_INIT] " +
+            "backend=${providerImpl::class.simpleName} state=${providerImpl.currentState}")
+    }
+
+    /** Connect, opening a camera session if [withCamera] is true. */
+    suspend fun connect(withCamera: Boolean = true): Boolean {
+        val s = settingsProvider()
+        if (!s.enabled) {
+            Log.d(TAG, "[META_WEARABLES_DISABLED] state=$currentState")
+            return false
+        }
+        val ok = deviceProvider.connect()
+        if (ok && withCamera) cameraProvider.startCameraSession()
+        return ok && currentState.isReadyForCapture
+    }
+
+    suspend fun disconnect() = deviceProvider.disconnect()
+
+    /**
+     * Try to capture a single photo from the glasses.  Returns the
+     * URI on success, null on failure (state machine left at a
+     * sensible resting state by the provider).
+     *
+     * Caller (e.g. `LookAtThisWearableTool`) decides what to do on
+     * null — typically fall back to the phone camera if the user has
+     * enabled that.
+     */
+    suspend fun capturePhoto(): String? {
+        if (!settingsProvider().enabled) return null
+        // Auto-connect path: if we're idle, try to bring the device up.
+        if (currentState == MetaWearablesState.DISCONNECTED ||
+            currentState == MetaWearablesState.CONNECTED) {
+            connect(withCamera = true)
+        }
+        if (!currentState.isReadyForCapture &&
+            currentState != MetaWearablesState.CONNECTED) {
+            Log.d(TAG, "[META_CAMERA_UNAVAILABLE] state=$currentState")
+            return null
+        }
+        return cameraProvider.capturePhoto()
+    }
+
+    /** Stop any streaming / camera session.  Safe to call from any state. */
+    suspend fun stopCamera() = cameraProvider.stopCameraSession()
+
+    // ── Provider selection ─────────────────────────────────────────────────
+
+    private fun pickProvider(): WearableDeviceProvider {
+        val s = settingsProvider()
+        if (!s.enabled) return DisabledProvider
+        if (s.useMockDevice) return MockMetaWearablesProvider()
+        if (sdkPresent()) {
+            // TODO(meta-dat): wire `RealMetaWearablesProvider(context)` once
+            // the Meta DAT SDK dependency is added to libs.versions.toml +
+            // app/build.gradle.kts.  See docs/wearables/meta-dat-integration.md.
+            // Until then, fall through to the stub so the app builds.
+        }
+        return StubMetaWearablesProvider()
+    }
+
+    private fun sdkPresent(): Boolean = try {
+        Class.forName("com.facebook.mwdat.core.MwDatClient", false,
+            this::class.java.classLoader)
+        true
+    } catch (_: ClassNotFoundException) { false }
+      catch (_: Throwable)               { false }
+
+    /** Pseudo-provider used when the master toggle is OFF. */
+    private object DisabledProvider :
+        WearableDeviceProvider, WearableCameraProvider, WearableContextProvider {
+
+        private val _state = MutableStateFlow(MetaWearablesState.DISABLED)
+        override val stateFlow: StateFlow<MetaWearablesState> = _state.asStateFlow()
+        override val currentState: MetaWearablesState get() = _state.value
+        override val deviceName: String? = null
+        override val batteryPercent: Int? = null
+        override val lastError: String? = null
+        override suspend fun connect()                = false
+        override suspend fun disconnect()             = Unit
+        override suspend fun startCameraSession()     = false
+        override suspend fun stopCameraSession()      = Unit
+        override suspend fun capturePhoto(): String?  = null
+        override suspend fun startStream(onFrame: (ByteArray, Int, Int) -> Boolean) = false
+        override suspend fun stopStream()             = Unit
+        override fun peekRecent(): RecentVisualContext? = null
+        override fun clearRecent()                    = Unit
+    }
+
+    companion object { private const val TAG = "MetaWearablesMgr" }
+}

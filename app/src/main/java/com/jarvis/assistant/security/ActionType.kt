@@ -71,7 +71,10 @@ enum class ActionType(val displayName: String) {
     SHARE_LOCATION("Share Location"),
     READ_SMS("Read SMS"),
     RECENT_CALLS("Recent Calls"),
-    CALENDAR_CREATE("Create Calendar Event");
+    CALENDAR_CREATE("Create Calendar Event"),
+
+    // ── Meta Wearables (DAT SDK) ───────────────────────────────────────
+    LOOK_AT_THIS_WEARABLE("Look at This — Glasses");
 
     companion object {
         /**
@@ -189,6 +192,7 @@ enum class ActionType(val displayName: String) {
             "read_sms"            to READ_SMS,
             "recent_calls"        to RECENT_CALLS,
             "calendar_create"     to CALENDAR_CREATE,
+            "look_at_this_wearable" to LOOK_AT_THIS_WEARABLE,
         )
 
         fun fromToolName(toolName: String): ActionType? = APPROVED_TOOL_MAP[toolName]

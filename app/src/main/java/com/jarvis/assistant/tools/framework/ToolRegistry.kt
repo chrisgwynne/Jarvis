@@ -298,6 +298,25 @@ class ToolRegistry constructor(
                     // Screen vision + actuation (before generic OpenApp)
                     llmRouter?.let { add(ReadScreenTool(it)) }
                     add(TapScreenTool())
+                    // Meta Wearables — "look at this" / "take a glasses
+                    // photo" via the optional Meta DAT module.  Runs BEFORE
+                    // the screen-observation handler so when the user has
+                    // glasses enabled AND connected, the glasses path wins;
+                    // when wearables are off / disconnected the tool declines
+                    // (returns null from matches) so the screen / phone-camera
+                    // path remains the default.
+                    try {
+                        add(com.jarvis.assistant.tools.device.wearables
+                            .LookAtThisWearableTool(
+                                manager  = com.jarvis.assistant.JarvisApp.metaWearables,
+                                settings = { com.jarvis.assistant.JarvisApp
+                                    .wearablesSettings.snapshot() },
+                            ))
+                    } catch (_: Throwable) {
+                        // JarvisApp not yet initialised (test harness path) —
+                        // skip the wearables tool quietly.  The rest of the
+                        // registry is independent.
+                    }
                     // "look at this" — screen observation.  Must precede
                     // AnalyzeCameraViewTool so the generic "look at this"
                     // phrase captures the screen (primary user intent),

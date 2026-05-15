@@ -49,6 +49,7 @@ class ActionPolicyAllowlistTest {
         "list_routines",
         "location_reminder",
         "look_at_this",
+        "look_at_this_wearable",  // LookAtThisWearableTool
         "media_control",
         "memory_recall",
         "memory_stats",

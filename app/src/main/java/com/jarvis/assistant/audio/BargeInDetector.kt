@@ -22,9 +22,12 @@ import kotlin.math.sqrt
  * interruption utterance.
  *
  * ECHO CANCELLATION:
- *   Uses MediaRecorder.AudioSource.VOICE_COMMUNICATION which enables the
- *   device's hardware AEC (Acoustic Echo Canceller).  This prevents Jarvis's
- *   own TTS output from triggering false barge-ins on the speaker.
+ *   Uses MediaRecorder.AudioSource.VOICE_RECOGNITION so Android treats this
+ *   as an assistant microphone session rather than a call, which prevents
+ *   media apps (Spotify, podcasts) from pausing when Jarvis starts listening.
+ *   Software AEC/AGC/NS is applied via AudioEffectsAttach to suppress TTS
+ *   playback bleed.  Hardware AEC (VOICE_COMMUNICATION source) is intentionally
+ *   avoided because it signals a telephony-like session to the OS.
  *
  *   A mandatory [startDelayMs] cooldown (default 600 ms) further suppresses
  *   the initial TTS ramp-up before monitoring begins.
@@ -90,7 +93,7 @@ class BargeInDetector(
         }
 
         val record = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
             SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
@@ -103,9 +106,9 @@ class BargeInDetector(
             return
         }
 
-        // Best-effort software AEC / AGC / NS on top of the VOICE_COMMUNICATION
-        // source.  AEC in particular is essential for reliable barge-in when
-        // TTS is playing through the same hardware output.
+        // Software AEC / AGC / NS on top of VOICE_RECOGNITION.
+        // AEC in particular suppresses TTS playback bleed that could otherwise
+        // trigger false barge-ins when the speaker is in use.
         val effects = AudioEffectsAttach.attach(record, TAG)
 
         try {

@@ -119,6 +119,16 @@ class RealMetaWearablesProvider(
         private set
 
     /**
+     * Compatibility of the first visible device — typically
+     * "COMPATIBLE" or "DEVICE_UPDATE_REQUIRED" / "DAT_APP_UPDATE_REQUIRED".
+     * When non-COMPATIBLE, session.start() will hang at STARTING
+     * indefinitely — connect() short-circuits with a clear error
+     * instead of letting the user stare at a CONNECTING spinner.
+     */
+    @Volatile override var compatibilityLabel: String = ""
+        private set
+
+    /**
      * Glasses-side permission status labels ("GRANTED" / "DENIED" /
      * "UNKNOWN").  Refreshed by [refreshPermissionStatus] which runs
      * on init AND on every connect attempt, so the Settings UI shows
@@ -225,6 +235,7 @@ class RealMetaWearablesProvider(
                             }
                             metaFlow.collect { device ->
                                 firstDeviceLinkLabel = device.linkState.name
+                                compatibilityLabel = device.compatibility.toString()
                                 deviceName = device.name
                                 Log.d(TAG, "[META_WEARABLES_DEVICE] name=${device.name} " +
                                     "linkState=${device.linkState} " +
@@ -378,6 +389,27 @@ class RealMetaWearablesProvider(
         Log.d(TAG, "[META_WEARABLES_PRECHECK] " +
             "visible=${visibleSet.size} autoSelectorPick=$autoPick " +
             "firstDeviceLink=$firstDeviceLinkLabel")
+
+        // Pre-flight: if the device reports a non-COMPATIBLE
+        // compatibility, the SDK will accept createSession but
+        // session.start() will hang at STARTING and the glasses
+        // surface "Capture failed" silently.  Short-circuit with a
+        // pointer to the firmware-update flow.
+        val compatSnapshot = compatibilityLabel
+        if (compatSnapshot.isNotEmpty() && !compatSnapshot.equals("COMPATIBLE", ignoreCase = true)) {
+            val hint = when {
+                compatSnapshot.contains("DEVICE_UPDATE", ignoreCase = true) ->
+                    "glasses firmware update required — tap 'Check firmware update' " +
+                        "or open Meta AI → Devices → update"
+                compatSnapshot.contains("DAT_APP", ignoreCase = true) ->
+                    "DAT app update required — tap 'Check DAT app update'"
+                else -> "device not compatible: $compatSnapshot"
+            }
+            Log.w(TAG, "[META_WEARABLES_INCOMPATIBLE] compat=$compatSnapshot — $hint")
+            lastError = hint
+            _stateFlow.value = MetaWearablesState.DISCONNECTED
+            return false
+        }
 
         var createRes = Wearables.createSession(autoSel)
         var newSession: DeviceSession? = createRes.getOrNull()

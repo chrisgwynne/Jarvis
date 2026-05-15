@@ -11,10 +11,11 @@ import android.util.Log
  *
  * WHY AUDIO FOCUS?
  *   Audio focus is Android's cooperative multi-app audio contract.
- *   If we don't request focus, a phone call or music app can drown out
- *   TTS or steal the mic without us knowing.  Holding
- *   AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE tells the OS (and other apps) to
- *   fully pause/mute while Jarvis is active.
+ *   Holding AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK while Jarvis speaks tells
+ *   media apps (Spotify, podcasts) to duck briefly, then resume at full
+ *   volume once focus is released — the same behaviour as Google Assistant.
+ *   Focus is NOT held during passive listening so Spotify keeps playing
+ *   at full volume while the user is being heard.
  *
  * FOCUS LOSS HANDLING:
  *   Any focus loss (phone call, navigation prompt, etc.) fires [onFocusLost].
@@ -22,8 +23,8 @@ import android.util.Log
  *   instead of fighting another app for the mic/speaker.
  *
  * LIFECYCLE:
- *   requestFocus()  — call on wake-word detection (pipeline starts)
- *   abandonFocus()  — call when returning to wake-word / stopping service
+ *   requestFocus()  — call just before TTS starts speaking
+ *   abandonFocus()  — call immediately after TTS finishes (or on silence/release)
  */
 class AudioFocusManager(
     context: Context,
@@ -38,9 +39,11 @@ class AudioFocusManager(
     val isHoldingFocus: Boolean get() = hasFocus
 
     /**
-     * Request AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE.
+     * Request AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK.
      *
-     * TRANSIENT_EXCLUSIVE: we need the mic + speaker; other apps must silence.
+     * MAY_DUCK: media apps lower their volume while Jarvis speaks, then
+     * resume at full volume after [abandonFocus] is called.  This is
+     * intentionally NOT EXCLUSIVE — Spotify must not be paused.
      * Returns true if focus was granted or will be granted (delayed grant).
      * Returns false only on a hard failure (shouldn't happen in practice).
      */

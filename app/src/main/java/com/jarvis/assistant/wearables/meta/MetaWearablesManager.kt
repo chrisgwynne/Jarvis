@@ -76,6 +76,10 @@ class MetaWearablesManager(
      *  the SESSION, not the BLE link. */
     val firstDeviceLinkLabel: String get() = deviceProvider.firstDeviceLinkLabel
 
+    /** Device compatibility label (COMPATIBLE / DEVICE_UPDATE_REQUIRED /
+     *  DAT_APP_UPDATE_REQUIRED).  Empty when no device visible. */
+    val compatibilityLabel: String get() = deviceProvider.compatibilityLabel
+
     /** Glasses-side CAMERA permission label.  GRANTED/DENIED/UNKNOWN. */
     val cameraPermissionLabel: String get() = deviceProvider.cameraPermissionLabel
 

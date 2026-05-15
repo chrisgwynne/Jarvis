@@ -85,6 +85,15 @@ interface WearableDeviceProvider {
     val firstDeviceLinkLabel: String get() = ""
 
     /**
+     * Compatibility of the first visible device.  Typical values:
+     * "COMPATIBLE", "DEVICE_UPDATE_REQUIRED", "DAT_APP_UPDATE_REQUIRED".
+     * When non-COMPATIBLE the session will hang at STARTING — the
+     * provider short-circuits connect() and surfaces a clearer error.
+     * Empty when no device visible / backend doesn't support.
+     */
+    val compatibilityLabel: String get() = ""
+
+    /**
      * Glasses-side camera permission status ("GRANTED" / "DENIED" /
      * "UNKNOWN").  Distinct from Android's runtime CAMERA permission
      * — the DAT SDK has its own permission surface granted via Meta

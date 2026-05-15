@@ -1606,10 +1606,11 @@ class JarvisRuntime(
                 val micHandoffStart = android.os.SystemClock.elapsedRealtime()
                 Log.d(TAG, "[MIC_HANDOFF_START] t=+0ms (relative to mic handoff)")
 
-                // Phase 5: request audio focus before doing anything with audio
-                audioFocus.requestFocus()
-
                 // Phase 4: connect SCO if a headset is present
+                // Phase 5 note: audio focus is NOT requested here.  Holding focus
+                // during passive listening causes Spotify to pause permanently.
+                // Focus is requested just before TTS starts and released immediately
+                // after — see speakAndRecord() and the streamAndSpeak() paths.
                 val scoConnected = bluetoothSco.connect()
                 if (scoConnected) {
                     Log.d(TAG, "SCO active — routing audio through headset")
@@ -4109,9 +4110,16 @@ class JarvisRuntime(
 
         if (settings.voiceResponse) {
             LatencyTracker.mark("TTS_START")
-            bargeIn.start()
-            ttsEngine.speak(formatted)
-            bargeIn.stop()
+            Log.d(TAG, "[AUDIO_FOCUS_REQUEST] speakAndRecord")
+            audioFocus.requestFocus()
+            try {
+                bargeIn.start()
+                ttsEngine.speak(formatted)
+                bargeIn.stop()
+            } finally {
+                audioFocus.abandonFocus()
+                Log.d(TAG, "[AUDIO_FOCUS_ABANDON] speakAndRecord done")
+            }
         }
 
         DeviceStateStore.update { copy(ttsPlaying = false) }

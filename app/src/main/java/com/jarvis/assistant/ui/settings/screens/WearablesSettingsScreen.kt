@@ -116,6 +116,20 @@ internal fun WearablesSettingsScreen(
                         "(wake the glasses).",
                 )
             }
+            // Compatibility — when this is anything other than
+            // COMPATIBLE, session.start hangs at STARTING.  Most common
+            // cause of "stuck on CONNECTING".
+            mgr.compatibilityLabel.takeIf { it.isNotBlank() }?.let { compat ->
+                SettingsRowDivider()
+                SettingsValueRow(
+                    title       = "Device compatibility",
+                    value       = compat,
+                    description = "COMPATIBLE = ready. DEVICE_UPDATE_REQUIRED = " +
+                        "glasses firmware too old (use Check firmware update). " +
+                        "DAT_APP_UPDATE_REQUIRED = Meta AI's DAT app for this " +
+                        "App ID needs updating.",
+                )
+            }
             mgr.lastError?.takeIf { it.isNotBlank() }?.let { err ->
                 SettingsRowDivider()
                 SettingsValueRow(

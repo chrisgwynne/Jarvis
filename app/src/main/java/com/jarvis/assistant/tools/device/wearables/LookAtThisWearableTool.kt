@@ -11,28 +11,49 @@ import com.jarvis.assistant.wearables.meta.RecentVisualContext
 import com.jarvis.assistant.wearables.meta.WearablesSettings
 
 /**
+ * Result of [LookAtThisWearableTool.classify] — top-level so unit
+ * tests can reference it without instantiating the tool (the tool
+ * needs an Android Context-bearing manager which is awkward in JVM
+ * tests).  EXPLICIT = trigger names glasses directly; AMBIGUOUS =
+ * "look at this" / "capture this" which the existing screen handler
+ * also owns.
+ */
+enum class WearableMatchKind { EXPLICIT, AMBIGUOUS }
+
+/**
  * LookAtThisWearableTool — "look at this" / "what am I looking at" /
  * "take a glasses photo" via the Meta Wearables module.
  *
- * Runs **strictly local-first**:
- *   - If wearables are disabled / SDK absent / glasses unreachable,
- *     returns `ToolResult.NotMatched`-equivalent (null from `matches`)
- *     so the existing `look_at_this` / phone-camera path keeps
- *     working unchanged.
- *   - When wearables ARE ready, captures one photo via
- *     [MetaWearablesManager.capturePhoto] and publishes the URI to
- *     [MediaContextStore] so the existing "show that" / "send that"
- *     follow-ups find the latest capture.
+ * Runs **strictly local-first** and is careful not to break the
+ * existing screen-observation `LookAtThisIntentHandler` (which owns
+ * "look at this" for phone-screen capture).  The disambiguation
+ * rules:
+ *
+ *   - **Explicit glasses phrases** ("take a glasses photo", "what
+ *     am I looking at", "glasses camera") always claim ownership
+ *     when the feature is enabled — even when the device isn't
+ *     ready, so the user gets a friendly "the glasses aren't
+ *     connected" message instead of a silent screenshot.
+ *   - **Ambiguous phrases** ("look at this", "capture this") claim
+ *     ownership ONLY when the manager state is actually
+ *     [MetaWearablesState.isReadyForCapture].  A user with the
+ *     feature enabled but glasses powered off / out of range keeps
+ *     the existing screenshot fallback transparently.
+ *   - When wearables are disabled, the entire tool declines from
+ *     `matches()` and the existing path runs unchanged.
+ *
+ * On a successful capture the URI is published to
+ * [MediaContextStore] so the existing "show that" / "send that"
+ * follow-ups find the latest glasses photo.
  *
  * **No OpenClaw / Hermes** in the path — the spec is explicit:
  * "glasses commands do not call OpenClaw / Hermes / memory retrieval".
  * Visual analysis (OCR / Q&A) is a separate concern handled by the
  * vision pipeline + the existing `analyze_camera_view` tool.
  *
- * Registered BEFORE the generic `LookAtThisIntentHandler` (screen) and
- * `CameraCaptureTool` so the glasses path wins when the user has the
- * feature enabled and a device is connected.  Decline-on-no-glasses
- * keeps the existing phone-camera flow intact.
+ * Registered BEFORE the generic `LookAtThisIntentHandler` in
+ * [ToolRegistry] so the glasses path can take precedence — but only
+ * when the matchers above actually claim the utterance.
  */
 class LookAtThisWearableTool(
     private val manager: MetaWearablesManager,
@@ -48,26 +69,62 @@ class LookAtThisWearableTool(
     companion object {
         private const val TAG = "LookAtThisWearable"
 
-        /** Trigger phrases.  Kept tight so we don't steal phone-camera
-         *  intent when wearables aren't configured. */
-        private val TRIGGERS = listOf(
-            Regex("""\blook\s+at\s+this\b""", RegexOption.IGNORE_CASE),
+        /**
+         * Phrases that are **unambiguously about the glasses** — they
+         * mention the glasses by name or describe a wearable-only
+         * action.  These claim ownership immediately whenever the
+         * feature is enabled, even if the device isn't ready (the
+         * tool will then return a friendly "glasses aren't connected"
+         * message instead of silently routing to a screenshot).
+         */
+        private val EXPLICIT_GLASSES_TRIGGERS = listOf(
+            Regex("""\btake\s+(?:a\s+)?glasses\s+(?:photo|picture|shot|video)\b""", RegexOption.IGNORE_CASE),
+            Regex("""\bglasses?\s+(?:camera|capture|photo|picture|shot)\b""", RegexOption.IGNORE_CASE),
             Regex("""\bwhat\s+am\s+i\s+looking\s+at\b""", RegexOption.IGNORE_CASE),
-            Regex("""\btake\s+(?:a\s+)?glasses\s+(?:photo|picture|shot)\b""", RegexOption.IGNORE_CASE),
-            Regex("""\bcapture\s+this\b""", RegexOption.IGNORE_CASE),
-            Regex("""\bglasses?\s+(?:camera|capture)\b""", RegexOption.IGNORE_CASE),
         )
+
+        /**
+         * Phrases that are **ambiguous** — they could mean the screen
+         * OR the glasses depending on context ("look at this" is the
+         * canonical case; the existing screen-observation handler
+         * also owns it).
+         *
+         * We claim these ONLY when the wearables device is actually
+         * ready to capture, so a user with the feature enabled but
+         * the glasses powered off / out of range keeps the existing
+         * screenshot fallback.
+         */
+        private val AMBIGUOUS_TRIGGERS = listOf(
+            Regex("""\blook\s+at\s+this\b""", RegexOption.IGNORE_CASE),
+            Regex("""\bcapture\s+this\b""", RegexOption.IGNORE_CASE),
+        )
+
+        /**
+         * Pure-text classifier — testable without a [MetaWearablesManager].
+         * Returns the kind of trigger that matched, or null when the
+         * transcript should be left alone (so the existing
+         * `LookAtThisIntentHandler` / phone-camera path can run).
+         */
+        @androidx.annotation.VisibleForTesting
+        @JvmStatic
+        internal fun classify(transcript: String, isGlassesReady: Boolean): WearableMatchKind? {
+            val t = transcript.trim()
+            if (EXPLICIT_GLASSES_TRIGGERS.any { it.containsMatchIn(t) }) {
+                return WearableMatchKind.EXPLICIT
+            }
+            if (AMBIGUOUS_TRIGGERS.any { it.containsMatchIn(t) } && isGlassesReady) {
+                return WearableMatchKind.AMBIGUOUS
+            }
+            return null
+        }
     }
 
     override fun matches(transcript: String): ToolInput? {
         val s = settings()
-        // Decline when wearables are off or the user has explicitly
-        // not chosen them for the look-at-this path — the original
-        // screen/phone-camera tool handles it.
         if (!s.enabled || !s.useForLookAtThis) return null
-        val t = transcript.trim()
-        if (TRIGGERS.none { it.containsMatchIn(t) }) return null
-        return ToolInput(transcript)
+        val kind = classify(transcript, manager.currentState.isReadyForCapture)
+            ?: return null
+        return ToolInput(transcript, mapOf("trigger" to kind.name.lowercase()))
     }
 
     override fun schema() = ToolSchema(

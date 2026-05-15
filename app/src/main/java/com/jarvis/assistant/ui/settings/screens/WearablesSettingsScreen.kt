@@ -154,6 +154,97 @@ internal fun WearablesSettingsScreen(
             )
         }
 
+        // Glasses-side permission status + grant buttons.  Distinct
+        // from Android's runtime CAMERA permission — the DAT SDK has
+        // its own permission surface granted via Meta AI.  Without
+        // CAMERA granted here, session.start can hang at STARTING
+        // indefinitely.
+        SettingsGroup(
+            title = "Glasses permissions",
+            description = "Must be granted via Meta AI before capture works",
+        ) {
+            SettingsValueRow(
+                title       = "Camera permission",
+                value       = mgr.cameraPermissionLabel,
+                description = "On-glasses CAMERA approval.  If this is " +
+                    "DENIED or UNKNOWN, photo capture won't work — tap " +
+                    "Grant camera below.",
+            )
+            SettingsRowDivider()
+            SettingsActionRow(
+                title       = "Grant camera permission",
+                description = "Opens Meta AI so you can approve glasses " +
+                    "camera access for Jarvis.",
+                actionLabel = "Grant",
+                onAction    = {
+                    val activity = (context as? android.app.Activity)
+                    if (activity == null || !mgr.requestCameraPermission(activity)) {
+                        Toast.makeText(context,
+                            "Permission request unavailable — DAT SDK not active.",
+                            Toast.LENGTH_LONG).show()
+                    }
+                },
+            )
+            SettingsRowDivider()
+            SettingsValueRow(
+                title       = "Microphone permission",
+                value       = mgr.microphonePermissionLabel,
+                description = "On-glasses MICROPHONE approval (only needed " +
+                    "for audio capture; photos work without it).",
+            )
+            SettingsRowDivider()
+            SettingsActionRow(
+                title       = "Grant microphone permission",
+                description = "Opens Meta AI to approve glasses microphone access.",
+                actionLabel = "Grant",
+                onAction    = {
+                    val activity = (context as? android.app.Activity)
+                    if (activity == null || !mgr.requestMicrophonePermission(activity)) {
+                        Toast.makeText(context,
+                            "Permission request unavailable — DAT SDK not active.",
+                            Toast.LENGTH_LONG).show()
+                    }
+                },
+            )
+        }
+
+        SettingsGroup(
+            title = "Glasses updates",
+            description = "Open Meta AI's update screens if connect keeps stalling",
+        ) {
+            SettingsActionRow(
+                title       = "Check firmware update",
+                description = "Opens the firmware-update screen in Meta AI " +
+                    "for the linked glasses.  Try this if Connect hangs at " +
+                    "CONNECTING.",
+                actionLabel = "Open",
+                onAction    = {
+                    val activity = (context as? android.app.Activity)
+                    if (activity == null || !mgr.openFirmwareUpdate(activity)) {
+                        Toast.makeText(context,
+                            "Firmware update unavailable — DAT SDK not active.",
+                            Toast.LENGTH_LONG).show()
+                    }
+                },
+            )
+            SettingsRowDivider()
+            SettingsActionRow(
+                title       = "Check DAT app update",
+                description = "Opens Meta AI's app-management screen for " +
+                    "the Jarvis registration.  Use if firmware looks fine " +
+                    "but Connect still hangs.",
+                actionLabel = "Open",
+                onAction    = {
+                    val activity = (context as? android.app.Activity)
+                    if (activity == null || !mgr.openDatAppUpdate(activity)) {
+                        Toast.makeText(context,
+                            "DAT app update unavailable — DAT SDK not active.",
+                            Toast.LENGTH_LONG).show()
+                    }
+                },
+            )
+        }
+
         SettingsGroup(title = "Behaviour", description = "How Jarvis uses the glasses") {
             SettingsToggleRow(
                 title           = "Auto-connect on Jarvis start",

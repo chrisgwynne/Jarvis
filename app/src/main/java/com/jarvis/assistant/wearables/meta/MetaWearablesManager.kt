@@ -76,6 +76,28 @@ class MetaWearablesManager(
      *  the SESSION, not the BLE link. */
     val firstDeviceLinkLabel: String get() = deviceProvider.firstDeviceLinkLabel
 
+    /** Glasses-side CAMERA permission label.  GRANTED/DENIED/UNKNOWN. */
+    val cameraPermissionLabel: String get() = deviceProvider.cameraPermissionLabel
+
+    /** Glasses-side MICROPHONE permission label. */
+    val microphonePermissionLabel: String get() = deviceProvider.microphonePermissionLabel
+
+    /** Launch Meta AI's flow to grant glasses-side camera permission. */
+    fun requestCameraPermission(activity: android.app.Activity): Boolean =
+        deviceProvider.requestCameraPermission(activity)
+
+    /** Launch Meta AI's flow to grant glasses-side microphone permission. */
+    fun requestMicrophonePermission(activity: android.app.Activity): Boolean =
+        deviceProvider.requestMicrophonePermission(activity)
+
+    /** Open Meta AI's firmware-update screen for the linked glasses. */
+    fun openFirmwareUpdate(activity: android.app.Activity): Boolean =
+        deviceProvider.openFirmwareUpdate(activity)
+
+    /** Open Meta AI's DAT-app-update screen (for our App ID). */
+    fun openDatAppUpdate(activity: android.app.Activity): Boolean =
+        deviceProvider.openDatAppUpdate(activity)
+
     /** Last user-safe error message surfaced by the active backend. */
     val lastError: String? get() = deviceProvider.lastError
 

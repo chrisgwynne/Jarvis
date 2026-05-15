@@ -83,6 +83,34 @@ interface WearableDeviceProvider {
      * Empty string when no devices visible or backend doesn't support.
      */
     val firstDeviceLinkLabel: String get() = ""
+
+    /**
+     * Glasses-side camera permission status ("GRANTED" / "DENIED" /
+     * "UNKNOWN").  Distinct from Android's runtime CAMERA permission
+     * — the DAT SDK has its own permission surface granted via Meta
+     * AI.  Without this, addStream + Stream.start can hang because
+     * the SDK is blocked waiting for the user to approve in Meta AI.
+     */
+    val cameraPermissionLabel: String get() = ""
+
+    /** Glasses-side microphone permission status. */
+    val microphonePermissionLabel: String get() = ""
+
+    /**
+     * Launch Meta AI's flow to grant the glasses-side CAMERA
+     * permission to this app.  Returns true when an intent was
+     * dispatched; false when SDK is absent / disabled.
+     */
+    fun requestCameraPermission(activity: android.app.Activity): Boolean = false
+
+    /** Launch Meta AI's flow to grant glasses-side MICROPHONE permission. */
+    fun requestMicrophonePermission(activity: android.app.Activity): Boolean = false
+
+    /** Open Meta AI's firmware-update screen for the linked glasses. */
+    fun openFirmwareUpdate(activity: android.app.Activity): Boolean = false
+
+    /** Open Meta AI's DAT-app-update screen (for this App ID). */
+    fun openDatAppUpdate(activity: android.app.Activity): Boolean = false
 }
 
 /**

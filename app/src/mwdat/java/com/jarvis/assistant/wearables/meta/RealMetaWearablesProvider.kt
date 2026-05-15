@@ -18,6 +18,7 @@ import com.meta.wearable.dat.core.session.DeviceSession
 import com.meta.wearable.dat.core.types.DeviceSessionError
 import com.meta.wearable.dat.core.session.DeviceSessionState
 import com.meta.wearable.dat.core.types.DatResult
+import com.meta.wearable.dat.core.types.Permission
 // DatResult's `fold` / `getOrElse` / `onFailure` are MEMBER functions
 // of the inline value class (per dexdump: `fold-impl`,
 // `getOrElse-impl`, `onFailure-QAxQwbw`), not top-level extensions —
@@ -117,6 +118,17 @@ class RealMetaWearablesProvider(
     @Volatile override var firstDeviceLinkLabel: String = ""
         private set
 
+    /**
+     * Glasses-side permission status labels ("GRANTED" / "DENIED" /
+     * "UNKNOWN").  Refreshed by [refreshPermissionStatus] which runs
+     * on init AND on every connect attempt, so the Settings UI shows
+     * the current state without the user having to retry manually.
+     */
+    @Volatile override var cameraPermissionLabel: String = "UNKNOWN"
+        private set
+    @Volatile override var microphonePermissionLabel: String = "UNKNOWN"
+        private set
+
     private var deviceStateWatchJob: Job? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -177,6 +189,9 @@ class RealMetaWearablesProvider(
      * OR registration hasn't happened (app not authorised by user).
      */
     private fun startRegistryObservers() {
+        // Initial permission snapshot — surfaces "DENIED" in the
+        // Settings UI even before the user taps Connect.
+        scope.launch { refreshPermissionStatus() }
         scope.launch {
             Wearables.registrationState.collect { state ->
                 val label = state.toString()
@@ -240,6 +255,84 @@ class RealMetaWearablesProvider(
         }
     }
 
+    /**
+     * Refresh the glasses-side permission labels.  Cheap suspending
+     * call against the SDK — invoked on init + before each connect
+     * attempt so the diagnostics are current without manual refresh.
+     */
+    private suspend fun refreshPermissionStatus() {
+        try {
+            cameraPermissionLabel = Wearables.checkPermissionStatus(Permission.CAMERA)
+                .getOrNull()?.toString() ?: "UNKNOWN"
+            microphonePermissionLabel = Wearables.checkPermissionStatus(Permission.MICROPHONE)
+                .getOrNull()?.toString() ?: "UNKNOWN"
+            Log.d(TAG, "[META_WEARABLES_PERMISSIONS] camera=$cameraPermissionLabel mic=$microphonePermissionLabel")
+        } catch (t: Throwable) {
+            Log.w(TAG, "[META_WEARABLES_ERROR] permission check threw: ${t.message}")
+        }
+    }
+
+    override fun requestCameraPermission(activity: android.app.Activity): Boolean =
+        launchPermissionIntent(activity, Permission.CAMERA)
+
+    override fun requestMicrophonePermission(activity: android.app.Activity): Boolean =
+        launchPermissionIntent(activity, Permission.MICROPHONE)
+
+    private fun launchPermissionIntent(
+        activity: android.app.Activity,
+        perm: Permission,
+    ): Boolean = try {
+        Log.d(TAG, "[META_WEARABLES_PERMISSION_REQUEST] $perm")
+        // RequestPermissionContract.createIntent builds the right
+        // intent against Meta AI without us needing to wire an
+        // ActivityResultLauncher at the Activity layer.  We launch
+        // it directly and let the SDK update Wearables internal
+        // permission state on return; refreshPermissionStatus()
+        // is called again next time the user opens this screen
+        // or taps Connect.
+        val intent = Wearables.RequestPermissionContract().createIntent(activity, perm)
+        activity.startActivity(intent)
+        true
+    } catch (t: Throwable) {
+        Log.w(TAG, "[META_WEARABLES_ERROR] launch permission intent threw: ${t.message}")
+        lastError = t.message
+        false
+    }
+
+    override fun openFirmwareUpdate(activity: android.app.Activity): Boolean {
+        return try {
+            Log.d(TAG, "[META_WEARABLES_OPEN_FIRMWARE_UPDATE]")
+            // openFirmwareUpdate is a DatResult<Unit, NavigationError>.
+            // Use the same getOrNull/errorOrNull dance as elsewhere.
+            val err = Wearables.openFirmwareUpdate(activity).errorOrNull()
+            if (err != null) {
+                Log.w(TAG, "[META_WEARABLES_ERROR] openFirmwareUpdate: $err")
+                lastError = err.toString()
+                false
+            } else true
+        } catch (t: Throwable) {
+            Log.w(TAG, "[META_WEARABLES_ERROR] openFirmwareUpdate threw: ${t.message}")
+            lastError = t.message
+            false
+        }
+    }
+
+    override fun openDatAppUpdate(activity: android.app.Activity): Boolean {
+        return try {
+            Log.d(TAG, "[META_WEARABLES_OPEN_DAT_APP_UPDATE]")
+            val err = Wearables.openDATGlassesAppUpdate(activity).errorOrNull()
+            if (err != null) {
+                Log.w(TAG, "[META_WEARABLES_ERROR] openDATGlassesAppUpdate: $err")
+                lastError = err.toString()
+                false
+            } else true
+        } catch (t: Throwable) {
+            Log.w(TAG, "[META_WEARABLES_ERROR] openDATGlassesAppUpdate threw: ${t.message}")
+            lastError = t.message
+            false
+        }
+    }
+
     // ── WearableDeviceProvider ─────────────────────────────────────────────
 
     override suspend fun connect(): Boolean = mutex.withLock {
@@ -262,6 +355,17 @@ class RealMetaWearablesProvider(
         // JVM level so the compiler can't disambiguate by signature.
         // We sidestep by using `getOrNull` + `errorOrNull` — both are
         // DatResult members with no kotlin.Result namesake.
+        // Pre-flight: refresh the glasses-side permission cache so
+        // diagnostics + logs reflect the actual state.  Doing this
+        // BEFORE createSession means if the user hasn't granted
+        // CAMERA on the glasses, the Last error row will tell them
+        // before the session times out at STARTING.
+        refreshPermissionStatus()
+        if (cameraPermissionLabel != "GRANTED") {
+            Log.w(TAG, "[META_WEARABLES_PERMISSION_MISSING] camera=$cameraPermissionLabel " +
+                "— addStream/Stream.start may hang until granted via Meta AI")
+        }
+
         // Pre-flight diagnostic: dump what the SDK can actually see
         // and what AutoDeviceSelector picks.  Most "couldn't connect"
         // failures are NO_ELIGIBLE_DEVICE because the device is paired

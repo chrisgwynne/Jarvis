@@ -44,7 +44,9 @@ class MetaWearablesManager(
      * toggles "Meta Wearables enabled" / "Use mock device" — call
      * [refresh] from the settings repository on every write.
      */
-    @Volatile private var providerImpl: WearableDeviceProvider = pickProvider()
+    @Volatile private var providerImpl: WearableDeviceProvider = pickProvider().also {
+        Log.d(TAG, "[META_WEARABLES_BACKEND] initial=${it::class.simpleName} state=${it.currentState}")
+    }
 
     val deviceProvider:  WearableDeviceProvider  get() = providerImpl
     val cameraProvider:  WearableCameraProvider  get() = providerImpl as WearableCameraProvider
@@ -144,18 +146,42 @@ class MetaWearablesManager(
     }
 
     /**
-     * Probe for the DAT SDK by trying to load its canonical entry
-     * point (`com.meta.wearable.mwdat.objects.Wearables` as of
-     * mwdat-core v0.7).  ClassNotFoundException = SDK absent
-     * (developer hasn't configured `github_token` in local.properties)
-     * → stub stays active.
+     * Probe for the DAT SDK at runtime.  We try a small set of
+     * plausible FQ names because the layout shifted between artifact
+     * package (`mwdat-*`) and Java package (`com.meta.wearable.dat.*`)
+     * — and we don't want a wrong guess to silently downgrade every
+     * user to the stub.  Logs the first hit so a single logcat line
+     * tells the developer which path actually exists in their APK.
      */
-    private fun sdkPresent(): Boolean = try {
-        Class.forName("com.meta.wearable.mwdat.objects.Wearables", false,
-            this::class.java.classLoader)
-        true
-    } catch (_: ClassNotFoundException) { false }
-      catch (_: Throwable)               { false }
+    private fun sdkPresent(): Boolean {
+        val candidates = listOf(
+            // Confirmed FQ name from a dex dump of the 0.7.0 APK.
+            // The docs site's "objects / selectors / session / types"
+            // groupings are UI categorisations, not real packages —
+            // the actual root is `com.meta.wearable.dat.core`.
+            "com.meta.wearable.dat.core.Wearables",
+            // Defensive fallbacks in case Meta restructures in a
+            // future point release.  Order: most-likely first.
+            "com.meta.wearable.dat.objects.Wearables",
+            "com.meta.wearable.dat.Wearables",
+            "com.meta.wearable.mwdat.core.Wearables",
+            "com.meta.wearable.mwdat.objects.Wearables",
+        )
+        val cl = this::class.java.classLoader
+        for (name in candidates) {
+            try {
+                Class.forName(name, false, cl)
+                Log.d(TAG, "[META_WEARABLES_SDK_PROBE] hit class=$name")
+                return true
+            } catch (_: ClassNotFoundException) {
+                Log.v(TAG, "[META_WEARABLES_SDK_PROBE] miss class=$name")
+            } catch (t: Throwable) {
+                Log.w(TAG, "[META_WEARABLES_SDK_PROBE] probe threw for $name: ${t.message}")
+            }
+        }
+        Log.w(TAG, "[META_WEARABLES_SDK_PROBE] no candidate resolved — falling back to stub")
+        return false
+    }
 
     /** Pseudo-provider used when the master toggle is OFF. */
     private object DisabledProvider :

@@ -14,8 +14,8 @@ optional eyes-and-hands-free module for Jarvis.
 | Manifest `<meta-data>` for App ID + Client Token (build-time injection) | ✅ Shipped |
 | Maven repo + dependency wiring (GitHub Packages, token-gated) | ✅ Shipped |
 | `RealMetaWearablesProvider` — device + streaming (mwdat-core) | ✅ Shipped (in `app/src/mwdat/java/`, conditional source set) |
-| `RealMetaWearablesProvider` — photo capture (mwdat-camera) | ⏳ Awaiting camera-module docs page |
-| Hardware smoke test | ⏳ After photo capture lands |
+| `RealMetaWearablesProvider` — photo capture (mwdat-camera) | ✅ Shipped — `Stream.capturePhoto()` → `PhotoData.HEIC` / `.Bitmap` saved to `filesDir/pictures/glasses_photo_<ts>.{heic,jpg}` |
+| Hardware smoke test | ⏳ User: add github_token, sync Gradle, pair glasses via Meta AI, capture |
 
 ## What you need on your machine
 

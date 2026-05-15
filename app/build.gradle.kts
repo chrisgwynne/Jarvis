@@ -13,11 +13,25 @@ plugins {
 
 android {
     namespace = "com.jarvis.assistant"
-    compileSdk = 34
+    // compileSdk 35 (Android 15) — pulled forward by AndroidX
+    // transitives that arrived with the Meta DAT SDK chain
+    // (androidx.core 1.16, activity 1.10, compose 1.9, lifecycle
+    // 2.9.4 all require minCompileSdk 35).  compileSdk is the API
+    // level we compile *against*; runtime behavior is still gated by
+    // targetSdk + minSdk, which are deliberately left alone here so
+    // this commit is a build-pipeline change only.  Was 34; bumped
+    // 2026-05-15.
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.jarvis.assistant"
-        minSdk = 26
+        // minSdk 29 (Android 10) — the Meta Wearables DAT SDK requires
+        // it, and Android 10+ has very wide install coverage at this
+        // point (released 2019).  Was 26; bumped 2026-05-15 when the
+        // SDK landed.  If the wearables feature is later moved into
+        // an optional separate module, this can drop back to 26 for
+        // the core APK.
+        minSdk = 29
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
@@ -221,9 +235,21 @@ val mwdatSrcEnabled: Boolean = (System.getenv("GITHUB_TOKEN")?.isNotBlank() == t
             .getProperty("github_token")?.isNotBlank() == true
     }
 if (mwdatSrcEnabled) {
-    android.sourceSets.getByName("main").java.srcDir("src/mwdat/java")
-    logger.lifecycle("[META_WEARABLES] Including src/mwdat/java source set " +
-        "(github_token present → DAT SDK available).")
+    // AGP 9 + Kotlin 2.2: a Kotlin Android source set exposes BOTH
+    // a `java` and a `kotlin` SourceDirectorySet on the same
+    // AndroidSourceSet.  `java.srcDir(...)` alone does NOT pull in
+    // .kt files — those need `kotlin.srcDir(...)` registered on the
+    // same source set.  This was a silent failure in the first wiring
+    // commit — the file compiled to nothing, the SDK was bundled but
+    // never referenced, and the runtime probe correctly reported
+    // SDK_UNAVAILABLE.
+    val mwdatSrcPath = "src/mwdat/java"
+    android.sourceSets.named("main").configure {
+        java.srcDir(mwdatSrcPath)
+        kotlin.srcDir(mwdatSrcPath)
+    }
+    logger.lifecycle("[META_WEARABLES] Including $mwdatSrcPath in main source set " +
+        "(java + kotlin) — github_token present → DAT SDK available.")
 }
 
 /**

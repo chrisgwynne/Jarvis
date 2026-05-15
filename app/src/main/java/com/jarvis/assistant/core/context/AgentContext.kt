@@ -25,6 +25,8 @@ data class AgentContext(
     val device: DeviceContext,
     val presence: Presence,
     val proactive: ContextSnapshot,
+    val ambient: com.jarvis.assistant.ambient.AmbientContext =
+        com.jarvis.assistant.ambient.AmbientContext.EMPTY,
 ) {
     val timePhase: TimePhase get() = presence.timePhase
     val activity: ActivityMode get() = presence.activity

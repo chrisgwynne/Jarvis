@@ -107,6 +107,11 @@ fun SettingsScreen(
         composable(SettingsCategory.Advanced.route) {
             AdvancedSettingsScreen(vm = vm, onBack = popToRoot, onClose = onBack)
         }
+        composable(SettingsCategory.AmbientIntelligence.route) {
+            com.jarvis.assistant.ui.settings.screens.AmbientIntelligenceSettingsScreen(
+                onBack = popToRoot, onClose = onBack
+            )
+        }
         composable(SettingsCategory.ExperimentalFlags.route) {
             com.jarvis.assistant.ui.settings.screens.ExperimentalFlagsSettingsScreen(
                 onBack = popToRoot, onClose = onBack

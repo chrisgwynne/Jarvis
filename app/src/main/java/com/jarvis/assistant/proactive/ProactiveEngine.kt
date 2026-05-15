@@ -106,6 +106,13 @@ class ProactiveEngine(
     knownSsidStore: com.jarvis.assistant.core.learning.KnownSsidStore? = null,
     /** Optional routine-pattern detector whose proposals are surfaced via RoutineProposalTrigger. */
     routineSynthesizer: com.jarvis.assistant.core.routines.RoutineSynthesizer? = null,
+    /**
+     * Supplies the current [com.jarvis.assistant.ambient.AmbientContext] on each tick
+     * so ambient triggers can read it via [com.jarvis.assistant.core.context.AgentContext.ambient].
+     * Null/defaulted to EMPTY when the ambient subsystem is not wired up.
+     */
+    private val ambientContextProvider: () -> com.jarvis.assistant.ambient.AmbientContext =
+        { com.jarvis.assistant.ambient.AmbientContext.EMPTY },
 ) {
 
     companion object {
@@ -236,7 +243,7 @@ class ProactiveEngine(
         resolvePendingVerdict(snapshot)
 
         val recent = recentEventBuffer?.snapshot(maxAgeMs = 5 * 60_000L) ?: emptyList()
-        val generated = eventGenerator.generate(snapshot, recent)
+        val generated = eventGenerator.generate(snapshot, recent, ambientContextProvider())
         val deferred = drainDeferred(snapshot.currentTimeMillis)
         val events = if (deferred.isEmpty()) generated else generated + deferred
         ProactiveMetrics.increment(ProactiveMetrics.Counter.EVENTS_GENERATED, events.size.toLong())

@@ -92,6 +92,20 @@ class JarvisApp : Application() {
         lateinit var metaWearables
             : com.jarvis.assistant.wearables.meta.MetaWearablesManager
             private set
+
+        /**
+         * Ambient Intelligence — settings repository and event emitter.
+         * The emitter is started/stopped by JarvisRuntime alongside the
+         * proactive engine; settings are read by the Settings UI.
+         */
+        @Volatile
+        lateinit var ambientSettings
+            : com.jarvis.assistant.ambient.AmbientSettingsRepository
+            private set
+        @Volatile
+        var ambientEmitter
+            : com.jarvis.assistant.ambient.AmbientProactiveEventEmitter? = null
+            internal set
     }
 
     override fun onCreate() {
@@ -136,6 +150,12 @@ class JarvisApp : Application() {
                 context = this,
                 settingsProvider = { wearablesSettings.snapshot() },
             )
+        ambientSettings = com.jarvis.assistant.ambient.AmbientSettingsRepository(
+            com.jarvis.assistant.util.SettingsStore(this)
+        )
+        // ambientEmitter is created by JarvisRuntime.initialize() and assigned
+        // back here via JarvisApp.ambientEmitter = ... so it is always live by
+        // the time the Settings UI tries to read diagnostics.
         createNotificationChannel()
         // Install the GitHub issue reporter FIRST so it wraps the thread
         // default uncaught-exception handler before any other subsystem has a

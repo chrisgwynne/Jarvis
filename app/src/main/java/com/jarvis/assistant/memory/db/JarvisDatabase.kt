@@ -57,6 +57,10 @@ import com.jarvis.assistant.speaker.db.SpeakerEmbedding
 import com.jarvis.assistant.speaker.db.SpeakerEmbeddingDao
 import com.jarvis.assistant.runtime.plan.ActionJournalDao
 import com.jarvis.assistant.runtime.plan.JournalEntry
+import com.jarvis.assistant.ambient.db.AmbientEventDao
+import com.jarvis.assistant.ambient.db.AmbientEventEntity
+import com.jarvis.assistant.ambient.db.RoutinePatternDao
+import com.jarvis.assistant.ambient.db.RoutinePatternEntity
 
 @Database(
     entities = [
@@ -85,9 +89,11 @@ import com.jarvis.assistant.runtime.plan.JournalEntry
         SavedRoutineEntity::class,
         ExpectationEntity::class,
         GoalEntity::class,
-        OutcomeEntity::class
+        OutcomeEntity::class,
+        AmbientEventEntity::class,
+        RoutinePatternEntity::class,
     ],
-    version = 16,
+    version = 17,
     exportSchema = false
 )
 abstract class JarvisDatabase : RoomDatabase() {
@@ -117,6 +123,8 @@ abstract class JarvisDatabase : RoomDatabase() {
     abstract fun expectationDao(): ExpectationDao
     abstract fun goalDao(): GoalDao
     abstract fun outcomeDao(): OutcomeDao
+    abstract fun ambientEventDao(): AmbientEventDao
+    abstract fun routinePatternDao(): RoutinePatternDao
 
     companion object {
         private const val DB_NAME = "jarvis.db"
@@ -527,6 +535,53 @@ abstract class JarvisDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration 16 → 17: add ambient_events and routine_patterns tables
+         * for the Ambient Intelligence subsystem.
+         */
+        private val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS ambient_events (
+                        id             INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        type           TEXT    NOT NULL,
+                        timestampMs    INTEGER NOT NULL,
+                        source         TEXT    NOT NULL,
+                        metadataJson   TEXT    NOT NULL DEFAULT '{}',
+                        locationBucket TEXT    NOT NULL DEFAULT 'UNKNOWN',
+                        appPackage     TEXT,
+                        confidence     REAL    NOT NULL DEFAULT 1.0
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_ambient_events_timestampMs ON ambient_events(timestampMs)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_ambient_events_type ON ambient_events(type)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_ambient_events_locationBucket ON ambient_events(locationBucket)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS routine_patterns (
+                        id               INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        triggerType      TEXT    NOT NULL,
+                        usualStartMinute INTEGER NOT NULL,
+                        usualEndMinute   INTEGER NOT NULL,
+                        dayOfWeekMask    INTEGER NOT NULL DEFAULT 0,
+                        description      TEXT    NOT NULL,
+                        followUpAction   TEXT,
+                        confidence       REAL    NOT NULL,
+                        lastSeenMs       INTEGER NOT NULL,
+                        seenCount        INTEGER NOT NULL DEFAULT 0,
+                        dismissedCount   INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_routine_patterns_triggerType ON routine_patterns(triggerType)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_routine_patterns_confidence ON routine_patterns(confidence)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_routine_patterns_lastSeenMs ON routine_patterns(lastSeenMs)")
+            }
+        }
+
+        /**
          * Migration 13 → 14: add saved_routines table for persisted tool-call
          * sequences the user has promoted to reusable plans.
          */
@@ -583,7 +638,7 @@ abstract class JarvisDatabase : RoomDatabase() {
                                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                                    MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
                                    MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
-                                   MIGRATION_15_16)
+                                   MIGRATION_15_16, MIGRATION_16_17)
                     // WAL journal mode lets readers and a single writer run
                     // concurrently — important here because JarvisRuntime has
                     // many overlapping writers (memory, knowledge, telemetry,

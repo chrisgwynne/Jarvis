@@ -111,6 +111,13 @@ data class ProactivitySettings(
         ProactiveEventType.TODOIST_TASK_10M,
         ProactiveEventType.LOCAL_REMINDER_30M,
         ProactiveEventType.LOCAL_REMINDER_10M   -> remindersEnabled
+        ProactiveEventType.AMBIENT_ROUTINE_SUGGESTION,
+        ProactiveEventType.AMBIENT_TRAVEL_SUGGESTION,
+        ProactiveEventType.AMBIENT_MISSED_ROUTINE -> suggestionsEnabled
+        ProactiveEventType.AMBIENT_LOCATION_TODOIST_MATCH -> locationAlertsEnabled
+        ProactiveEventType.AMBIENT_APP_CONTEXT_NUDGE,
+        ProactiveEventType.AMBIENT_CUSTOMER_MESSAGE_NUDGE -> suggestionsEnabled
+        ProactiveEventType.AMBIENT_HOME_ASSISTANT_ALERT -> homeAssistantAlertsEnabled
     }
 
     /**
@@ -128,6 +135,7 @@ data class ProactivitySettings(
         ProactiveEventType.CALENDAR_EVENT_10M,
         ProactiveEventType.TODOIST_TASK_10M,
         ProactiveEventType.LOCAL_REMINDER_10M      -> true
+        ProactiveEventType.AMBIENT_HOME_ASSISTANT_ALERT -> true
         else                                       -> false
     }
 }

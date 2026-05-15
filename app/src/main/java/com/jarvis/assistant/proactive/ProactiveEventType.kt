@@ -62,7 +62,23 @@ enum class ProactiveEventType {
     /** Local (Jarvis) reminder due in ~30 minutes. */
     LOCAL_REMINDER_30M,
     /** Local (Jarvis) reminder due in ~10 minutes. */
-    LOCAL_REMINDER_10M;
+    LOCAL_REMINDER_10M,
+
+    // ── Ambient Intelligence ──────────────────────────────────────────────────
+    /** Ambient routine suggestion (e.g. "you normally leave for football now"). */
+    AMBIENT_ROUTINE_SUGGESTION,
+    /** User is near a shop with matching Todoist items. */
+    AMBIENT_LOCATION_TODOIST_MATCH,
+    /** App-context nudge (e.g. "you opened Etsy — you have messages"). */
+    AMBIENT_APP_CONTEXT_NUDGE,
+    /** HA device running while nobody home. */
+    AMBIENT_HOME_ASSISTANT_ALERT,
+    /** Travel suggestion after car BT connects. */
+    AMBIENT_TRAVEL_SUGGESTION,
+    /** A learned routine was missed (e.g. usual departure time passed). */
+    AMBIENT_MISSED_ROUTINE,
+    /** Customer or work message nudge. */
+    AMBIENT_CUSTOMER_MESSAGE_NUDGE;
 
     /**
      * Stable, lowercase key used to namespace this type inside [CooldownStore].
@@ -95,5 +111,12 @@ enum class ProactiveEventType {
         TODOIST_TASK_10M -> "TODOIST"
         LOCAL_REMINDER_30M,
         LOCAL_REMINDER_10M -> "REMINDER"
+        AMBIENT_ROUTINE_SUGGESTION,
+        AMBIENT_MISSED_ROUTINE -> "AMBIENT_ROUTINE"
+        AMBIENT_LOCATION_TODOIST_MATCH -> "AMBIENT_LOCATION"
+        AMBIENT_APP_CONTEXT_NUDGE,
+        AMBIENT_CUSTOMER_MESSAGE_NUDGE -> "AMBIENT_APP"
+        AMBIENT_HOME_ASSISTANT_ALERT -> "AMBIENT_HA"
+        AMBIENT_TRAVEL_SUGGESTION -> "AMBIENT_TRAVEL"
     }
 }

@@ -18,8 +18,13 @@ class EventGenerator(
     private val triggerEngine: TriggerEngine = DefaultTriggers.engine(config),
 ) {
 
-    fun generate(snapshot: ContextSnapshot, recentEvents: List<Event> = emptyList()): List<ProactiveEvent> {
-        val ctx = AgentContextFactory.fromSnapshot(snapshot)
+    fun generate(
+        snapshot: ContextSnapshot,
+        recentEvents: List<Event> = emptyList(),
+        ambient: com.jarvis.assistant.ambient.AmbientContext =
+            com.jarvis.assistant.ambient.AmbientContext.EMPTY,
+    ): List<ProactiveEvent> {
+        val ctx = AgentContextFactory.fromSnapshot(snapshot, ambient)
         return triggerEngine.evaluate(ctx, recentEvents).map { it.toProactiveEvent() }
     }
 

@@ -48,4 +48,6 @@ enum class EventKind {
     TOOL_EXECUTED,
     PROACTIVE_DISPATCHED,
     USER_VERDICT,
+    /** Published by [com.jarvis.assistant.ambient.AmbientEventStore] for ambient observations. */
+    AMBIENT_SIGNAL,
 }

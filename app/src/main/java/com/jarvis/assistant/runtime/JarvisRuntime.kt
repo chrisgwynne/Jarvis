@@ -373,6 +373,7 @@ class JarvisRuntime(
     private val callSource        = AppCallContextSource()
     private val speechStateSource = AppSpeechStateSource(machine)
     private lateinit var proactiveEngine   : ProactiveEngine
+    private lateinit var ambientEmitter    : com.jarvis.assistant.ambient.AmbientProactiveEventEmitter
     /**
      * Scheduled-reminder engine — fires the 30m + 10m pre-warnings for
      * Calendar / Todoist / local reminders.  Hands events to
@@ -710,6 +711,26 @@ class JarvisRuntime(
             msSinceLastGlobalSurface = { sharedCooldownStore.msSinceLastGlobalSurface() },
         )
 
+        // ── Ambient Intelligence emitter ─────────────────────────────────────
+        val ambientEventStore = com.jarvis.assistant.ambient.AmbientEventStore(
+            dao              = db.ambientEventDao(),
+            scope            = scope,
+            settingsProvider = { JarvisApp.ambientSettings.snapshot() },
+        )
+        val routineLearningEngine = com.jarvis.assistant.ambient.RoutineLearningEngine(
+            store            = ambientEventStore,
+            dao              = db.routinePatternDao(),
+            scope            = scope,
+            settingsProvider = { JarvisApp.ambientSettings.snapshot() },
+        )
+        ambientEmitter = com.jarvis.assistant.ambient.AmbientProactiveEventEmitter(
+            eventStore       = ambientEventStore,
+            learningEngine   = routineLearningEngine,
+            settingsProvider = { JarvisApp.ambientSettings.snapshot() },
+        )
+        // Mirror to the app-wide singleton so the Settings UI reads the same instance.
+        JarvisApp.ambientEmitter = ambientEmitter
+
         // Proactive awareness engine.  Quiet hours enabled in production so
         // nightly suggestions stay suppressed unless the event is critical
         // (low battery, imminent reminder); tests construct their own config.
@@ -757,7 +778,8 @@ class JarvisRuntime(
             knownSsidStore       = knownSsidStore,
             sharedCooldownStore  = sharedCooldownStore,
             actionLedger         = sharedActionLedger,
-            routineSynthesizer   = routineSynthesizer
+            routineSynthesizer        = routineSynthesizer,
+            ambientContextProvider    = { ambientEmitter.currentContext },
         )
 
         // ── Scheduled reminders (30m + 10m pre-warnings) ──────────────────
@@ -960,6 +982,7 @@ class JarvisRuntime(
         agentContextProvider.attach()
         cloudSyncService.start()
 
+        ambientEmitter.start()         // Ambient Intelligence
         proactiveEngine.start()       // Proactive awareness polling
         scheduledReminderEngine?.start(scope)  // Scheduled reminders 30/10m
         convProactiveEngine.start()   // Conversational follow-up polling
@@ -1320,6 +1343,7 @@ class JarvisRuntime(
         eventAdapters.detachAll()       // Unwire bus adapters before callMonitor.stop()
         callMonitor.stop()              // Phase 6
         openClawNode.stop()             // OpenClaw node (inbound)
+        ambientEmitter.stop()            // Ambient Intelligence
         proactiveEngine.stop()          // Proactive awareness
         scheduledReminderEngine?.stop() // Scheduled reminder lanes
         convProactiveEngine.stop()      // Conversational follow-up

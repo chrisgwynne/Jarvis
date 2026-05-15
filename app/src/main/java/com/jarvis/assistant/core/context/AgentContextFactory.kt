@@ -15,7 +15,11 @@ import com.jarvis.assistant.proactive.ContextSnapshot
  * [AgentContextProvider.current].
  */
 object AgentContextFactory {
-    fun fromSnapshot(snapshot: ContextSnapshot): AgentContext {
+    fun fromSnapshot(
+        snapshot: ContextSnapshot,
+        ambient: com.jarvis.assistant.ambient.AmbientContext =
+            com.jarvis.assistant.ambient.AmbientContext.EMPTY,
+    ): AgentContext {
         val nowMs = snapshot.currentTimeMillis
         val device = DeviceContext(
             timestamp = nowMs,
@@ -37,6 +41,6 @@ object AgentContextFactory {
             isJarvisListening = snapshot.isJarvisListening,
             isDriving = snapshot.isDriving,
         )
-        return AgentContext(nowMs, device, presence, snapshot)
+        return AgentContext(nowMs, device, presence, snapshot, ambient)
     }
 }

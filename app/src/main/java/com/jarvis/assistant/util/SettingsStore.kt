@@ -985,4 +985,46 @@ class SettingsStore(context: Context) {
             .putBoolean(KEY_OPENAI_OAUTH_ENABLED, false)
             .apply()
     }
+
+    // ── Ambient Intelligence ──────────────────────────────────────────────────
+
+    var ambientEnabled: Boolean
+        get() = prefs.getBoolean("ambient_enabled", true)
+        set(v) = prefs.edit().putBoolean("ambient_enabled", v).apply()
+
+    var ambientLearningEnabled: Boolean
+        get() = prefs.getBoolean("ambient_learning", true)
+        set(v) = prefs.edit().putBoolean("ambient_learning", v).apply()
+
+    var ambientLocationSuggestionsEnabled: Boolean
+        get() = prefs.getBoolean("ambient_location", true)
+        set(v) = prefs.edit().putBoolean("ambient_location", v).apply()
+
+    var ambientAppContextSuggestionsEnabled: Boolean
+        get() = prefs.getBoolean("ambient_app_ctx", true)
+        set(v) = prefs.edit().putBoolean("ambient_app_ctx", v).apply()
+
+    var ambientHomeAssistantAlertsEnabled: Boolean
+        get() = prefs.getBoolean("ambient_ha", true)
+        set(v) = prefs.edit().putBoolean("ambient_ha", v).apply()
+
+    var ambientTravelSuggestionsEnabled: Boolean
+        get() = prefs.getBoolean("ambient_travel", true)
+        set(v) = prefs.edit().putBoolean("ambient_travel", v).apply()
+
+    var ambientCustomerWorkNudgesEnabled: Boolean
+        get() = prefs.getBoolean("ambient_customer", true)
+        set(v) = prefs.edit().putBoolean("ambient_customer", v).apply()
+
+    var ambientLearnFromDismissalsEnabled: Boolean
+        get() = prefs.getBoolean("ambient_dismissals", true)
+        set(v) = prefs.edit().putBoolean("ambient_dismissals", v).apply()
+
+    var ambientMinConfidenceToSpeak: Float
+        get() = prefs.getFloat("ambient_min_conf", 0.65f)
+        set(v) = prefs.edit().putFloat("ambient_min_conf", v).apply()
+
+    var ambientMaxNudgesPerDay: Int
+        get() = prefs.getInt("ambient_max_nudges", 10)
+        set(v) = prefs.edit().putInt("ambient_max_nudges", v).apply()
 }

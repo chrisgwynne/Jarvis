@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
@@ -88,6 +89,12 @@ internal enum class SettingsCategory(
         description = "Notification access, message context and reply diagnostics",
         icon        = Icons.Filled.Forum,
         route       = "settings/messaging",
+    ),
+    AmbientIntelligence(
+        title       = "Ambient Intelligence",
+        description = "Local signal learning, routine nudges and context awareness",
+        icon        = Icons.Filled.AutoAwesome,
+        route       = "settings/ambient",
     ),
     LocalDiagnostics(
         title       = "Diagnostics",

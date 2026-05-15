@@ -32,6 +32,12 @@ object DefaultTriggers {
         add(HomeAssistantMotionAwayTrigger())
         if (knownSsidStore != null) add(UnfamiliarSsidTrigger(knownSsidStore))
         if (routineSynthesizer != null) add(RoutineProposalTrigger(routineSynthesizer))
+        // ── Ambient Intelligence triggers ────────────────────────────────────
+        add(AmbientEtsyCustomerNudgeTrigger())
+        add(AmbientCarBluetoothTrigger())
+        add(AmbientCalendarTravelTrigger())
+        add(AmbientHaDeviceRunningAwayTrigger())
+        add(AmbientLocationTodoistTrigger())
     }
 
     fun engine(

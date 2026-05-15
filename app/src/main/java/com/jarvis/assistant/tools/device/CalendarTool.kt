@@ -245,62 +245,100 @@ class CalendarTool(private val context: Context) : Tool {
     }
 
     private fun queryInstances(startMs: Long, endMs: Long, limitToOne: Boolean): List<CalEvent> {
-        // CalendarContract.Instances automatically expands recurring events
-        // into concrete occurrences within the [startMs, endMs] window.
+        // Try CalendarContract.Instances first — it expands recurring events automatically.
         val instancesUri: Uri = CalendarContract.Instances.CONTENT_URI.buildUpon()
             .also { builder ->
                 ContentUris.appendId(builder, startMs)
                 ContentUris.appendId(builder, endMs)
             }
             .build()
+        Log.d(TAG, "[CALENDAR_INSTANCES_URI] uri=$instancesUri")
 
-        val projection = arrayOf(
+        val instancesProjection = arrayOf(
             CalendarContract.Instances.TITLE,
             CalendarContract.Instances.BEGIN,
             CalendarContract.Instances.ALL_DAY,
             CalendarContract.Instances.SELF_ATTENDEE_STATUS,
         )
 
-        // Instances is a virtual view — the provider already excludes deleted events
-        // and only returns instances from visible calendars.  Passing a WHERE clause
-        // with Instances.DELETED causes the virtual table to return 0 rows silently
-        // (the column is not filterable in the Instances view layer).
-        // Declined events are filtered below using SELF_ATTENDEE_STATUS.
-        val cursor = context.contentResolver.query(
-            instancesUri,
-            projection,
-            null,
-            null,
-            "${CalendarContract.Instances.BEGIN} ASC"
-        ) ?: run {
-            Log.w(TAG, "[CALENDAR_QUERY_FAILED] reason=null_cursor")
-            return emptyList()
+        val instancesCursor = try {
+            context.contentResolver.query(
+                instancesUri, instancesProjection, null, null,
+                "${CalendarContract.Instances.BEGIN} ASC"
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "[CALENDAR_INSTANCES_FAILED] ${e.message}")
+            null
         }
 
-        val rawCount = cursor.count
-        Log.d(TAG, "[CALENDAR_RAW_EVENTS_COUNT] count=$rawCount")
+        val instancesRaw = instancesCursor?.count ?: -1
+        Log.d(TAG, "[CALENDAR_RAW_EVENTS_COUNT] source=Instances count=$instancesRaw")
 
+        if (instancesRaw > 0 && instancesCursor != null) {
+            return collectFromCursor(instancesCursor, limitToOne, colTitle = 0, colBegin = 1, colAllDay = 2, colStatus = 3)
+        }
+        instancesCursor?.close()
+
+        // Fallback: query Events directly.  This misses non-first occurrences of recurring
+        // events but guarantees at least one-off events are found when Instances is empty.
+        Log.w(TAG, "[CALENDAR_INSTANCES_EMPTY] falling back to Events query start=$startMs end=$endMs")
+        return queryEventsDirect(startMs, endMs, limitToOne)
+    }
+
+    private fun queryEventsDirect(startMs: Long, endMs: Long, limitToOne: Boolean): List<CalEvent> {
+        val projection = arrayOf(
+            CalendarContract.Events.TITLE,
+            CalendarContract.Events.DTSTART,
+            CalendarContract.Events.ALL_DAY,
+        )
+        val selection = "(${CalendarContract.Events.DTSTART} >= ? AND ${CalendarContract.Events.DTSTART} <= ?)" +
+            " AND ${CalendarContract.Events.DELETED} = 0"
+        val args = arrayOf(startMs.toString(), endMs.toString())
+
+        val cursor = try {
+            context.contentResolver.query(
+                CalendarContract.Events.CONTENT_URI, projection, selection, args,
+                "${CalendarContract.Events.DTSTART} ASC"
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "[CALENDAR_EVENTS_FAILED] ${e.message}")
+            return emptyList()
+        } ?: return emptyList()
+
+        Log.d(TAG, "[CALENDAR_RAW_EVENTS_COUNT] source=Events count=${cursor.count}")
+        return collectFromCursor(cursor, limitToOne, colTitle = 0, colBegin = 1, colAllDay = 2, colStatus = -1)
+    }
+
+    private fun collectFromCursor(
+        cursor: android.database.Cursor,
+        limitToOne: Boolean,
+        colTitle: Int,
+        colBegin: Int,
+        colAllDay: Int,
+        colStatus: Int,
+    ): List<CalEvent> {
         val results = mutableListOf<CalEvent>()
         cursor.use {
             while (it.moveToNext()) {
                 if (limitToOne && results.isNotEmpty()) break
                 if (results.size >= EVENT_LIMIT) break
 
-                val title  = it.getString(0)?.takeIf { s -> s.isNotBlank() } ?: run {
+                val title = it.getString(colTitle)?.takeIf { s -> s.isNotBlank() } ?: run {
                     Log.d(TAG, "[CALENDAR_EVENT_EXCLUDED] reason=blank_title")
                     continue
                 }
-                val begin  = it.getLong(1)
-                val allDay = it.getInt(2) == 1
-                val attendeeStatus = if (it.isNull(3)) -1 else it.getInt(3)
+                val begin  = it.getLong(colBegin)
+                val allDay = it.getInt(colAllDay) == 1
 
-                if (attendeeStatus == ATTENDEE_STATUS_DECLINED) {
-                    Log.d(TAG, "[CALENDAR_EVENT_EXCLUDED] reason=declined title=\"$title\"")
-                    continue
+                if (colStatus >= 0) {
+                    val attendeeStatus = if (it.isNull(colStatus)) -1 else it.getInt(colStatus)
+                    if (attendeeStatus == ATTENDEE_STATUS_DECLINED) {
+                        Log.d(TAG, "[CALENDAR_EVENT_EXCLUDED] reason=declined title=\"$title\"")
+                        continue
+                    }
                 }
 
-                Log.d(TAG, "[CALENDAR_EVENT_INCLUDED] title=\"$title\" " +
-                    "allDay=$allDay begin=$begin")
+                Log.d(TAG, "[CALENDAR_EVENT_INCLUDED] title=\"$title\" allDay=$allDay begin=$begin")
                 results += CalEvent(title = title, startMs = begin, allDay = allDay)
             }
         }

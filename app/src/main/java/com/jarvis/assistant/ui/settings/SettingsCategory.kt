@@ -3,7 +3,7 @@ package com.jarvis.assistant.ui.settings
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
@@ -73,7 +73,7 @@ internal enum class SettingsCategory(
     Calendar(
         title       = "Calendar",
         description = "Connection status, calendars and diagnostics",
-        icon        = Icons.Filled.CalendarMonth,
+        icon        = Icons.Filled.DateRange,
         route       = "settings/calendar",
     ),
     Todoist(

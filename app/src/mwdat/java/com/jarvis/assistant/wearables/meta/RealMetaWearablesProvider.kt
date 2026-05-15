@@ -91,6 +91,22 @@ class RealMetaWearablesProvider(
     @Volatile override var batteryPercent: Int? = null;      private set
     @Volatile override var lastError: String? = null;        private set
 
+    /**
+     * Mirror of `Wearables.registrationState` collapsed to a short
+     * human-readable label so the Settings UI doesn't need to import
+     * the SDK type itself.  Updated by the collector started in
+     * `init`; default "unknown" until the first emit.
+     */
+    @Volatile override var registrationStatusLabel: String = "unknown"
+        private set
+
+    /**
+     * Count of devices visible to the SDK.  Updated by a collector
+     * on `Wearables.devices`; default 0 until the first emit.
+     */
+    @Volatile override var visibleDeviceCount: Int = 0
+        private set
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutex = Mutex()
     private val recent = AtomicReference<RecentVisualContext?>(null)
@@ -114,10 +130,49 @@ class RealMetaWearablesProvider(
         val initErr = Wearables.initialize(context).errorOrNull()
         if (initErr == null) {
             Log.d(TAG, "[META_WEARABLES_INIT] Wearables.initialize → Success")
+            startRegistryObservers()
         } else {
             Log.w(TAG, "[META_WEARABLES_ERROR] init failed: $initErr")
             lastError = initErr.toString()
             _stateFlow.value = MetaWearablesState.ERROR
+        }
+    }
+
+    /**
+     * Mirror `Wearables.registrationState` + `Wearables.devices` into
+     * our user-visible fields so Settings → Wearables can show "Not
+     * registered" / "1 device visible" without importing SDK types.
+     * Also surfaces what `connect()` would actually see — the major
+     * "couldn't connect → DISCONNECTED" symptom is
+     * [DeviceSessionError.NO_ELIGIBLE_DEVICE], which means either
+     * `Wearables.devices` is empty (glasses not paired in Meta AI)
+     * OR registration hasn't happened (app not authorised by user).
+     */
+    private fun startRegistryObservers() {
+        scope.launch {
+            Wearables.registrationState.collect { state ->
+                val label = state.toString()
+                registrationStatusLabel = label
+                Log.d(TAG, "[META_WEARABLES_REGISTRATION_STATE] $label")
+            }
+        }
+        scope.launch {
+            Wearables.devices.collect { set ->
+                visibleDeviceCount = set.size
+                Log.d(TAG, "[META_WEARABLES_DEVICES] count=${set.size}")
+            }
+        }
+    }
+
+    override fun startRegistration(activity: android.app.Activity): Boolean {
+        return try {
+            Log.d(TAG, "[META_WEARABLES_REGISTRATION_START]")
+            Wearables.startRegistration(activity)
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "[META_WEARABLES_ERROR] startRegistration threw: ${t.message}")
+            lastError = t.message
+            false
         }
     }
 

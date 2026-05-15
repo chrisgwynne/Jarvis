@@ -86,6 +86,56 @@ internal fun WearablesSettingsScreen(
                 value       = devState.name,
                 description = "Live state from the wearables manager.",
             )
+            SettingsRowDivider()
+            SettingsValueRow(
+                title       = "Registration status",
+                value       = mgr.registrationStatusLabel.ifBlank { "—" },
+                description = "Whether Jarvis is approved via the Meta AI " +
+                    "companion app to use the glasses.",
+            )
+            SettingsRowDivider()
+            SettingsValueRow(
+                title       = "Visible devices",
+                value       = mgr.visibleDeviceCount.toString(),
+                description = "Glasses paired in Meta AI that the SDK can see. " +
+                    "Zero means the glasses aren't paired or aren't on.",
+            )
+            mgr.lastError?.takeIf { it.isNotBlank() }?.let { err ->
+                SettingsRowDivider()
+                SettingsValueRow(
+                    title       = "Last error",
+                    value       = err.take(64),
+                    description = "Most recent failure from the SDK (logged " +
+                        "with [META_WEARABLES_ERROR] in logcat).",
+                )
+            }
+        }
+
+        SettingsGroup(
+            title = "App registration",
+            description = "Required before the SDK can find your glasses",
+        ) {
+            SettingsActionRow(
+                title       = "Register with Meta AI",
+                description = "Opens the Meta AI companion app so you can " +
+                    "approve Jarvis as a registered glasses app.  " +
+                    "Required once before the first connect.",
+                actionLabel = "Register",
+                onAction    = {
+                    val activity = (context as? android.app.Activity)
+                    if (activity == null) {
+                        Toast.makeText(context,
+                            "Open Settings from the main Jarvis screen so " +
+                                "we have an Activity to launch from.",
+                            Toast.LENGTH_LONG).show()
+                    } else if (!mgr.startRegistration(activity)) {
+                        Toast.makeText(context,
+                            "Registration unavailable — DAT SDK not active. " +
+                                "Check master toggle + mock toggle.",
+                            Toast.LENGTH_LONG).show()
+                    }
+                },
+            )
         }
 
         SettingsGroup(title = "Behaviour", description = "How Jarvis uses the glasses") {

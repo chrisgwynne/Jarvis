@@ -76,6 +76,22 @@ class JarvisApp : Application() {
         lateinit var personalityLoader
             : com.jarvis.assistant.personality.PersonalityProfileLoader
             private set
+
+        /**
+         * Meta Wearables (DAT SDK) — optional eyes-and-hands-free
+         * module.  Settings repository is always created; the manager
+         * picks a backend (stub / mock / real) at construction time
+         * based on settings + SDK classpath presence.  The whole
+         * subsystem is dormant when the master toggle is OFF.
+         */
+        @Volatile
+        lateinit var wearablesSettings
+            : com.jarvis.assistant.wearables.meta.WearablesSettingsRepository
+            private set
+        @Volatile
+        lateinit var metaWearables
+            : com.jarvis.assistant.wearables.meta.MetaWearablesManager
+            private set
     }
 
     override fun onCreate() {
@@ -111,6 +127,15 @@ class JarvisApp : Application() {
             .PersonalityProfileLoader(this)
         // Eager load so the first LLM request doesn't pay the asset I/O.
         personalityLoader.load()
+        wearablesSettings = com.jarvis.assistant.wearables.meta
+            .WearablesSettingsRepository(
+                com.jarvis.assistant.util.SettingsStore(this)
+            )
+        metaWearables = com.jarvis.assistant.wearables.meta
+            .MetaWearablesManager(
+                context = this,
+                settingsProvider = { wearablesSettings.snapshot() },
+            )
         createNotificationChannel()
         // Install the GitHub issue reporter FIRST so it wraps the thread
         // default uncaught-exception handler before any other subsystem has a

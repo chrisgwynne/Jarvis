@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.EmojiPeople
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Science
@@ -61,6 +62,12 @@ internal enum class SettingsCategory(
         description = "Sarcasm, humour, pushback, serious-mode auto-detect",
         icon        = Icons.Filled.EmojiPeople,
         route       = "settings/personality",
+    ),
+    Wearables(
+        title       = "Wearables",
+        description = "Meta AI glasses — eyes-and-hands-free capture",
+        icon        = Icons.Filled.Visibility,
+        route       = "settings/wearables",
     ),
     Todoist(
         title       = "Todoist",

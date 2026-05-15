@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     // AGP 9+ ships built-in Kotlin support — the standalone
     // `org.jetbrains.kotlin.android` plugin must NOT be applied alongside
@@ -23,6 +26,24 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // ── Meta Wearables DAT — Application ID + Client Token ────────────
+        // Loaded from local.properties (gitignored) so the token never
+        // lands in the public repo.  The keys are:
+        //   meta.wearables.applicationId=<numeric id from Meta dev console>
+        //   meta.wearables.clientToken=AR|<id>|<token>
+        // If unset, both fall back to an empty string and the manifest
+        // entries are still present but inert — Meta's SDK falls back to
+        // Developer Mode (per their docs: "Do not set it if you are using
+        // Developer Mode to test your integration").
+        val metaProps = Properties().apply {
+            val f = rootProject.file("local.properties")
+            if (f.exists()) FileInputStream(f).use { load(it) }
+        }
+        manifestPlaceholders["metaWearablesApplicationId"] =
+            metaProps.getProperty("meta.wearables.applicationId", "")
+        manifestPlaceholders["metaWearablesClientToken"] =
+            metaProps.getProperty("meta.wearables.clientToken", "")
     }
 
     // Tier-A: let JVM unit tests return default values from un-mocked
@@ -166,6 +187,43 @@ dependencies {
     // Instrumented tests
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.core)
+
+    // ── Meta Wearables DAT (optional, gated on github_token) ──────────────
+    // The dependency resolves only when settings.gradle.kts registered the
+    // GitHub Packages repo (i.e. a token was found in local.properties or
+    // the GITHUB_TOKEN env var).  Without a token the deps simply aren't
+    // declared — the StubMetaWearablesProvider stays the active backend
+    // and Jarvis still builds.  See docs/wearables/meta-dat-integration.md.
+    val mwdatTokenPresent = (System.getenv("GITHUB_TOKEN")?.isNotBlank() == true) ||
+        run {
+            val f = rootProject.file("local.properties")
+            f.exists() && Properties().apply { FileInputStream(f).use { load(it) } }
+                .getProperty("github_token")?.isNotBlank() == true
+        }
+    if (mwdatTokenPresent) {
+        implementation(libs.mwdat.core)
+        implementation(libs.mwdat.camera)
+        debugImplementation(libs.mwdat.mockdevice)
+    }
+}
+
+// ── Meta Wearables DAT — conditional source set ─────────────────────────
+// `app/src/mwdat/java/` holds RealMetaWearablesProvider which directly
+// imports `com.meta.wearable.mwdat.*` types.  Those types only resolve
+// when the SDK is on the classpath, which requires `github_token` in
+// local.properties.  We include the directory only in that case so a
+// fresh clone without a token still compiles cleanly — the stub stays
+// active, the rest of the app is unchanged.
+val mwdatSrcEnabled: Boolean = (System.getenv("GITHUB_TOKEN")?.isNotBlank() == true) ||
+    run {
+        val f = rootProject.file("local.properties")
+        f.exists() && Properties().apply { FileInputStream(f).use { load(it) } }
+            .getProperty("github_token")?.isNotBlank() == true
+    }
+if (mwdatSrcEnabled) {
+    android.sourceSets.getByName("main").java.srcDir("src/mwdat/java")
+    logger.lifecycle("[META_WEARABLES] Including src/mwdat/java source set " +
+        "(github_token present → DAT SDK available).")
 }
 
 /**
@@ -189,3 +247,26 @@ tasks.register("checkArchitectureInvariants") {
 }
 
 tasks.named("check") { dependsOn("checkArchitectureInvariants") }
+
+/**
+ * AGP 9 dropped the legacy `unitTestClasses` task that older
+ * IntelliJ / Android Studio test runners (and some external test
+ * tools) still invoke when you tap the green "Run tests" arrow.
+ * Without this alias the IDE fails with
+ *   "Cannot locate tasks that match ':app:unitTestClasses'"
+ *
+ * Register it as an alias that depends on the real compile +
+ * resource tasks for the debug unit-test source set.  Running this
+ * task produces the same classpath the JVM test runner needs, so
+ * the IDE play button works again without us migrating every dev
+ * machine's run-configuration XML.
+ */
+tasks.register("unitTestClasses") {
+    group       = "build"
+    description = "AGP-9 compatibility alias for legacy IDE test runners."
+    dependsOn(
+        tasks.named("compileDebugUnitTestKotlin"),
+        tasks.named("processDebugUnitTestJavaRes"),
+        tasks.named("processDebugJavaRes"),
+    )
+}

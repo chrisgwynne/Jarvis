@@ -178,6 +178,21 @@ class SettingsStore(context: Context) {
         const val KEY_PERSONALITY_APPLY_TO_CONFIRMATIONS = "personality_apply_confirmations"
         const val KEY_PERSONALITY_APPLY_TO_LLM           = "personality_apply_llm"
 
+        // ── Meta Wearables (DAT SDK) ──────────────────────────────────────
+        const val KEY_WEARABLES_ENABLED                  = "wearables_enabled"
+        const val KEY_WEARABLES_USE_MOCK                 = "wearables_use_mock"
+        const val KEY_WEARABLES_AUTO_CONNECT             = "wearables_auto_connect"
+        const val KEY_WEARABLES_USE_FOR_LOOK_AT_THIS     = "wearables_use_for_look"
+        const val KEY_WEARABLES_SAVE_CAPTURES_TO_GALLERY = "wearables_save_gallery"
+        const val KEY_WEARABLES_PREFER_GLASSES_CAMERA    = "wearables_prefer_glasses"
+        const val KEY_WEARABLES_VISION_ANALYSIS_ENABLED  = "wearables_vision_enabled"
+        const val KEY_WEARABLES_PREFER_ON_DEVICE_VISION  = "wearables_on_device_vision"
+        const val KEY_WEARABLES_ALLOW_CLOUD_VISION       = "wearables_cloud_vision"
+        const val KEY_WEARABLES_SAVE_VISUAL_HISTORY      = "wearables_save_history"
+        const val KEY_WEARABLES_VISUAL_RETENTION_DAYS    = "wearables_history_days"
+        const val KEY_WEARABLES_CONFIRM_BEFORE_SHARING   = "wearables_confirm_share"
+        const val KEY_WEARABLES_CONFIRM_BEFORE_SAVE_MEM  = "wearables_confirm_save_memory"
+
         // ── Todoist ────────────────────────────────────────────────────────
         const val KEY_TODOIST_ENABLED            = "todoist_enabled"
         const val KEY_TODOIST_API_TOKEN          = "todoist_api_token"
@@ -659,6 +674,61 @@ class SettingsStore(context: Context) {
     var personalityApplyToLlmAnswers: Boolean
         get() = prefs.getBoolean(KEY_PERSONALITY_APPLY_TO_LLM, true)
         set(v) = prefs.edit().putBoolean(KEY_PERSONALITY_APPLY_TO_LLM, v).apply()
+
+    // ── Meta Wearables ─────────────────────────────────────────────────────
+    // Defaults mirror WearablesSettings.DEFAULT — opt-in everywhere.
+
+    var wearablesEnabled: Boolean
+        get() = prefs.getBoolean(KEY_WEARABLES_ENABLED, false)
+        set(v) = prefs.edit().putBoolean(KEY_WEARABLES_ENABLED, v).apply()
+
+    var wearablesUseMockDevice: Boolean
+        get() = prefs.getBoolean(KEY_WEARABLES_USE_MOCK, false)
+        set(v) = prefs.edit().putBoolean(KEY_WEARABLES_USE_MOCK, v).apply()
+
+    var wearablesAutoConnectOnStart: Boolean
+        get() = prefs.getBoolean(KEY_WEARABLES_AUTO_CONNECT, false)
+        set(v) = prefs.edit().putBoolean(KEY_WEARABLES_AUTO_CONNECT, v).apply()
+
+    var wearablesUseForLookAtThis: Boolean
+        get() = prefs.getBoolean(KEY_WEARABLES_USE_FOR_LOOK_AT_THIS, true)
+        set(v) = prefs.edit().putBoolean(KEY_WEARABLES_USE_FOR_LOOK_AT_THIS, v).apply()
+
+    var wearablesSaveCapturesToGallery: Boolean
+        get() = prefs.getBoolean(KEY_WEARABLES_SAVE_CAPTURES_TO_GALLERY, true)
+        set(v) = prefs.edit().putBoolean(KEY_WEARABLES_SAVE_CAPTURES_TO_GALLERY, v).apply()
+
+    var wearablesPreferGlassesCamera: Boolean
+        get() = prefs.getBoolean(KEY_WEARABLES_PREFER_GLASSES_CAMERA, true)
+        set(v) = prefs.edit().putBoolean(KEY_WEARABLES_PREFER_GLASSES_CAMERA, v).apply()
+
+    var wearablesVisionAnalysisEnabled: Boolean
+        get() = prefs.getBoolean(KEY_WEARABLES_VISION_ANALYSIS_ENABLED, true)
+        set(v) = prefs.edit().putBoolean(KEY_WEARABLES_VISION_ANALYSIS_ENABLED, v).apply()
+
+    var wearablesPreferOnDeviceVision: Boolean
+        get() = prefs.getBoolean(KEY_WEARABLES_PREFER_ON_DEVICE_VISION, true)
+        set(v) = prefs.edit().putBoolean(KEY_WEARABLES_PREFER_ON_DEVICE_VISION, v).apply()
+
+    var wearablesAllowCloudVision: Boolean
+        get() = prefs.getBoolean(KEY_WEARABLES_ALLOW_CLOUD_VISION, false)
+        set(v) = prefs.edit().putBoolean(KEY_WEARABLES_ALLOW_CLOUD_VISION, v).apply()
+
+    var wearablesSaveVisualHistory: Boolean
+        get() = prefs.getBoolean(KEY_WEARABLES_SAVE_VISUAL_HISTORY, false)
+        set(v) = prefs.edit().putBoolean(KEY_WEARABLES_SAVE_VISUAL_HISTORY, v).apply()
+
+    var wearablesVisualHistoryRetentionDays: Int
+        get() = prefs.getInt(KEY_WEARABLES_VISUAL_RETENTION_DAYS, 7)
+        set(v) = prefs.edit().putInt(KEY_WEARABLES_VISUAL_RETENTION_DAYS, v.coerceIn(1, 90)).apply()
+
+    var wearablesConfirmBeforeSharing: Boolean
+        get() = prefs.getBoolean(KEY_WEARABLES_CONFIRM_BEFORE_SHARING, true)
+        set(v) = prefs.edit().putBoolean(KEY_WEARABLES_CONFIRM_BEFORE_SHARING, v).apply()
+
+    var wearablesConfirmBeforeSavingMemory: Boolean
+        get() = prefs.getBoolean(KEY_WEARABLES_CONFIRM_BEFORE_SAVE_MEM, true)
+        set(v) = prefs.edit().putBoolean(KEY_WEARABLES_CONFIRM_BEFORE_SAVE_MEM, v).apply()
 
     // ── Todoist ────────────────────────────────────────────────────────────
     // The user's Todoist integration settings — backing

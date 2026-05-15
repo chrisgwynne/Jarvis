@@ -98,6 +98,20 @@
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
+    <!-- ── Meta Wearables (DAT SDK) ──────────────────────────────────────
+         Runtime-permission set the optional Meta Wearables module
+         needs to discover + pair with Meta AI glasses.  Master toggle
+         is OFF by default in Settings, so the user is never prompted
+         until they enable the feature.  See
+         com.jarvis.assistant.wearables.meta.* for the manager + state
+         machine + stub/mock providers. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <!-- Nearby Wi-Fi Devices replaces ACCESS_FINE_LOCATION as the
+         non-location-leaking gate for BLE scanning on API 33+. -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
+
     <!-- POST_NOTIFICATIONS required on Android 13+ to show the foreground notification -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
@@ -171,6 +185,20 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Jarvis"
         android:networkSecurityConfig="@xml/network_security_config">
+
+        <!-- ── Meta Wearables DAT — Application ID + Client Token ──
+             Both values are injected at build time from
+             local.properties (see app/build.gradle.kts).  Empty
+             placeholder = Developer Mode fallback (per Meta's docs:
+             "Do not set it if you are using Developer Mode to test
+             your integration").  Real values live in local.properties
+             which is gitignored — never paste secrets here. -->
+        <meta-data
+            android:name="com.meta.wearable.mwdat.APPLICATION_ID"
+            android:value="${metaWearablesApplicationId}" />
+        <meta-data
+            android:name="com.meta.wearable.mwdat.CLIENT_TOKEN"
+            android:value="${metaWearablesClientToken}" />
 
         <!-- Main entry point -->
         <!--

@@ -69,6 +69,11 @@ fun SettingsScreen(
         composable(SettingsCategory.Wearables.route) {
             WearablesSettingsScreen(onBack = popToRoot, onClose = onBack)
         }
+        composable(SettingsCategory.Calendar.route) {
+            com.jarvis.assistant.ui.settings.screens.CalendarSettingsScreen(
+                onBack = popToRoot, onClose = onBack
+            )
+        }
         composable(SettingsCategory.Todoist.route) {
             com.jarvis.assistant.ui.settings.screens.TodoistSettingsScreen(
                 onBack = popToRoot, onClose = onBack

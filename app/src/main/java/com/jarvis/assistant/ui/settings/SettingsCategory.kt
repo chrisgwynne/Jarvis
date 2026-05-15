@@ -3,6 +3,7 @@ package com.jarvis.assistant.ui.settings
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
@@ -68,6 +69,12 @@ internal enum class SettingsCategory(
         description = "Meta AI glasses — eyes-and-hands-free capture",
         icon        = Icons.Filled.Visibility,
         route       = "settings/wearables",
+    ),
+    Calendar(
+        title       = "Calendar",
+        description = "Connection status, calendars and diagnostics",
+        icon        = Icons.Filled.CalendarMonth,
+        route       = "settings/calendar",
     ),
     Todoist(
         title       = "Todoist",

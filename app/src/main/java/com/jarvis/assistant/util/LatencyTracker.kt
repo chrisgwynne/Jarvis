@@ -29,6 +29,7 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * Marks (in order of pipeline execution):
  *   WAKE_DETECTED        — wake word fired, pipeline beginning
+ *   STT_START            — SpeechCapture.listen() called (mic open)
  *   STT_COMPLETE         — transcript received from speech capture
  *   FLOW_CHECKED         — FollowUpCoordinator.process() returned
  *   INTENT_CLASSIFIED    — IntentClassifier.classify() returned
@@ -36,10 +37,11 @@ import java.util.concurrent.atomic.AtomicLong
  *   POLICY_EVALUATED     — ActionPolicyGate.evaluate() returned
  *   TOOL_EXECUTED        — tool.execute() returned
  *   LLM_REQUEST_START    — about to call LlmRouter
- *   LLM_FIRST_TOKEN      — first streamed token observed
+ *   LLM_FIRST_TOKEN      — first streamed token/sentence observed
+ *   LLM_FIRST_SENTENCE   — first complete sentence ready for TTS
  *   LLM_STREAM_END       — final streamed token observed
  *   LLM_COMPLETE         — LLM response string received (non-streaming)
- *   TTS_START            — TtsEngine.speak() called
+ *   TTS_START            — TtsEngine.speak() called for first sentence
  *   PIPELINE_DONE        — speakAndRecord() completed
  *
  * Budget: TARGET_FIRST_TOKEN_MS is the Phase-4 goal for end-of-speech to

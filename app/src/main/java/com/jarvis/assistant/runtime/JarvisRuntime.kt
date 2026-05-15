@@ -1673,6 +1673,7 @@ class JarvisRuntime(
                     Log.d(TAG, "[LATENCY_SESSION_START] " +
                         "utterance_clock_started, prior_state=conversation_loop")
                     Log.d(TAG, "[STT_BEGIN] forceOffline=${!contextEngine.isOnline()}")
+                    LatencyTracker.mark("STT_START")
                     // When offline, force the on-device recognizer (API 31+) so STT
                     // keeps working without network. On older APIs this flag is a
                     // no-op — the default intent already sets EXTRA_PREFER_OFFLINE.
@@ -3730,6 +3731,8 @@ class JarvisRuntime(
                 // Transition to Speaking + start barge-in detector on first sentence
                 if (!speakingStarted) {
                     speakingStarted = true
+                    LatencyTracker.mark("LLM_FIRST_TOKEN")
+                    LatencyTracker.mark("LLM_FIRST_SENTENCE")
                     machine.transition(JarvisState.Speaking)
                     DeviceStateStore.update { copy(ttsPlaying = true) }
                     syncState(JarvisState.Speaking)

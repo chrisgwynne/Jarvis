@@ -49,6 +49,7 @@ import java.util.TimeZone
 class CalendarTool(
     private val context: Context,
     private val preferenceEngine: com.jarvis.assistant.preferences.ResponsePreferenceEngine? = null,
+    private val calendarContextStore: com.jarvis.assistant.session.context.RecentCalendarContextStore? = null,
 ) : Tool {
 
     override val name = "calendar"
@@ -170,6 +171,17 @@ class CalendarTool(
                 val spoken = preferenceEngine?.applyLengthPreference(
                     com.jarvis.assistant.preferences.ResponseDomain.CALENDAR, summary
                 ) ?: summary
+                // Store the first (most relevant) event so follow-up phrases like
+                // "move that to Friday" resolve against it.
+                events.firstOrNull()?.let { ev ->
+                    calendarContextStore?.set(
+                        com.jarvis.assistant.session.context.RecentCalendarContext(
+                            title   = ev.title,
+                            startMs = ev.startMs,
+                            endMs   = ev.startMs + 3_600_000L, // assume 1h if unknown
+                        )
+                    )
+                }
                 ToolResult.Success(
                     spokenFeedback = spoken,
                     requiresLlmFollowUp = false,

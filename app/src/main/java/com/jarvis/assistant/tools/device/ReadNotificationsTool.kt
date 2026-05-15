@@ -35,6 +35,7 @@ import com.jarvis.assistant.tools.framework.ToolSchema
  */
 class ReadNotificationsTool(
     private val context: Context,
+    private val messageContextStore: com.jarvis.assistant.session.context.RecentMessageContextStore? = null,
 ) : Tool {
 
     override val name        = "read_notifications"
@@ -173,7 +174,51 @@ class ReadNotificationsTool(
             )
         }
 
-        val spoken = formatEntries(entries.take(MAX_SPOKEN), sourceFilter)
+        // 4. Format up to MAX_SPOKEN entries for TTS
+        val toSpeak = entries.take(MAX_SPOKEN)
+        val count   = toSpeak.size
+
+        val label = when (source) {
+            "whatsapp" -> "WhatsApp notification${if (count != 1) "s" else ""}"
+            "messages" -> "message${if (count != 1) "s" else ""}"
+            else       -> "notification${if (count != 1) "s" else ""}"
+        }
+
+        val lines = toSpeak.joinToString(". ") { entry ->
+            val appLabel = appDisplayName(entry.packageName)
+            buildString {
+                append(appLabel)
+                if (entry.title.isNotEmpty()) {
+                    append(": ")
+                    append(entry.title)
+                }
+                if (entry.text.isNotEmpty()) {
+                    append(" — ")
+                    append(entry.text.take(120)) // cap long bodies for TTS
+                }
+            }
+        }
+
+        val intro  = "You have $count $label. "
+        val spoken = intro + lines
+
+        // Store the most recent entry as context for follow-up replies
+        toSpeak.firstOrNull()?.let { first ->
+            val channel = when (source) {
+                "whatsapp" -> com.jarvis.assistant.session.context.MessageChannel.WHATSAPP
+                else       -> com.jarvis.assistant.session.context.MessageChannel.NOTIFICATION
+            }
+            messageContextStore?.set(
+                com.jarvis.assistant.session.context.RecentMessageContext(
+                    sender  = if (first.title.isNotEmpty()) first.title
+                              else appDisplayName(first.packageName),
+                    body    = first.text,
+                    channel = channel,
+                )
+            )
+        }
+
+
         return ToolResult.Success(spoken)
     }
 

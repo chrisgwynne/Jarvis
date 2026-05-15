@@ -1027,4 +1027,121 @@ class SettingsStore(context: Context) {
     var ambientMaxNudgesPerDay: Int
         get() = prefs.getInt("ambient_max_nudges", 10)
         set(v) = prefs.edit().putInt("ambient_max_nudges", v).apply()
+
+    // ── Vision ────────────────────────────────────────────────────────────────
+
+    /** Master switch — disabling this suppresses all vision capture and OCR. */
+    var visionEnabled: Boolean
+        get() = prefs.getBoolean("vision_enabled", true)
+        set(v) = prefs.edit().putBoolean("vision_enabled", v).apply()
+
+    /** Enable automatic analysis of screenshots when the user asks. */
+    var screenshotAnalysisEnabled: Boolean
+        get() = prefs.getBoolean("vision_screenshot_analysis", true)
+        set(v) = prefs.edit().putBoolean("vision_screenshot_analysis", v).apply()
+
+    /** Enable the OCR pipeline for "read this" / "what does this say" commands. */
+    var ocrEnabled: Boolean
+        get() = prefs.getBoolean("vision_ocr_enabled", true)
+        set(v) = prefs.edit().putBoolean("vision_ocr_enabled", v).apply()
+
+    /** Persist visual context summaries in the memory store. */
+    var saveVisualContext: Boolean
+        get() = prefs.getBoolean("vision_save_context", true)
+        set(v) = prefs.edit().putBoolean("vision_save_context", v).apply()
+
+    /** Prefer the phone camera over Meta glasses when both are available. */
+    var preferPhoneCamera: Boolean
+        get() = prefs.getBoolean("vision_prefer_phone_camera", true)
+        set(v) = prefs.edit().putBoolean("vision_prefer_phone_camera", v).apply()
+
+    /**
+     * Automatically fall back to phone camera when Meta glasses are unavailable.
+     * When false, the glasses tool declines silently (existing behaviour).
+     */
+    var visionAutoFallbackToPhone: Boolean
+        get() = prefs.getBoolean("vision_auto_fallback", true)
+        set(v) = prefs.edit().putBoolean("vision_auto_fallback", v).apply()
+
+    /**
+     * Register a [ScreenshotContextManager] ContentObserver that watches the
+     * media store for new screenshots and updates VisualContextStore.
+     */
+    var screenshotListenerEnabled: Boolean
+        get() = prefs.getBoolean("vision_screenshot_listener", false)
+        set(v) = prefs.edit().putBoolean("vision_screenshot_listener", v).apply()
+
+    /** Allow proactive suggestions based on repeated screenshot patterns. */
+    var screenshotProactiveSuggestionsEnabled: Boolean
+        get() = prefs.getBoolean("vision_screenshot_proactive", false)
+        set(v) = prefs.edit().putBoolean("vision_screenshot_proactive", v).apply()
+
+    /** Retention period (days) for stored visual observations. */
+    var visualMemoryRetentionDays: Int
+        get() = prefs.getInt("vision_retention_days", 30)
+        set(v) = prefs.edit().putInt("vision_retention_days", v).apply()
+
+    // ── App control ───────────────────────────────────────────────────────────
+
+    /** Master switch — disabling this suppresses CloseAppTool + MapsNavFollowupTool. */
+    var appControlEnabled: Boolean
+        get() = prefs.getBoolean("app_control_enabled", true)
+        set(v) = prefs.edit().putBoolean("app_control_enabled", v).apply()
+
+    /** Allow CloseAppTool to use the Accessibility Service for BACK/HOME actions. */
+    var allowAccessibilityAppControl: Boolean
+        get() = prefs.getBoolean("app_control_accessibility", true)
+        set(v) = prefs.edit().putBoolean("app_control_accessibility", v).apply()
+
+    /** Allow CloseAppTool to send HOME intents when accessibility is unavailable. */
+    var allowAppClose: Boolean
+        get() = prefs.getBoolean("app_control_allow_close", true)
+        set(v) = prefs.edit().putBoolean("app_control_allow_close", v).apply()
+
+    // ── Trust & Autonomy ──────────────────────────────────────────────────────
+
+    /** Autonomy preset: "CONSERVATIVE" | "BALANCED" | "JARVIS_STYLE". Default BALANCED. */
+    var autonomyPreset: String
+        get() = prefs.getString("autonomy_preset", "BALANCED") ?: "BALANCED"
+        set(v) = prefs.edit().putString("autonomy_preset", v).apply()
+
+    /** Always confirm before sending messages (SMS, WhatsApp, email). */
+    var autonomyConfirmMessages: Boolean
+        get() = prefs.getBoolean("autonomy_confirm_messages", false)
+        set(v) = prefs.edit().putBoolean("autonomy_confirm_messages", v).apply()
+
+    /** Always confirm before making phone calls. */
+    var autonomyConfirmCalls: Boolean
+        get() = prefs.getBoolean("autonomy_confirm_calls", false)
+        set(v) = prefs.edit().putBoolean("autonomy_confirm_calls", v).apply()
+
+    /** Always confirm before sharing media / photos. */
+    var autonomyConfirmMediaShare: Boolean
+        get() = prefs.getBoolean("autonomy_confirm_media_share", false)
+        set(v) = prefs.edit().putBoolean("autonomy_confirm_media_share", v).apply()
+
+    /** Block sensitive reads/sends when the screen is locked. */
+    var autonomyLockscreenRestrictions: Boolean
+        get() = prefs.getBoolean("autonomy_lockscreen_restrictions", true)
+        set(v) = prefs.edit().putBoolean("autonomy_lockscreen_restrictions", v).apply()
+
+    /** Maximise autonomy for LOW/MEDIUM actions while in car mode. */
+    var autonomyCarMode: Boolean
+        get() = prefs.getBoolean("autonomy_car_mode", true)
+        set(v) = prefs.edit().putBoolean("autonomy_car_mode", v).apply()
+
+    /** Treat headphones as a private-context signal (relaxes some confirmations). */
+    var autonomyHeadphonesPrivate: Boolean
+        get() = prefs.getBoolean("autonomy_headphones_private", false)
+        set(v) = prefs.edit().putBoolean("autonomy_headphones_private", v).apply()
+
+    /** Treat home WiFi as a trusted-context signal. */
+    var autonomyHomeTrusted: Boolean
+        get() = prefs.getBoolean("autonomy_home_trusted", false)
+        set(v) = prefs.edit().putBoolean("autonomy_home_trusted", v).apply()
+
+    /** Use voice identity as an additional trust signal. */
+    var autonomyVoiceTrust: Boolean
+        get() = prefs.getBoolean("autonomy_voice_trust", true)
+        set(v) = prefs.edit().putBoolean("autonomy_voice_trust", v).apply()
 }

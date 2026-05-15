@@ -23,7 +23,8 @@ import com.jarvis.assistant.tools.framework.ToolSchema
  */
 class OpenAppTool(
     private val context: Context,
-    private val resolver: AppResolver = AppResolver(context, AppAliasStore(context))
+    private val resolver: AppResolver = AppResolver(context, AppAliasStore(context)),
+    private val recentAppContextStore: RecentAppContextStore? = null,
 ) : Tool {
 
     override val name = "open_app"
@@ -142,6 +143,7 @@ class OpenAppTool(
                 AppResolver.Result.Launchable(pending.packageName, pending.label),
                 durable = true
             )
+            recentAppContextStore?.set(RecentAppContext(appName = pending.label, packageName = pending.packageName))
             ToolResult.Success(spokenFeedback = "Opening ${pending.label}.")
         } catch (e: Exception) {
             Log.w("OpenAppTool", "Launch failed", e)
@@ -165,6 +167,7 @@ class OpenAppTool(
             AppResolver.Result.Launchable(packageName, label),
             durable = true
         )
+        recentAppContextStore?.set(RecentAppContext(appName = label, packageName = packageName))
         return ToolResult.Success(spokenFeedback = "Opening $label.")
     }
 

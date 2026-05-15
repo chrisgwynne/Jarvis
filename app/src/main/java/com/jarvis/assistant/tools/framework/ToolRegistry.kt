@@ -50,9 +50,14 @@ import com.jarvis.assistant.vision.VisionScreenAnalyzer
 import com.jarvis.assistant.tools.device.DirectionsTool
 import com.jarvis.assistant.tools.device.NavigateTool
 import com.jarvis.assistant.tools.device.NearestPlaceTool
+import com.jarvis.assistant.tools.device.OcrScanTool
 import com.jarvis.assistant.tools.device.ReadScreenTool
+import com.jarvis.assistant.tools.device.SelfieCaptureTool
 import com.jarvis.assistant.tools.device.TapScreenTool
+import com.jarvis.assistant.tools.device.VisualFollowupTool
 import com.jarvis.assistant.tools.device.WhereAmITool
+import com.jarvis.assistant.vision.OcrPipeline
+import com.jarvis.assistant.vision.VisualContextStore
 import com.jarvis.assistant.maps.DirectionsCoordinator
 import com.jarvis.assistant.maps.MapsCommandRouter
 import com.jarvis.assistant.maps.MapsIntentHandler
@@ -68,6 +73,10 @@ import com.jarvis.assistant.tools.device.EndCallTool
 import com.jarvis.assistant.tools.smart.SmartHomeTool
 import com.jarvis.assistant.tools.web.MusicSearchTool
 import com.jarvis.assistant.tools.device.ReportIssueTool
+import com.jarvis.assistant.tools.device.CloseAppTool
+import com.jarvis.assistant.tools.device.MapsNavigationFollowupTool
+import com.jarvis.assistant.tools.device.RecentAppContextStore
+import com.jarvis.assistant.maps.MapsNavigationContextStore
 
 /**
  * ToolRegistry — ordered list of tools; first match wins.
@@ -153,6 +162,9 @@ class ToolRegistry constructor(
              */
             profileMemory: com.jarvis.assistant.memory.ProfileMemoryService? = null,
             preferenceEngine: com.jarvis.assistant.preferences.ResponsePreferenceEngine? = null,
+            visualContextStore: VisualContextStore? = null,
+            recentAppContextStore: RecentAppContextStore? = null,
+            mapsNavigationContextStore: MapsNavigationContextStore? = null,
         ): ToolRegistry {
             val contacts = sharedContacts ?: run {
                 android.util.Log.d(TAG, "[CONTACT_LOOKUP_SHARED_INSTANCE_CREATED] " +
@@ -227,7 +239,11 @@ class ToolRegistry constructor(
                     add(com.jarvis.assistant.tools.device.FindPhoneTool(context))
                     // Read-only comms helpers — guarded by READ_SMS and
                     // READ_CALL_LOG runtime permissions.
-                    add(com.jarvis.assistant.tools.device.ReadSmsTool(context, contacts))
+                    add(com.jarvis.assistant.tools.device.ReadSmsTool(context, contacts,
+                        messageContextStore = try {
+                            com.jarvis.assistant.JarvisApp.recentMessageContextStore
+                        } catch (_: UninitializedPropertyAccessException) { null }
+                    ))
                     add(com.jarvis.assistant.tools.device.RecentCallsTool(context))
                     // Share-location depends on the location provider.
                     locationProvider?.let {
@@ -255,8 +271,17 @@ class ToolRegistry constructor(
                     add(FlashlightTool(context))
                     add(AlarmTool(context))
                     add(TimerTool(context))
-                    add(CalendarTool(context, preferenceEngine))
-                    add(SmartHomeTool(settings))
+                    add(CalendarTool(context,
+                        preferenceEngine = preferenceEngine,
+                        calendarContextStore = try {
+                            com.jarvis.assistant.JarvisApp.recentCalendarContextStore
+                        } catch (_: UninitializedPropertyAccessException) { null }
+                    ))
+                    add(SmartHomeTool(settings,
+                        haContextStore = try {
+                            com.jarvis.assistant.JarvisApp.recentHaContextStore
+                        } catch (_: UninitializedPropertyAccessException) { null }
+                    ))
                     // Weather before web search — structured answer, no search cost
                     locationProvider?.let { add(WeatherTool(it, preferenceEngine)) }
 
@@ -275,8 +300,13 @@ class ToolRegistry constructor(
                             intents          = mapsIntents
                         )
                         add(NearestPlaceTool(mapsRouter))
-                        add(DirectionsTool(mapsRouter))
-                        add(NavigateTool(mapsRouter))
+                        add(DirectionsTool(mapsRouter, mapsNavigationContextStore))
+                        add(NavigateTool(mapsRouter, mapsNavigationContextStore))
+                        // MapsNavigationFollowupTool MUST precede CloseAppTool so
+                        // "close Maps" during active navigation lands here first.
+                        mapsNavigationContextStore?.let {
+                            add(MapsNavigationFollowupTool(context, it, mapsIntents))
+                        }
                     }
                     // Memory tools before generic open-app so they aren't misrouted
                     val db = JarvisDatabase.getInstance(context)
@@ -293,7 +323,11 @@ class ToolRegistry constructor(
                     // "anything important?" / "what have I missed?" are summary
                     // intents and must not fall through to the generic read path.
                     add(com.jarvis.assistant.tools.device.NotificationSummaryTool(context))
-                    add(ReadNotificationsTool(context))
+                    add(ReadNotificationsTool(context,
+                        messageContextStore = try {
+                            com.jarvis.assistant.JarvisApp.recentMessageContextStore
+                        } catch (_: UninitializedPropertyAccessException) { null }
+                    ))
                     // Clear AFTER Read so "clear my notifications" doesn't get
                     // shadowed by Read's "read my notifications" pattern (they
                     // don't overlap, but keep related tools adjacent for sanity).
@@ -331,7 +365,12 @@ class ToolRegistry constructor(
                         val screenshotCapture = ScreenshotCaptureService(context)
                         val screenAnalyzer    = VisionScreenAnalyzer(visionClient, llmRouter)
                         val screenRepo        = ScreenObservationRepository(db.memoryDao())
-                        add(LookAtThisIntentHandler(screenshotCapture, screenAnalyzer, screenRepo))
+                        add(LookAtThisIntentHandler(
+                            screenshotCapture  = screenshotCapture,
+                            analyzer           = screenAnalyzer,
+                            repository         = screenRepo,
+                            visualContextStore = visualContextStore,
+                        ))
                     }
                     // Camera + vision tools (before OpenApp to avoid misrouting)
                     add(CameraCaptureTool(context, cameraCapture))
@@ -341,6 +380,24 @@ class ToolRegistry constructor(
                     // utterance wins over the view path.
                     add(com.jarvis.assistant.tools.device.ViewMediaTool(context))
                     add(com.jarvis.assistant.tools.device.ShareMediaTool(context))
+                    // Visual follow-up tool — "read that again", "send that to Mike",
+                    // "show that", "save that".  Activation guard: only matches when
+                    // VisualContextStore.hasContext is true, so it never fires outside
+                    // an active vision session.  Registered AFTER ShareMediaTool so
+                    // generic share phrases go through VisualFollowupTool's smarter
+                    // handling when visual context is live.
+                    visualContextStore?.let { add(VisualFollowupTool(context, it)) }
+                    // OCR scan — "read this", "what does this say", "scan this".
+                    // Before AnalyzeCameraViewTool (richer path) so dedicated OCR
+                    // phrases get the optimised text-extraction prompt.
+                    visualContextStore?.let {
+                        add(OcrScanTool(cameraCapture, OcrPipeline(visionClient), it))
+                    }
+                    // Selfie capture — "take a selfie", "front camera photo".
+                    // Before AnalyzeCameraViewTool so front-camera phrasings route
+                    // correctly.
+                    add(SelfieCaptureTool(context, cameraCapture, visionClient, llmRouter,
+                        visualContextStore))
                     add(AnalyzeCameraViewTool(context, cameraCapture, visionClient, llmRouter))
                     // Audio recording (start/stop/transcribe/summarize)
                     add(AudioRecordingTool(context, recordingManager, transcriber))
@@ -350,7 +407,21 @@ class ToolRegistry constructor(
                     // richer forms win; OpenAppTool catches everything
                     // it doesn't handle.
                     add(com.jarvis.assistant.tools.device.apps.AppActionTool(context))
-                    add(OpenAppTool(context))
+                    // CloseAppTool BEFORE OpenAppTool: "close Spotify" must not
+                    // route to the launcher.  AFTER EndCallTool + ClearNotificationsTool
+                    // so "close the call" and "close notifications" are not intercepted.
+                    // MapsNavigationFollowupTool is registered earlier (in the maps block)
+                    // so "close Maps" during active navigation is already handled.
+                    add(CloseAppTool(context,
+                        resolver = com.jarvis.assistant.tools.device.AppResolver(
+                            context,
+                            com.jarvis.assistant.tools.device.AppAliasStore(context)
+                        ),
+                        recentAppContextStore = recentAppContextStore
+                    ))
+                    add(OpenAppTool(context,
+                        recentAppContextStore = recentAppContextStore
+                    ))
                     add(WebSearchTool(search, settings))
                     // Referential tools — "undo that" / "do the same".  Only
                     // included when a LastActionStore is provided so unit

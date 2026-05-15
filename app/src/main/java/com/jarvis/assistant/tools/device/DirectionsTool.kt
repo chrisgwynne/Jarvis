@@ -1,6 +1,8 @@
 package com.jarvis.assistant.tools.device
 
 import com.jarvis.assistant.maps.MapsCommandRouter
+import com.jarvis.assistant.maps.MapsNavigationContext
+import com.jarvis.assistant.maps.MapsNavigationContextStore
 import com.jarvis.assistant.maps.MapsResult
 import com.jarvis.assistant.maps.TravelMode
 import com.jarvis.assistant.tools.framework.Tool
@@ -21,7 +23,8 @@ import com.jarvis.assistant.tools.framework.ToolSchema
  * degrades gracefully when location isn't available.
  */
 class DirectionsTool(
-    private val router: MapsCommandRouter
+    private val router: MapsCommandRouter,
+    private val navContextStore: MapsNavigationContextStore? = null,
 ) : Tool {
 
     override val name = "directions"
@@ -71,6 +74,9 @@ class DirectionsTool(
         val destination = input.param("destination").trim()
         val mode = runCatching { TravelMode.valueOf(input.param("mode")) }.getOrDefault(TravelMode.DRIVING)
         val res = router.handleDirections(destination, mode)
+        if (res.status == MapsResult.Status.OK) {
+            navContextStore?.update(MapsNavigationContext(destination = destination, mode = mode))
+        }
         return when (res.status) {
             MapsResult.Status.OK     -> ToolResult.Success(res.spokenSummary)
             else                     -> ToolResult.Failure(res.spokenSummary)

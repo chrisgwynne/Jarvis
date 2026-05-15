@@ -20,6 +20,11 @@ import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
@@ -156,6 +161,48 @@ internal enum class SettingsCategory(
         description = "What Jarvis can do and how to ask",
         icon        = Icons.AutoMirrored.Filled.HelpOutline,
         route       = "settings/faq",
+    ),
+    Vision(
+        title       = "Vision",
+        description = "Camera, screenshots, OCR and visual memory",
+        icon        = Icons.Filled.CameraAlt,
+        route       = "settings/vision",
+    ),
+    VisionDiagnostics(
+        title       = "Vision Diagnostics",
+        description = "Test camera capture, OCR and screenshot analysis",
+        icon        = Icons.Filled.BugReport,
+        route       = "settings/vision_diagnostics",
+    ),
+    AppControl(
+        title       = "App Control",
+        description = "Voice commands to open, close, and navigate apps",
+        icon        = Icons.Filled.PhoneAndroid,
+        route       = "settings/app_control",
+    ),
+    AppControlDiagnostics(
+        title       = "App Control Diagnostics",
+        description = "Recent app context, Maps navigation state, accessibility status",
+        icon        = Icons.Filled.BugReport,
+        route       = "settings/app_control_diagnostics",
+    ),
+    SessionDiagnostics(
+        title       = "Session Diagnostics",
+        description = "Live session state, active goals, pending slots and context stores",
+        icon        = Icons.Filled.BugReport,
+        route       = "settings/session_diagnostics",
+    ),
+    TrustAutonomy(
+        title       = "Trust & Autonomy",
+        description = "How Jarvis decides what to do without asking",
+        icon        = Icons.Filled.VerifiedUser,
+        route       = "settings/trust_autonomy",
+    ),
+    TrustDiagnostics(
+        title       = "Trust Diagnostics",
+        description = "Live trust score, autonomy decisions and learned patterns",
+        icon        = Icons.Filled.ManageSearch,
+        route       = "settings/trust_diagnostics",
     ),
 }
 

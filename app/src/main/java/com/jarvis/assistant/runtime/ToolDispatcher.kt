@@ -68,6 +68,19 @@ class ToolDispatcher(
      * to persist.
      */
     private val recentToolCallBuffer: com.jarvis.assistant.core.routines.RecentToolCallBuffer? = null,
+    /**
+     * Optional autonomy engine.  When provided, replaces the inline
+     * RiskClass × ConfidenceTier confirmation heuristic with a full
+     * trust-aware, learned, user-configurable policy.
+     */
+    private val autonomyEngine: com.jarvis.assistant.trust.AutonomyEngine? = null,
+    /**
+     * Provides live trust signals (device lock state, WiFi, car mode, etc.)
+     * at dispatch time.  Only consulted when [autonomyEngine] is present.
+     * Defaults to the baseline context (owner assumed, no extra signals).
+     */
+    private val trustContextProvider: () -> com.jarvis.assistant.trust.TrustContext =
+        { com.jarvis.assistant.trust.TrustContext() },
 ) {
 
     companion object {
@@ -207,32 +220,77 @@ class ToolDispatcher(
             return DispatchResult.Denied(message)
         }
 
-        // ── Confirmation gate ─────────────────────────────────────────────────
-        // Tier × Risk matrix:
-        //   LOW risk       → never confirm (auto-execute)
-        //   MEDIUM risk    → confirm only when confidence is NOT HIGH
-        //   HIGH risk      → always confirm
-        // Legacy callers (no tier passed in) fall back to the old behaviour:
-        // confirm anything that isn't LOW.
-        val risk = tool.riskClass
-        val needsConfirmation = !skipConfirmation && confirmationGate != null && when (risk) {
-            com.jarvis.assistant.tools.framework.RiskClass.LOW    -> false
-            com.jarvis.assistant.tools.framework.RiskClass.HIGH   -> true
-            com.jarvis.assistant.tools.framework.RiskClass.MEDIUM ->
-                confidenceTier != com.jarvis.assistant.audio.stt.TranscriptCorrector.ConfidenceTier.HIGH
-        }
-        if (risk == com.jarvis.assistant.tools.framework.RiskClass.LOW && !skipConfirmation) {
-            Log.d(TAG, "[LOW_RISK_AUTO_EXECUTE] tool=${tool.name}")
-        }
-        if (needsConfirmation) {
-            val registered = confirmationGate!!.registerPending(tool, input, transcript)
-            Log.d(TAG, "[CONFIRMATION_PENDING_CREATED] tool=${tool.name} risk=$risk " +
-                "tier=$confidenceTier pending=${registered.pending.id}")
-            return DispatchResult.NeedsConfirmation(
-                prompt = registered.prompt,
-                pendingId = registered.pending.id,
-                toolName = tool.name,
-            )
+        // ── Autonomy / confirmation gate ──────────────────────────────────────
+        // AutonomyEngine (when wired) makes a trust-aware, learned, user-
+        // configurable decision.  Legacy path (no engine) falls back to the
+        // original RiskClass × ConfidenceTier heuristic.
+        if (!skipConfirmation) {
+            val autonomyDecision: com.jarvis.assistant.trust.AutonomyDecision =
+                if (autonomyEngine != null) {
+                    // Build trust context from available signals
+                    val baseTrustCtx = trustContextProvider()
+                    val ctxWithConfidence = baseTrustCtx.copy(
+                        confidenceHigh = confidenceTier ==
+                            com.jarvis.assistant.audio.stt.TranscriptCorrector.ConfidenceTier.HIGH,
+                        voiceTrust = when (sessionSpeaker.result) {
+                            com.jarvis.assistant.speaker.SpeakerIdentificationResult.MATCHED ->
+                                com.jarvis.assistant.speaker.trust.VoiceTrustState.VOICE_MATCHED
+                            com.jarvis.assistant.speaker.SpeakerIdentificationResult.MISMATCH ->
+                                com.jarvis.assistant.speaker.trust.VoiceTrustState.VOICE_MISMATCH
+                            com.jarvis.assistant.speaker.SpeakerIdentificationResult.UNKNOWN ->
+                                com.jarvis.assistant.speaker.trust.VoiceTrustState.VOICE_UNKNOWN
+                            else ->
+                                com.jarvis.assistant.speaker.trust.VoiceTrustState.OWNER_ASSUMED
+                        },
+                    )
+                    autonomyEngine.evaluate(tool.name, input, ctxWithConfidence)
+                } else {
+                    // Legacy: RiskClass × ConfidenceTier
+                    val risk = tool.riskClass
+                    when {
+                        risk == com.jarvis.assistant.tools.framework.RiskClass.LOW -> {
+                            Log.d(TAG, "[LOW_RISK_AUTO_EXECUTE] tool=${tool.name}")
+                            com.jarvis.assistant.trust.AutonomyDecision.AutoApprove
+                        }
+                        risk == com.jarvis.assistant.tools.framework.RiskClass.HIGH ->
+                            com.jarvis.assistant.trust.AutonomyDecision.Confirm(
+                                com.jarvis.assistant.trust.ConfirmationPromptBuilder
+                                    .build(tool.name, input)
+                            )
+                        confidenceTier ==
+                            com.jarvis.assistant.audio.stt.TranscriptCorrector.ConfidenceTier.HIGH ->
+                            com.jarvis.assistant.trust.AutonomyDecision.AutoApprove
+                        else ->
+                            com.jarvis.assistant.trust.AutonomyDecision.Confirm(
+                                com.jarvis.assistant.trust.ConfirmationPromptBuilder
+                                    .build(tool.name, input)
+                            )
+                    }
+                }
+
+            when (autonomyDecision) {
+                is com.jarvis.assistant.trust.AutonomyDecision.Block -> {
+                    Log.d(TAG, "[AUTONOMY_BLOCK] tool=${tool.name} reason=${autonomyDecision.reason}")
+                    return DispatchResult.Denied(autonomyDecision.reason)
+                }
+                is com.jarvis.assistant.trust.AutonomyDecision.Confirm -> {
+                    if (confirmationGate != null) {
+                        val registered = confirmationGate.registerPending(
+                            tool, input, transcript,
+                            customPrompt = autonomyDecision.prompt,
+                        )
+                        Log.d(TAG, "[CONFIRMATION_PENDING_CREATED] tool=${tool.name} " +
+                            "pending=${registered.pending.id} prompt=\"${autonomyDecision.prompt}\"")
+                        return DispatchResult.NeedsConfirmation(
+                            prompt    = registered.prompt,
+                            pendingId = registered.pending.id,
+                            toolName  = tool.name,
+                        )
+                    }
+                    // No confirmation gate available — fall through to execute anyway
+                }
+                com.jarvis.assistant.trust.AutonomyDecision.AutoApprove -> { /* proceed */ }
+            }
         }
 
         // ── Execute ───────────────────────────────────────────────────────────

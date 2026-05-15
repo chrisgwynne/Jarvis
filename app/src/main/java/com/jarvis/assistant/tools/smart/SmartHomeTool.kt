@@ -17,7 +17,10 @@ import com.jarvis.assistant.util.SettingsStore
  * Returns null from matches() when HA is not configured so the tool is
  * effectively disabled without a base URL and token.
  */
-class SmartHomeTool(private val settings: SettingsStore) : Tool {
+class SmartHomeTool(
+    private val settings: SettingsStore,
+    private val haContextStore: com.jarvis.assistant.session.context.RecentHomeAssistantContextStore? = null,
+) : Tool {
 
     override val name             = "smart_home"
     override val description      = "Control smart home devices via Home Assistant"
@@ -172,6 +175,12 @@ class SmartHomeTool(private val settings: SettingsStore) : Tool {
 
         return try {
             dispatchAction(client, match, action, value)
+            haContextStore?.set(com.jarvis.assistant.session.context.RecentHomeAssistantContext(
+                entityId     = match.entityId,
+                friendlyName = match.friendlyName,
+                domain       = match.domain,
+                lastAction   = action
+            ))
             ToolResult.Success(buildSuccessMessage(action, match, value))
         } catch (e: Exception) {
             Log.w("SmartHomeTool", "HA service call failed: ${e.message}")

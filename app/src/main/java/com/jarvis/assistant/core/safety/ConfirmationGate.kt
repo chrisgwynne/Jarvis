@@ -52,10 +52,15 @@ class ConfirmationGate(
             .filter { it.toolName == toolName && it.expiresAtMs > now }
             .maxByOrNull { it.expiresAtMs }
 
-    fun registerPending(tool: Tool, input: ToolInput, originatingTranscript: String): Registered {
+    fun registerPending(
+        tool: Tool,
+        input: ToolInput,
+        originatingTranscript: String,
+        customPrompt: String? = null,
+    ): Registered {
         expireStale(nowMs())
         val ttl = if (tool.riskClass == RiskClass.HIGH) highTtlMs else mediumTtlMs
-        val prompt = buildPrompt(tool, input)
+        val prompt = customPrompt?.takeIf { it.isNotBlank() } ?: buildPrompt(tool, input)
         val pending = Pending(
             id = UUID.randomUUID().toString(),
             toolName = tool.name,

@@ -125,5 +125,40 @@ fun SettingsScreen(
         composable(SettingsCategory.Faq.route) {
             FaqSettingsScreen(onBack = popToRoot, onClose = onBack)
         }
+        composable(SettingsCategory.Vision.route) {
+            com.jarvis.assistant.ui.settings.screens.VisionSettingsScreen(
+                vm = vm, onBack = popToRoot, onClose = onBack
+            )
+        }
+        composable(SettingsCategory.VisionDiagnostics.route) {
+            com.jarvis.assistant.ui.settings.screens.VisionDiagnosticsScreen(
+                onBack = popToRoot, onClose = onBack
+            )
+        }
+        composable(SettingsCategory.AppControl.route) {
+            com.jarvis.assistant.ui.settings.screens.AppControlSettingsScreen(
+                vm = vm, onBack = popToRoot, onClose = onBack
+            )
+        }
+        composable(SettingsCategory.AppControlDiagnostics.route) {
+            com.jarvis.assistant.ui.settings.screens.AppControlDiagnosticsScreen(
+                onBack = popToRoot, onClose = onBack
+            )
+        }
+        composable(SettingsCategory.SessionDiagnostics.route) {
+            com.jarvis.assistant.ui.settings.screens.SessionDiagnosticsScreen(
+                onBack = popToRoot, onClose = onBack
+            )
+        }
+        composable(SettingsCategory.TrustAutonomy.route) {
+            com.jarvis.assistant.ui.settings.screens.TrustAutonomySettingsScreen(
+                onBack = popToRoot, onClose = onBack
+            )
+        }
+        composable(SettingsCategory.TrustDiagnostics.route) {
+            com.jarvis.assistant.ui.settings.screens.TrustDiagnosticsScreen(
+                onBack = popToRoot, onClose = onBack
+            )
+        }
     }
 }

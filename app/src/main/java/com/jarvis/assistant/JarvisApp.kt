@@ -110,6 +110,85 @@ class JarvisApp : Application() {
         lateinit var preferenceEngine
             : com.jarvis.assistant.preferences.ResponsePreferenceEngine
             internal set
+
+        /**
+         * Process-wide visual context store — holds the most recent image/screenshot
+         * Jarvis has seen.  Read by the Settings diagnostics screen and written by
+         * all vision tools (camera, screenshot, wearable) at runtime.
+         */
+        @Volatile
+        lateinit var visualContextStore
+            : com.jarvis.assistant.vision.VisualContextStore
+            private set
+
+        /**
+         * Tracks the most recently opened app so referential close commands
+         * ("close it", "close that") have something to resolve against.
+         * Set by [OpenAppTool] on every successful launch; consumed by [CloseAppTool].
+         */
+        @Volatile
+        lateinit var recentAppContextStore
+            : com.jarvis.assistant.tools.device.RecentAppContextStore
+            private set
+
+        /**
+         * Tracks the active Maps navigation destination + mode set by
+         * [NavigateTool] or [DirectionsTool].  Consumed by
+         * [MapsNavigationFollowupTool] for "go", "start it", "switch to walking", etc.
+         */
+        @Volatile
+        lateinit var mapsNavigationContextStore
+            : com.jarvis.assistant.maps.MapsNavigationContextStore
+            private set
+
+        // ── Session Intelligence context stores ──────────────────────────────
+
+        @Volatile
+        lateinit var recentCalendarContextStore
+            : com.jarvis.assistant.session.context.RecentCalendarContextStore
+            private set
+
+        @Volatile
+        lateinit var recentMessageContextStore
+            : com.jarvis.assistant.session.context.RecentMessageContextStore
+            private set
+
+        @Volatile
+        lateinit var recentHaContextStore
+            : com.jarvis.assistant.session.context.RecentHomeAssistantContextStore
+            private set
+
+        @Volatile
+        lateinit var recentTodoistContextStore
+            : com.jarvis.assistant.session.context.RecentTodoistContextStore
+            private set
+
+        @Volatile
+        lateinit var recentProactiveContextStore
+            : com.jarvis.assistant.session.context.RecentProactiveContextStore
+            private set
+
+        /** Single source of truth for the current session state. */
+        @Volatile
+        lateinit var sessionStateEngine
+            : com.jarvis.assistant.session.SessionStateEngine
+            private set
+
+        // ── Trust & Autonomy ──────────────────────────────────────────────
+        @Volatile
+        lateinit var autonomySettingsRepo
+            : com.jarvis.assistant.trust.AutonomySettingsRepository
+            private set
+
+        @Volatile
+        lateinit var learnedTrustStore
+            : com.jarvis.assistant.trust.LearnedTrustStore
+            private set
+
+        @Volatile
+        lateinit var autonomyEngine
+            : com.jarvis.assistant.trust.AutonomyEngine
+            private set
     }
 
     override fun onCreate() {
@@ -160,6 +239,23 @@ class JarvisApp : Application() {
         // ambientEmitter is created by JarvisRuntime.initialize() and assigned
         // back here via JarvisApp.ambientEmitter = ... so it is always live by
         // the time the Settings UI tries to read diagnostics.
+        visualContextStore = com.jarvis.assistant.vision.VisualContextStore()
+        recentAppContextStore       = com.jarvis.assistant.tools.device.RecentAppContextStore()
+        mapsNavigationContextStore  = com.jarvis.assistant.maps.MapsNavigationContextStore()
+        recentCalendarContextStore  = com.jarvis.assistant.session.context.RecentCalendarContextStore()
+        recentMessageContextStore   = com.jarvis.assistant.session.context.RecentMessageContextStore()
+        recentHaContextStore        = com.jarvis.assistant.session.context.RecentHomeAssistantContextStore()
+        recentTodoistContextStore   = com.jarvis.assistant.session.context.RecentTodoistContextStore()
+        recentProactiveContextStore = com.jarvis.assistant.session.context.RecentProactiveContextStore()
+        sessionStateEngine          = com.jarvis.assistant.session.SessionStateEngine()
+        autonomySettingsRepo = com.jarvis.assistant.trust.AutonomySettingsRepository(
+            com.jarvis.assistant.util.SettingsStore(this)
+        )
+        learnedTrustStore = com.jarvis.assistant.trust.LearnedTrustStore(this)
+        autonomyEngine    = com.jarvis.assistant.trust.AutonomyEngine(
+            settingsRepo  = autonomySettingsRepo,
+            learnedStore  = learnedTrustStore,
+        )
         createNotificationChannel()
         // Install the GitHub issue reporter FIRST so it wraps the thread
         // default uncaught-exception handler before any other subsystem has a

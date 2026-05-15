@@ -246,6 +246,10 @@ class JarvisRuntime(
     // Phase 8 — Context-aware follow-ups
     private lateinit var followUpCoordinator : FollowUpCoordinator
 
+    // Phase 8.5 — Session intelligence (continuation phrases, slot resolution)
+    private lateinit var sessionIntelligenceCoordinator
+        : com.jarvis.assistant.session.SessionIntelligenceCoordinator
+
     // Audio pipeline
     private val speechCapture  = SpeechCapture(context)
     // Shared contact-aware STT post-processor.  Wired into [speechCapture]'s
@@ -656,9 +660,12 @@ class JarvisRuntime(
             planRunnerProvider     = { if (::planRunner.isInitialized) planRunner else null },
             expectationStore       = expectationStore,
             sharedContacts         = sharedContactLookup, // A2: one ContactLookup for whole runtime
-            openClawRepo           = openClawRepo,        // enables OpenClawStatusTool
-            profileMemory          = profileMemory,       // enables PersonalFactTool
-            preferenceEngine       = this.preferenceEngine,
+            openClawRepo               = openClawRepo,        // enables OpenClawStatusTool
+            profileMemory              = profileMemory,       // enables PersonalFactTool
+            preferenceEngine           = this.preferenceEngine,
+            visualContextStore         = com.jarvis.assistant.JarvisApp.visualContextStore,
+            recentAppContextStore      = com.jarvis.assistant.JarvisApp.recentAppContextStore,
+            mapsNavigationContextStore = com.jarvis.assistant.JarvisApp.mapsNavigationContextStore,
         )
         toolDispatcher = ToolDispatcher(
             context,
@@ -674,7 +681,15 @@ class JarvisRuntime(
             // records nothing, which matches legacy behaviour.
             actionLedgerProvider = { sharedActionLedger },
             confirmationGate = confirmationGate,
-            recentToolCallBuffer = recentToolCallBuffer
+            recentToolCallBuffer = recentToolCallBuffer,
+            autonomyEngine = try {
+                com.jarvis.assistant.JarvisApp.autonomyEngine
+            } catch (_: UninitializedPropertyAccessException) { null },
+            trustContextProvider = {
+                com.jarvis.assistant.trust.TrustContext(
+                    isCarMode = drivingModeManager.isDriving,
+                )
+            },
         )
         memoryPolicy = com.jarvis.assistant.core.decisions.MemoryPolicy(
             profileMemory = profileMemory,
@@ -709,6 +724,23 @@ class JarvisRuntime(
             contactLookup       = sharedContactLookup,  // A2: shared instance
             reminderRepository  = reminderRepo,
             settings            = settings
+        )
+
+        // Phase 8.5 — Session intelligence
+        val app = com.jarvis.assistant.JarvisApp
+        sessionIntelligenceCoordinator = com.jarvis.assistant.session.SessionIntelligenceCoordinator(
+            context            = context,
+            sessionStateEngine = app.sessionStateEngine,
+            contextBundle      = com.jarvis.assistant.session.context.ContextBundle(
+                visual         = app.visualContextStore,
+                mapsNavigation = app.mapsNavigationContextStore,
+                recentApp      = app.recentAppContextStore,
+                message        = app.recentMessageContextStore,
+                calendar       = app.recentCalendarContextStore,
+                homeAssistant  = app.recentHaContextStore,
+                todoist        = app.recentTodoistContextStore,
+                proactive      = app.recentProactiveContextStore,
+            )
         )
 
         // User-visible Proactivity settings (master toggle, categories,
@@ -1591,6 +1623,7 @@ class JarvisRuntime(
                 sessionOpen = true
                 memoryWriter.openSession(sessionId)
                 followUpCoordinator.entityTracker.clear()
+                sessionIntelligenceCoordinator.onSessionStarted(sessionId)
 
                 machine.transitionAnd(JarvisState.WakeDetected) { syncState(JarvisState.WakeDetected) }
 
@@ -2973,6 +3006,36 @@ class JarvisRuntime(
                         }
                     }
 
+                    // ── Phase 8.5: Session Intelligence ───────────────────────
+                    // Resolves continuation phrases ("turn it off", "move that
+                    // to Friday", "reply yes") and pending slot answers.
+                    // Runs only when FollowUpCoordinator returned PassThrough.
+                    val siResult = withContext(Dispatchers.IO) {
+                        sessionIntelligenceCoordinator.process(transcript)
+                    }
+                    LatencyTracker.mark("SESSION_INTELLIGENCE_CHECKED")
+                    when (siResult) {
+                        is FlowResult.AwaitingInput -> {
+                            speakAndRecord(siResult.prompt)
+                            machine.transition(JarvisState.Listening)
+                            syncState(JarvisState.Listening)
+                            continue
+                        }
+                        is FlowResult.Complete -> {
+                            speakAndRecord(siResult.response)
+                            machine.transition(JarvisState.Listening)
+                            syncState(JarvisState.Listening)
+                            continue
+                        }
+                        is FlowResult.Cancelled -> {
+                            speakAndRecord(siResult.message)
+                            machine.transition(JarvisState.Listening)
+                            syncState(JarvisState.Listening)
+                            continue
+                        }
+                        FlowResult.PassThrough -> { /* fall through */ }
+                    }
+
                     // ── Intent classifier (memory / reminder pre-filter) ───────
                     machine.transition(JarvisState.Thinking)
                     syncState(JarvisState.Thinking)
@@ -4245,6 +4308,7 @@ class JarvisRuntime(
     private fun flushSessionToDb() {
         if (!sessionOpen) return
         sessionOpen = false
+        sessionIntelligenceCoordinator.onSessionEnded()
         val id = sessionId
         // NonCancellable so a stop() called from a cancelled scope still
         // completes the DB writes, and a 2 s ceiling so a stuck IO threadpool

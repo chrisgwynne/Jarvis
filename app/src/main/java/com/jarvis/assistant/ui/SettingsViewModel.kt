@@ -622,4 +622,54 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setGithubToken(v: String)     { _githubToken.value = v;     store.githubToken = v }
     fun setGithubRepoOwner(v: String) { _githubRepoOwner.value = v; store.githubRepoOwner = v }
     fun setGithubRepoName(v: String)  { _githubRepoName.value = v;  store.githubRepoName = v }
+
+    // ── Vision state ───────────────────────────────────────────────────────
+
+    private val _visionEnabled                       = MutableStateFlow(store.visionEnabled)
+    val visionEnabled: StateFlow<Boolean>            = _visionEnabled.asStateFlow()
+
+    private val _preferPhoneCamera                   = MutableStateFlow(store.preferPhoneCamera)
+    val preferPhoneCamera: StateFlow<Boolean>        = _preferPhoneCamera.asStateFlow()
+
+    private val _visionAutoFallbackToPhone           = MutableStateFlow(store.visionAutoFallbackToPhone)
+    val visionAutoFallbackToPhone: StateFlow<Boolean> = _visionAutoFallbackToPhone.asStateFlow()
+
+    private val _screenshotAnalysisEnabled           = MutableStateFlow(store.screenshotAnalysisEnabled)
+    val screenshotAnalysisEnabled: StateFlow<Boolean> = _screenshotAnalysisEnabled.asStateFlow()
+
+    private val _screenshotListenerEnabled           = MutableStateFlow(store.screenshotListenerEnabled)
+    val screenshotListenerEnabled: StateFlow<Boolean> = _screenshotListenerEnabled.asStateFlow()
+
+    private val _ocrEnabled                          = MutableStateFlow(store.ocrEnabled)
+    val ocrEnabled: StateFlow<Boolean>               = _ocrEnabled.asStateFlow()
+
+    private val _saveVisualContext                   = MutableStateFlow(store.saveVisualContext)
+    val saveVisualContext: StateFlow<Boolean>        = _saveVisualContext.asStateFlow()
+
+    private val _visualMemoryRetentionDays           = MutableStateFlow(store.visualMemoryRetentionDays)
+    val visualMemoryRetentionDays: StateFlow<Int>    = _visualMemoryRetentionDays.asStateFlow()
+
+    fun setVisionEnabled(v: Boolean)               { _visionEnabled.value = v;               store.visionEnabled = v }
+    fun setPreferPhoneCamera(v: Boolean)           { _preferPhoneCamera.value = v;           store.preferPhoneCamera = v }
+    fun setVisionAutoFallbackToPhone(v: Boolean)   { _visionAutoFallbackToPhone.value = v;   store.visionAutoFallbackToPhone = v }
+    fun setScreenshotAnalysisEnabled(v: Boolean)   { _screenshotAnalysisEnabled.value = v;   store.screenshotAnalysisEnabled = v }
+    fun setScreenshotListenerEnabled(v: Boolean)   { _screenshotListenerEnabled.value = v;   store.screenshotListenerEnabled = v }
+    fun setOcrEnabled(v: Boolean)                  { _ocrEnabled.value = v;                  store.ocrEnabled = v }
+    fun setSaveVisualContext(v: Boolean)            { _saveVisualContext.value = v;            store.saveVisualContext = v }
+    fun setVisualMemoryRetentionDays(v: Int)        { _visualMemoryRetentionDays.value = v;   store.visualMemoryRetentionDays = v }
+
+    // ── App control ───────────────────────────────────────────────────────────
+
+    private val _appControlEnabled              = MutableStateFlow(store.appControlEnabled)
+    val appControlEnabled: StateFlow<Boolean>   = _appControlEnabled.asStateFlow()
+
+    private val _allowAccessibilityAppControl            = MutableStateFlow(store.allowAccessibilityAppControl)
+    val allowAccessibilityAppControl: StateFlow<Boolean> = _allowAccessibilityAppControl.asStateFlow()
+
+    private val _allowAppClose              = MutableStateFlow(store.allowAppClose)
+    val allowAppClose: StateFlow<Boolean>   = _allowAppClose.asStateFlow()
+
+    fun setAppControlEnabled(v: Boolean)             { _appControlEnabled.value = v;             store.appControlEnabled = v }
+    fun setAllowAccessibilityAppControl(v: Boolean)  { _allowAccessibilityAppControl.value = v;  store.allowAccessibilityAppControl = v }
+    fun setAllowAppClose(v: Boolean)                 { _allowAppClose.value = v;                 store.allowAppClose = v }
 }

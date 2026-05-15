@@ -21,6 +21,7 @@ import com.jarvis.assistant.tools.framework.ToolSchema
 class ReadSmsTool(
     private val context: Context,
     private val contacts: ContactLookup,
+    private val messageContextStore: com.jarvis.assistant.session.context.RecentMessageContextStore? = null,
 ) : Tool {
 
     override val name = "read_sms"
@@ -101,8 +102,23 @@ class ReadSmsTool(
                 if (results.isEmpty()) ToolResult.Success(
                     if (numberFilter != null) "No messages from $from."
                     else "No messages found."
-                )
-                else ToolResult.Success(results.joinToString("; "))
+                ) else {
+                    // Store the most recent message as context for follow-up replies
+                    c.moveToFirst()
+                    val firstAddr = c.getString(0) ?: ""
+                    val firstBody = c.getString(1)?.trim() ?: ""
+                    val resolvedSender = if (from.isNotBlank()) from
+                        else contacts.find(firstAddr)?.displayName ?: firstAddr
+                    messageContextStore?.set(
+                        com.jarvis.assistant.session.context.RecentMessageContext(
+                            sender       = resolvedSender,
+                            senderNumber = firstAddr,
+                            body         = firstBody,
+                            channel      = com.jarvis.assistant.session.context.MessageChannel.SMS
+                        )
+                    )
+                    ToolResult.Success(results.joinToString("; "))
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Read SMS failed", e)

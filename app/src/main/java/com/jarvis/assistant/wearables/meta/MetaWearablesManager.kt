@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * MetaWearablesManager — the single entry point the rest of Jarvis
@@ -99,16 +101,77 @@ class MetaWearablesManager(
             "backend=${providerImpl::class.simpleName} state=${providerImpl.currentState}")
     }
 
-    /** Connect, opening a camera session if [withCamera] is true. */
+    /**
+     * Connect, opening a camera session if [withCamera] is true.
+     *
+     * The DAT SDK's `session.start()` is sync fire-and-forget — it
+     * transitions to STARTING immediately and the real connection
+     * completes asynchronously.  We therefore:
+     *
+     *   1. Kick the device-level connect (createSession + start).
+     *   2. **Await** state ≥ CONNECTED (or terminal) with a bounded
+     *      timeout.  Returning before that gives the user the
+     *      false-negative they saw: state CONNECTING, caller reports
+     *      "couldn't connect".
+     *   3. Open the camera session if requested.
+     *   4. **Await** state CAMERA_READY / STREAMING (still bounded).
+     *   5. Return true iff the final state is capture-ready.
+     */
     suspend fun connect(withCamera: Boolean = true): Boolean {
         val s = settingsProvider()
         if (!s.enabled) {
             Log.d(TAG, "[META_WEARABLES_DISABLED] state=$currentState")
             return false
         }
-        val ok = deviceProvider.connect()
-        if (ok && withCamera) cameraProvider.startCameraSession()
-        return ok && currentState.isReadyForCapture
+        val kicked = deviceProvider.connect()
+        if (!kicked) {
+            Log.d(TAG, "[META_WEARABLES_CONNECT_REJECTED] state=$currentState")
+            return false
+        }
+        // Wait for the device to actually finish connecting.  CONNECTED
+        // (= DeviceSessionState.STARTED) is the target; CONNECTING (=
+        // STARTING/PAUSED) is in-flight; DISCONNECTED / ERROR / DISABLED
+        // / SDK_UNAVAILABLE are terminal failures.
+        val connectedOk = withTimeoutOrNull(CONNECT_TIMEOUT_MS) {
+            deviceProvider.stateFlow.first { state ->
+                state == MetaWearablesState.CONNECTED ||
+                    state == MetaWearablesState.CAMERA_READY ||
+                    state == MetaWearablesState.STREAMING ||
+                    state == MetaWearablesState.DISCONNECTED ||
+                    state == MetaWearablesState.ERROR ||
+                    state == MetaWearablesState.DISABLED ||
+                    state == MetaWearablesState.SDK_UNAVAILABLE
+            }.let { final ->
+                final == MetaWearablesState.CONNECTED ||
+                    final == MetaWearablesState.CAMERA_READY ||
+                    final == MetaWearablesState.STREAMING
+            }
+        } == true
+
+        if (!connectedOk) {
+            Log.d(TAG, "[META_WEARABLES_CONNECT_TIMEOUT_OR_FAIL] state=$currentState")
+            return false
+        }
+        if (!withCamera) return true
+
+        // Camera session: same wait pattern.  startCameraSession is
+        // itself synchronous-ish (returns once addStream + stream.start
+        // have been issued), but the stream's STARTING → STARTED →
+        // STREAMING progression is async.  CAMERA_READY = the camera
+        // is usable for capture; STREAMING = also fine.
+        cameraProvider.startCameraSession()
+        val ready = withTimeoutOrNull(CAMERA_TIMEOUT_MS) {
+            deviceProvider.stateFlow.first { state ->
+                state.isReadyForCapture ||
+                    state == MetaWearablesState.DISCONNECTED ||
+                    state == MetaWearablesState.ERROR
+            }.isReadyForCapture
+        } == true
+        if (!ready) {
+            Log.d(TAG, "[META_WEARABLES_CAMERA_TIMEOUT_OR_FAIL] state=$currentState")
+            return false
+        }
+        return true
     }
 
     suspend fun disconnect() = deviceProvider.disconnect()
@@ -231,5 +294,11 @@ class MetaWearablesManager(
         override fun clearRecent()                    = Unit
     }
 
-    companion object { private const val TAG = "MetaWearablesMgr" }
+    companion object {
+        private const val TAG = "MetaWearablesMgr"
+        /** Max time to wait for the device session to reach CONNECTED. */
+        private const val CONNECT_TIMEOUT_MS = 15_000L
+        /** Max time to wait for the camera session to reach CAMERA_READY. */
+        private const val CAMERA_TIMEOUT_MS  = 10_000L
+    }
 }

@@ -261,14 +261,15 @@ class CalendarTool(private val context: Context) : Tool {
             CalendarContract.Instances.SELF_ATTENDEE_STATUS,
         )
 
-        // Exclude deleted events; include visible calendars only.
-        // We leave SELF_ATTENDEE_STATUS filtering to the loop so we can log each exclusion.
-        val selection = "${CalendarContract.Instances.DELETED} = 0"
-
+        // Instances is a virtual view — the provider already excludes deleted events
+        // and only returns instances from visible calendars.  Passing a WHERE clause
+        // with Instances.DELETED causes the virtual table to return 0 rows silently
+        // (the column is not filterable in the Instances view layer).
+        // Declined events are filtered below using SELF_ATTENDEE_STATUS.
         val cursor = context.contentResolver.query(
             instancesUri,
             projection,
-            selection,
+            null,
             null,
             "${CalendarContract.Instances.BEGIN} ASC"
         ) ?: run {

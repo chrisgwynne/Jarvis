@@ -357,7 +357,7 @@ private suspend fun runDiagnostic(context: Context): DiagResult = withContext(Di
         val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
         val cursor = context.contentResolver.query(
             instancesUri, proj,
-            "${CalendarContract.Instances.DELETED} = 0",
+            null,   // Instances view already excludes deleted; DELETED in WHERE silently returns 0
             null,
             "${CalendarContract.Instances.BEGIN} ASC",
         )

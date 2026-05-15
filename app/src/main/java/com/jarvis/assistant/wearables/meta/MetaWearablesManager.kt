@@ -145,13 +145,13 @@ class MetaWearablesManager(
 
     /**
      * Probe for the DAT SDK by trying to load its canonical entry
-     * point (`com.meta.wearable.mwdat.objects.Wearables` as of
+     * point (`com.meta.wearable.dat.objects.Wearables` as of
      * mwdat-core v0.7).  ClassNotFoundException = SDK absent
      * (developer hasn't configured `github_token` in local.properties)
      * → stub stays active.
      */
     private fun sdkPresent(): Boolean = try {
-        Class.forName("com.meta.wearable.mwdat.objects.Wearables", false,
+        Class.forName("com.meta.wearable.dat.objects.Wearables", false,
             this::class.java.classLoader)
         true
     } catch (_: ClassNotFoundException) { false }

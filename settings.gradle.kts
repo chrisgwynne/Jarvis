@@ -23,13 +23,24 @@ plugins {
 // the StubMetaWearablesProvider stays the active backend, and the app still
 // builds — the failure surfaces as a clear "Could not resolve" error during
 // Gradle sync rather than a silent runtime miss.
-val githubToken: String? = run {
-    System.getenv("GITHUB_TOKEN")?.takeIf { it.isNotBlank() }
-        ?: Properties().apply {
-            val f = file("local.properties")
-            if (f.exists()) FileInputStream(f).use { load(it) }
-        }.getProperty("github_token")?.takeIf { it.isNotBlank() }
+val localProps: Properties = Properties().apply {
+    val f = file("local.properties")
+    if (f.exists()) FileInputStream(f).use { load(it) }
 }
+
+val githubToken: String? =
+    System.getenv("GITHUB_TOKEN")?.takeIf { it.isNotBlank() }
+        ?: localProps.getProperty("github_token")?.takeIf { it.isNotBlank() }
+
+// GitHub Packages **requires** the GitHub username of the token owner
+// as the credential username (HTTP Basic auth).  Using a placeholder
+// like "token" gets a 401.  Default to the repo owner — overridable
+// per-developer via `github_username=<their-handle>` in
+// local.properties or a $GITHUB_USERNAME env var.
+val githubUsername: String =
+    System.getenv("GITHUB_USERNAME")?.takeIf { it.isNotBlank() }
+        ?: localProps.getProperty("github_username")?.takeIf { it.isNotBlank() }
+        ?: "chrisgwynne"
 
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
@@ -44,10 +55,7 @@ dependencyResolutionManagement {
                 name = "MetaWearablesDatGitHubPackages"
                 url = uri("https://maven.pkg.github.com/facebook/meta-wearables-dat-android")
                 credentials {
-                    // GitHub Packages uses Basic auth: username is anything
-                    // non-empty, password is the PAT.  We use the literal
-                    // word "token" by convention.
-                    username = "token"
+                    username = githubUsername
                     password = githubToken
                 }
             }

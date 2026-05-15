@@ -3,20 +3,35 @@ package com.jarvis.assistant.wearables.meta
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
-import com.meta.wearable.dat.camera.CaptureError
-import com.meta.wearable.dat.camera.PhotoData
+import com.meta.wearable.dat.camera.types.CaptureError
+import com.meta.wearable.dat.camera.types.PhotoData
 import com.meta.wearable.dat.camera.Stream
-import com.meta.wearable.dat.camera.StreamConfiguration
-import com.meta.wearable.dat.camera.StreamError
-import com.meta.wearable.dat.camera.StreamState
-import com.meta.wearable.dat.camera.VideoFrame
-import com.meta.wearable.dat.camera.VideoQuality
-import com.meta.wearable.dat.objects.Wearables
-import com.meta.wearable.dat.selectors.AutoDeviceSelector
-import com.meta.wearable.dat.session.DeviceSession
-import com.meta.wearable.dat.session.DeviceSessionError
-import com.meta.wearable.dat.session.DeviceSessionState
-import com.meta.wearable.dat.types.DatResult
+import com.meta.wearable.dat.camera.types.StreamConfiguration
+import com.meta.wearable.dat.camera.types.StreamError
+import com.meta.wearable.dat.camera.types.StreamState
+import com.meta.wearable.dat.camera.types.VideoFrame
+import com.meta.wearable.dat.camera.types.VideoQuality
+import com.meta.wearable.dat.core.Wearables
+import com.meta.wearable.dat.core.selectors.AutoDeviceSelector
+import com.meta.wearable.dat.core.session.DeviceSession
+import com.meta.wearable.dat.core.types.DeviceSessionError
+import com.meta.wearable.dat.core.session.DeviceSessionState
+import com.meta.wearable.dat.core.types.DatResult
+// DatResult's `fold` / `getOrElse` / `onFailure` are MEMBER functions
+// of the inline value class (per dexdump: `fold-impl`,
+// `getOrElse-impl`, `onFailure-QAxQwbw`), not top-level extensions —
+// so no separate imports for them.  The Kotlin compiler infers the
+// error type parameter (DeviceSessionError / CaptureError / etc.)
+// from the value class's type parameter as long as the result of
+// `Wearables.createSession(...)` is treated as DatResult<T, E>.
+//
+// addStream / removeStream / addDisplay / removeDisplay are top-level
+// extension functions on DeviceSession defined in
+// SessionStreamExtensionsKt within the mwdat-camera artifact.
+// Importing them brings the receiver-shaped form
+// `session.addStream(...)` into scope.
+import com.meta.wearable.dat.camera.addStream
+import com.meta.wearable.dat.camera.removeStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -90,15 +105,19 @@ class RealMetaWearablesProvider(
 
     init {
         Log.d(TAG, "[META_WEARABLES_INIT] backend=real version=0.7")
-        when (val r = Wearables.initialize(context)) {
-            is DatResult.Success -> {
-                Log.d(TAG, "[META_WEARABLES_INIT] Wearables.initialize → Success")
-            }
-            is DatResult.Failure -> {
-                Log.w(TAG, "[META_WEARABLES_ERROR] init failed: ${r.error}")
-                lastError = r.error.toString()
-                _stateFlow.value = MetaWearablesState.ERROR
-            }
+        // DatResult is a Kotlin inline value class.  Its fold / getOrElse
+        // members are shadowed by kotlin.Result's same-named extensions
+        // because both wrap Any at the JVM level.  Use errorOrNull
+        // (a DatResult member with no stdlib namesake) instead —
+        // null == success.  initialize returns DatResult<Unit,...>;
+        // success "value" is just Unit so we don't need to capture it.
+        val initErr = Wearables.initialize(context).errorOrNull()
+        if (initErr == null) {
+            Log.d(TAG, "[META_WEARABLES_INIT] Wearables.initialize → Success")
+        } else {
+            Log.w(TAG, "[META_WEARABLES_ERROR] init failed: $initErr")
+            lastError = initErr.toString()
+            _stateFlow.value = MetaWearablesState.ERROR
         }
     }
 
@@ -118,20 +137,23 @@ class RealMetaWearablesProvider(
         Log.d(TAG, "[META_WEARABLES_CONNECT_START] backend=real")
         _stateFlow.value = MetaWearablesState.CONNECTING
 
-        val created = Wearables.createSession(AutoDeviceSelector())
-        val newSession: DeviceSession = when (created) {
-            is DatResult.Success -> created.value
-            is DatResult.Failure -> {
-                val err = created.error
-                Log.w(TAG, "[META_WEARABLES_ERROR] createSession failed: $err")
-                lastError = err.toString()
-                _stateFlow.value = when (err) {
-                    DeviceSessionError.NO_ELIGIBLE_DEVICE -> MetaWearablesState.DISCONNECTED
-                    DeviceSessionError.SESSION_ALREADY_EXISTS -> MetaWearablesState.CONNECTED
-                    else -> MetaWearablesState.ERROR
-                }
-                return false
+        // DatResult is an inline value class whose `getOrElse` member is
+        // shadowed by kotlin.Result.getOrElse (an extension function on
+        // kotlin.Result that takes Throwable).  Both wrap Any at the
+        // JVM level so the compiler can't disambiguate by signature.
+        // We sidestep by using `getOrNull` + `errorOrNull` — both are
+        // DatResult members with no kotlin.Result namesake.
+        val createRes = Wearables.createSession(AutoDeviceSelector())
+        val newSession: DeviceSession = createRes.getOrNull() ?: run {
+            val err = createRes.errorOrNull() as? DeviceSessionError
+            Log.w(TAG, "[META_WEARABLES_ERROR] createSession failed: $err")
+            lastError = err.toString()
+            _stateFlow.value = when (err) {
+                DeviceSessionError.NO_ELIGIBLE_DEVICE     -> MetaWearablesState.DISCONNECTED
+                DeviceSessionError.SESSION_ALREADY_EXISTS -> MetaWearablesState.CONNECTED
+                else                                      -> MetaWearablesState.ERROR
             }
+            return false
         }
         session = newSession
 
@@ -193,32 +215,32 @@ class RealMetaWearablesProvider(
                 MetaWearablesState.STREAMING,
             )) return false
 
-        // 1. Register the stream capability.
-        val newStream: Stream = when (val res = s.addStream(StreamConfiguration(
+        // 1. Register the stream capability.  Same getOrNull pattern as
+        //    the createSession path above — avoids the kotlin.Result
+        //    getOrElse shadowing.
+        val addRes = s.addStream(StreamConfiguration(
             videoQuality   = VideoQuality.MEDIUM,
             frameRate      = 24,
             compressVideo  = false,        // we want decoded YUV → Bitmap-friendly
-        ))) {
-            is DatResult.Success -> res.value
-            is DatResult.Failure -> {
-                Log.w(TAG, "[META_WEARABLES_ERROR] addStream failed: ${res.error}")
-                lastError = res.error.toString()
-                return false
-            }
+        ))
+        val newStream: Stream = addRes.getOrNull() ?: run {
+            val err = addRes.errorOrNull()
+            Log.w(TAG, "[META_WEARABLES_ERROR] addStream failed: $err")
+            lastError = err.toString()
+            return false
         }
         stream = newStream
 
         // 2. Activate the camera.  The SDK requires both addStream() AND
         //    Stream.start() — only then does the device wake up.
-        when (val r = newStream.start()) {
-            is DatResult.Success -> Unit
-            is DatResult.Failure -> {
-                Log.w(TAG, "[META_WEARABLES_ERROR] stream.start failed: ${r.error}")
-                lastError = r.error.toString()
-                stream = null
-                s.removeStream()
-                return false
-            }
+        val startRes = newStream.start()
+        val startErr = startRes.errorOrNull()
+        if (startErr != null) {
+            Log.w(TAG, "[META_WEARABLES_ERROR] stream.start failed: $startErr")
+            lastError = startErr.toString()
+            stream = null
+            s.removeStream()
+            return false
         }
 
         // 3. Observe the stream's own state machine.  StreamState
@@ -298,34 +320,30 @@ class RealMetaWearablesProvider(
         val prior = _stateFlow.value
         _stateFlow.value = MetaWearablesState.CAPTURING
         try {
-            val result = s.capturePhoto()
-            return when (result) {
-                is DatResult.Success -> {
-                    val path = savePhoto(result.value)
-                    if (path != null) {
-                        recent.set(
-                            RecentVisualContext(
-                                source      = RecentVisualContext.Source.META_GLASSES,
-                                mediaType   = RecentVisualContext.MediaType.PHOTO,
-                                uri         = path,
-                                timestampMs = System.currentTimeMillis(),
-                            )
+            val captureRes = s.capturePhoto()
+            val photo = captureRes.getOrNull()
+            return if (photo != null) {
+                val path = savePhoto(photo)
+                if (path != null) {
+                    recent.set(
+                        RecentVisualContext(
+                            source      = RecentVisualContext.Source.META_GLASSES,
+                            mediaType   = RecentVisualContext.MediaType.PHOTO,
+                            uri         = path,
+                            timestampMs = System.currentTimeMillis(),
                         )
-                        Log.d(TAG, "[META_CAMERA_PHOTO_CAPTURED] backend=real path=$path")
-                    } else {
-                        Log.w(TAG, "[META_WEARABLES_ERROR] photo received but save failed")
-                    }
-                    path
+                    )
+                    Log.d(TAG, "[META_CAMERA_PHOTO_CAPTURED] backend=real path=$path")
+                } else {
+                    Log.w(TAG, "[META_WEARABLES_ERROR] photo received but save failed")
                 }
-                is DatResult.Failure -> {
-                    val e = result.error
-                    val desc = e.description
-                    Log.w(TAG, "[META_WEARABLES_ERROR] capturePhoto failed: $desc")
-                    lastError = desc
-                    // CaptureError.NotStreaming shouldn't fire after our
-                    // first {} wait above, but if it does we surface it.
-                    null
-                }
+                path
+            } else {
+                val err = captureRes.errorOrNull() as? CaptureError
+                val desc = err?.description ?: "unknown capture error"
+                Log.w(TAG, "[META_WEARABLES_ERROR] capturePhoto failed: $desc")
+                lastError = desc
+                null
             }
         } finally {
             // Don't smash CAPTURING back to a state lower than it actually

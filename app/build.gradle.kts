@@ -235,9 +235,21 @@ val mwdatSrcEnabled: Boolean = (System.getenv("GITHUB_TOKEN")?.isNotBlank() == t
             .getProperty("github_token")?.isNotBlank() == true
     }
 if (mwdatSrcEnabled) {
-    android.sourceSets.getByName("main").java.srcDir("src/mwdat/java")
-    logger.lifecycle("[META_WEARABLES] Including src/mwdat/java source set " +
-        "(github_token present → DAT SDK available).")
+    // AGP 9 + Kotlin 2.2: a Kotlin Android source set exposes BOTH
+    // a `java` and a `kotlin` SourceDirectorySet on the same
+    // AndroidSourceSet.  `java.srcDir(...)` alone does NOT pull in
+    // .kt files — those need `kotlin.srcDir(...)` registered on the
+    // same source set.  This was a silent failure in the first wiring
+    // commit — the file compiled to nothing, the SDK was bundled but
+    // never referenced, and the runtime probe correctly reported
+    // SDK_UNAVAILABLE.
+    val mwdatSrcPath = "src/mwdat/java"
+    android.sourceSets.named("main").configure {
+        java.srcDir(mwdatSrcPath)
+        kotlin.srcDir(mwdatSrcPath)
+    }
+    logger.lifecycle("[META_WEARABLES] Including $mwdatSrcPath in main source set " +
+        "(java + kotlin) — github_token present → DAT SDK available.")
 }
 
 /**

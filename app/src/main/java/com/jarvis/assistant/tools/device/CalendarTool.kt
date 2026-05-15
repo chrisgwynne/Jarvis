@@ -19,33 +19,32 @@ import java.util.Locale
 import java.util.TimeZone
 
 /**
- * CalendarTool — reads events from the Android CalendarContract content provider.
+ * CalendarTool — reads/creates events via the Android Calendar content provider.
  *
- * Uses CalendarContract.Instances (not Events) so recurring events are
- * automatically expanded into real instances within the query window.
- * All-day events are handled correctly by reading the ALL_DAY flag and
- * formatting them without a time.
+ * Read path (no network, no OAuth):
+ *   1. Check READ_CALENDAR permission.
+ *   2. Fetch visible calendar IDs from CalendarContract.Calendars.
+ *   3. Query CalendarContract.Instances (expands recurring events automatically)
+ *      filtered to those calendar IDs and the requested time window.
+ *   4. Exclude declined events (SELF_ATTENDEE_STATUS == DECLINED).
+ *   5. Summarise locally — no LLM involved.
+ *   Fallback: if Instances returns 0, retry via CalendarContract.Events directly.
  *
- * Declined events (SELF_ATTENDEE_STATUS = ATTENDEE_STATUS_DECLINED) are
- * excluded unless the user's setting includes them.
- *
- * Diagnostic log markers:
- *   [CALENDAR_QUERY_START]           period=today|tomorrow|week|next
- *   [CALENDAR_PROVIDER_SELECTED]     source=Instances
+ * Diagnostic log markers (filter: adb logcat -s CalendarTool):
+ *   [CALENDAR_QUERY_START]           period=... tz=... start=... end=...
  *   [CALENDAR_PERM_DENIED]
- *   [CALENDAR_RAW_EVENTS_COUNT]      count=N
- *   [CALENDAR_EVENT_INCLUDED]        title=... time=...
- *   [CALENDAR_EVENT_EXCLUDED]        reason=declined|blank_title
+ *   [CALENDAR_CALENDARS_FOUND]       count=N ids=...
+ *   [CALENDAR_CALENDARS_NONE]        no visible calendars on device
+ *   [CALENDAR_RAW_EVENTS_COUNT]      source=Instances|Events count=N
+ *   [CALENDAR_INSTANCES_URI]         uri=...
+ *   [CALENDAR_INSTANCES_FAILED]      reason=...
+ *   [CALENDAR_INSTANCES_EMPTY]       falling back to Events
+ *   [CALENDAR_EVENT_INCLUDED]        title=... allDay=... time=...
+ *   [CALENDAR_EVENT_EXCLUDED]        reason=declined|blank_title title=...
  *   [CALENDAR_FILTERED_EVENTS_COUNT] count=N
- *   [CALENDAR_QUERY_SUCCESS]
- *   [CALENDAR_QUERY_EMPTY]
- *   [CALENDAR_QUERY_FAILED]
- *
- * Supported queries:
- *   - today / what's today / what have I got today / today's events / my schedule
- *   - tomorrow / tomorrow's schedule / what do I have tomorrow
- *   - this week / my week / what's this week
- *   - next appointment / next meeting / when's my next
+ *   [CALENDAR_QUERY_SUCCESS]         period=... count=N
+ *   [CALENDAR_QUERY_EMPTY]           period=...
+ *   [CALENDAR_QUERY_FAILED]          reason=...
  */
 class CalendarTool(private val context: Context) : Tool {
 
@@ -59,22 +58,23 @@ class CalendarTool(private val context: Context) : Tool {
 
     override fun schema() = ToolSchema(
         name        = name,
-        description = "Read or create calendar events. Use action=read for queries, action=create to add events.",
+        description = "Read or create calendar events. action=read for queries, action=create to add events.",
         parameters  = mapOf(
             "type" to "object",
             "properties" to mapOf(
                 "action" to mapOf("type" to "string", "enum" to listOf("read", "create"), "description" to "read = query events, create = add a new event"),
                 "period" to mapOf("type" to "string", "enum" to listOf("today", "tomorrow", "week", "next"), "description" to "Time period for read queries"),
                 "title"  to mapOf("type" to "string", "description" to "Event title for create"),
-                "when"   to mapOf("type" to "string", "description" to "Natural language time expression, e.g. Friday at 3pm")
+                "when"   to mapOf("type" to "string", "description" to "Natural language time, e.g. Friday at 3pm"),
             ),
-            "required" to listOf("action")
+            "required" to listOf("action"),
         )
     )
 
     companion object {
         private const val TAG = "CalendarTool"
         private const val EVENT_LIMIT = 10
+        private const val ATTENDEE_STATUS_DECLINED = 2
 
         private val TODAY_REGEX = Regex(
             """(?:what(?:'?s| is)(?: on)? (?:my )?(?:calendar|schedule)|what (?:have i|do i have)(?: got)? today|today(?:'?s)? (?:events?|schedule|calendar)|my schedule|what(?:'?s| is) today)""",
@@ -92,18 +92,8 @@ class CalendarTool(private val context: Context) : Tool {
             """(?:next (?:appointment|meeting|event|thing)|when(?:'?s| is) (?:my )?next|upcoming (?:appointment|meeting|event))""",
             RegexOption.IGNORE_CASE
         )
-
-        /**
-         * Catch-all for "any events today", "show my calendar", "agenda" etc.
-         * Intentionally permissive — defaults to today.
-         */
         private val CALENDAR_FALLBACK = Regex(
             """\b(?:calendar|schedule|agenda|appointments?|meetings?)\b""",
-            RegexOption.IGNORE_CASE
-        )
-
-        private val CREATE_REGEX = Regex(
-            """(?:add|create|schedule|book|put|set up)\s+(?:a\s+|an\s+|me\s+in\s+for\s+a?\s*)?(.+?)(?:\s+(?:on|for|at|this|next)\s+.+)?$""",
             RegexOption.IGNORE_CASE
         )
         private val CREATE_TRIGGERS = listOf(
@@ -111,18 +101,14 @@ class CalendarTool(private val context: Context) : Tool {
             "schedule (?:a |an )?(?:meeting|appointment|event|call|lunch|dinner|breakfast)",
             "create (?:a |an )?(?:meeting|appointment|event|reminder|call)",
             "book (?:a |an )?(?:meeting|appointment|event|call)",
-            "put .+ in (?:my )?calendar"
+            "put .+ in (?:my )?calendar",
         ).map { Regex(it, RegexOption.IGNORE_CASE) }
-
-        // SELF_ATTENDEE_STATUS value for declined — matches CalendarContract constant
-        private const val ATTENDEE_STATUS_DECLINED = 2
     }
 
     override fun matches(transcript: String): ToolInput? {
         val t = transcript.trim()
-        if (CREATE_TRIGGERS.any { it.containsMatchIn(t) }) {
+        if (CREATE_TRIGGERS.any { it.containsMatchIn(t) })
             return ToolInput(transcript, mapOf("action" to "create"))
-        }
         if (TOMORROW_REGEX.containsMatchIn(t))
             return ToolInput(transcript, mapOf("action" to "read", "period" to "tomorrow"))
         if (WEEK_REGEX.containsMatchIn(t))
@@ -131,7 +117,6 @@ class CalendarTool(private val context: Context) : Tool {
             return ToolInput(transcript, mapOf("action" to "read", "period" to "next"))
         if (TODAY_REGEX.containsMatchIn(t))
             return ToolInput(transcript, mapOf("action" to "read", "period" to "today"))
-
         if (CALENDAR_FALLBACK.containsMatchIn(t)) {
             Log.d(TAG, "[CAL_MATCH_FALLBACK] \"$t\" → action=read period=today")
             return ToolInput(transcript, mapOf("action" to "read", "period" to "today"))
@@ -140,42 +125,47 @@ class CalendarTool(private val context: Context) : Tool {
     }
 
     override suspend fun execute(input: ToolInput): ToolResult {
-        if (input.param("action") == "create") {
-            return createEvent(input.transcript)
-        }
+        if (input.param("action") == "create") return createEvent(input.transcript)
+
         val period = input.param("period").ifBlank { "today" }
-        Log.d(TAG, "[CALENDAR_QUERY_START] period=$period")
-        Log.d(TAG, "[CALENDAR_PROVIDER_SELECTED] source=Instances")
 
         if (context.checkSelfPermission(Manifest.permission.READ_CALENDAR) !=
             PackageManager.PERMISSION_GRANTED
         ) {
             Log.w(TAG, "[CALENDAR_PERM_DENIED] READ_CALENDAR not granted")
-            return ToolResult.Failure(
-                "I need calendar access for that. Open Settings and grant the Jarvis " +
-                    "app calendar permission, then try again."
-            )
+            return ToolResult.Failure("I need calendar permission first.")
         }
 
         val (startMs, endMs) = periodBounds(period)
-        val label = periodLabel(period)
+        val tz = TimeZone.getDefault()
+        Log.d(TAG, "[CALENDAR_QUERY_START] period=$period tz=${tz.id} start=$startMs end=$endMs")
+
+        val calendarIds = visibleCalendarIds()
+        if (calendarIds.isEmpty()) {
+            Log.w(TAG, "[CALENDAR_CALENDARS_NONE] no visible calendars on device")
+            return ToolResult.Failure(
+                "No calendars found on your phone. Add a Google account in Settings and enable Calendar sync."
+            )
+        }
+        Log.d(TAG, "[CALENDAR_CALENDARS_FOUND] count=${calendarIds.size} ids=${calendarIds.joinToString(",")}")
+
         val limitToOne = (period == "next")
 
         return try {
-            val events = queryInstances(startMs, endMs, limitToOne)
+            val events = queryInstances(startMs, endMs, calendarIds, limitToOne)
             Log.d(TAG, "[CALENDAR_FILTERED_EVENTS_COUNT] count=${events.size}")
 
             if (events.isEmpty()) {
                 Log.d(TAG, "[CALENDAR_QUERY_EMPTY] period=$period")
                 ToolResult.Success(
-                    spokenFeedback = buildEmptyResponse(period, label),
-                    requiresLlmFollowUp = false
+                    spokenFeedback = buildEmptyResponse(period),
+                    requiresLlmFollowUp = false,
                 )
             } else {
                 Log.d(TAG, "[CALENDAR_QUERY_SUCCESS] period=$period count=${events.size}")
                 ToolResult.Success(
-                    spokenFeedback = buildSpokenSummary(events, period, label, limitToOne),
-                    requiresLlmFollowUp = false
+                    spokenFeedback = buildSpokenSummary(events, period, limitToOne),
+                    requiresLlmFollowUp = false,
                 )
             }
         } catch (e: SecurityException) {
@@ -187,118 +177,96 @@ class CalendarTool(private val context: Context) : Tool {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Spoken summary builders — match spec exactly
-    // -------------------------------------------------------------------------
+    // ─────────────────────────────────────────────────────────────────────────
+    // Calendar list
+    // ─────────────────────────────────────────────────────────────────────────
 
-    private fun buildEmptyResponse(period: String, label: String): String = when (period) {
-        "next" -> "You've got nothing coming up."
-        else   -> "Nothing on your calendar $label."
+    private fun visibleCalendarIds(): List<Long> {
+        val proj = arrayOf(CalendarContract.Calendars._ID)
+        val sel  = "${CalendarContract.Calendars.VISIBLE} = 1"
+        return try {
+            context.contentResolver.query(
+                CalendarContract.Calendars.CONTENT_URI, proj, sel, null, null,
+            )?.use { c ->
+                buildList { while (c.moveToNext()) add(c.getLong(0)) }
+            } ?: emptyList()
+        } catch (e: Exception) {
+            Log.w(TAG, "[CALENDAR_CALENDARS_FAILED] ${e.message}")
+            emptyList()
+        }
     }
 
-    private fun buildSpokenSummary(
-        events: List<CalEvent>,
-        period: String,
-        label: String,
+    // ─────────────────────────────────────────────────────────────────────────
+    // Instances query (recurring-event aware)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private fun queryInstances(
+        startMs: Long,
+        endMs: Long,
+        calendarIds: List<Long>,
         limitToOne: Boolean,
-    ): String {
-        if (limitToOne || events.size == 1) {
-            val e = events.first()
-            return if (e.allDay) {
-                "You've got one all-day event $label: ${e.title}."
-            } else {
-                "Your next event is ${e.title} at ${e.formattedTime}."
-            }
-        }
-        val count = events.size
-        val allAllDay = events.all { it.allDay }
-        return when {
-            allAllDay -> {
-                val names = events.joinToString(", ") { it.title }
-                "You've got $count all-day events $label: $names."
-            }
-            count == 2 -> {
-                val a = events[0].spokenLabel
-                val b = events[1].spokenLabel
-                "You've got 2 things $label: $a and $b."
-            }
-            else -> {
-                val all = events.dropLast(1).joinToString(", ") { it.spokenLabel }
-                val last = events.last().spokenLabel
-                "You've got $count things $label: $all, and $last."
-            }
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Instances query — handles recurring events correctly
-    // -------------------------------------------------------------------------
-
-    private data class CalEvent(
-        val title: String,
-        val startMs: Long,
-        val allDay: Boolean,
-    ) {
-        private val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
-        val formattedTime: String get() = timeFmt.format(startMs)
-        val spokenLabel: String get() = if (allDay) title else "$title at $formattedTime"
-    }
-
-    private fun queryInstances(startMs: Long, endMs: Long, limitToOne: Boolean): List<CalEvent> {
-        // Try CalendarContract.Instances first — it expands recurring events automatically.
+    ): List<CalEvent> {
         val instancesUri: Uri = CalendarContract.Instances.CONTENT_URI.buildUpon()
-            .also { builder ->
-                ContentUris.appendId(builder, startMs)
-                ContentUris.appendId(builder, endMs)
-            }
+            .also { b -> ContentUris.appendId(b, startMs); ContentUris.appendId(b, endMs) }
             .build()
         Log.d(TAG, "[CALENDAR_INSTANCES_URI] uri=$instancesUri")
 
-        val instancesProjection = arrayOf(
+        val proj = arrayOf(
             CalendarContract.Instances.TITLE,
             CalendarContract.Instances.BEGIN,
             CalendarContract.Instances.ALL_DAY,
             CalendarContract.Instances.SELF_ATTENDEE_STATUS,
+            CalendarContract.Instances.CALENDAR_ID,
         )
 
-        val instancesCursor = try {
+        // Filter to visible calendars only
+        val placeholders = calendarIds.joinToString(",") { "?" }
+        val selection    = "${CalendarContract.Instances.CALENDAR_ID} IN ($placeholders)"
+        val selArgs      = calendarIds.map { it.toString() }.toTypedArray()
+
+        val cursor = try {
             context.contentResolver.query(
-                instancesUri, instancesProjection, null, null,
-                "${CalendarContract.Instances.BEGIN} ASC"
+                instancesUri, proj, selection, selArgs,
+                "${CalendarContract.Instances.BEGIN} ASC",
             )
         } catch (e: Exception) {
             Log.w(TAG, "[CALENDAR_INSTANCES_FAILED] ${e.message}")
             null
         }
 
-        val instancesRaw = instancesCursor?.count ?: -1
-        Log.d(TAG, "[CALENDAR_RAW_EVENTS_COUNT] source=Instances count=$instancesRaw")
+        val rawCount = cursor?.count ?: -1
+        Log.d(TAG, "[CALENDAR_RAW_EVENTS_COUNT] source=Instances count=$rawCount")
 
-        if (instancesRaw > 0 && instancesCursor != null) {
-            return collectFromCursor(instancesCursor, limitToOne, colTitle = 0, colBegin = 1, colAllDay = 2, colStatus = 3)
+        if (rawCount > 0 && cursor != null) {
+            return collectFromCursor(cursor, limitToOne, colTitle = 0, colBegin = 1, colAllDay = 2, colStatus = 3)
         }
-        instancesCursor?.close()
+        cursor?.close()
 
-        // Fallback: query Events directly.  This misses non-first occurrences of recurring
-        // events but guarantees at least one-off events are found when Instances is empty.
-        Log.w(TAG, "[CALENDAR_INSTANCES_EMPTY] falling back to Events query start=$startMs end=$endMs")
-        return queryEventsDirect(startMs, endMs, limitToOne)
+        Log.w(TAG, "[CALENDAR_INSTANCES_EMPTY] falling back to Events direct query start=$startMs end=$endMs")
+        return queryEventsDirect(startMs, endMs, calendarIds, limitToOne)
     }
 
-    private fun queryEventsDirect(startMs: Long, endMs: Long, limitToOne: Boolean): List<CalEvent> {
-        val projection = arrayOf(
+    private fun queryEventsDirect(
+        startMs: Long,
+        endMs: Long,
+        calendarIds: List<Long>,
+        limitToOne: Boolean,
+    ): List<CalEvent> {
+        val proj = arrayOf(
             CalendarContract.Events.TITLE,
             CalendarContract.Events.DTSTART,
             CalendarContract.Events.ALL_DAY,
         )
-        val selection = "(${CalendarContract.Events.DTSTART} >= ? AND ${CalendarContract.Events.DTSTART} <= ?)" +
-            " AND ${CalendarContract.Events.DELETED} = 0"
-        val args = arrayOf(startMs.toString(), endMs.toString())
+        val placeholders = calendarIds.joinToString(",") { "?" }
+        val selection    = "(${CalendarContract.Events.DTSTART} >= ? AND ${CalendarContract.Events.DTSTART} < ?)" +
+            " AND ${CalendarContract.Events.DELETED} = 0" +
+            " AND ${CalendarContract.Events.CALENDAR_ID} IN ($placeholders)"
+        val selArgs = arrayOf(startMs.toString(), endMs.toString()) + calendarIds.map { it.toString() }.toTypedArray()
 
         val cursor = try {
             context.contentResolver.query(
-                CalendarContract.Events.CONTENT_URI, projection, selection, args,
-                "${CalendarContract.Events.DTSTART} ASC"
+                CalendarContract.Events.CONTENT_URI, proj, selection, selArgs,
+                "${CalendarContract.Events.DTSTART} ASC",
             )
         } catch (e: Exception) {
             Log.w(TAG, "[CALENDAR_EVENTS_FAILED] ${e.message}")
@@ -318,40 +286,92 @@ class CalendarTool(private val context: Context) : Tool {
         colStatus: Int,
     ): List<CalEvent> {
         val results = mutableListOf<CalEvent>()
-        cursor.use {
-            while (it.moveToNext()) {
+        cursor.use { c ->
+            while (c.moveToNext()) {
                 if (limitToOne && results.isNotEmpty()) break
                 if (results.size >= EVENT_LIMIT) break
 
-                val title = it.getString(colTitle)?.takeIf { s -> s.isNotBlank() } ?: run {
+                val title = c.getString(colTitle)?.takeIf { it.isNotBlank() } ?: run {
                     Log.d(TAG, "[CALENDAR_EVENT_EXCLUDED] reason=blank_title")
                     continue
                 }
-                val begin  = it.getLong(colBegin)
-                val allDay = it.getInt(colAllDay) == 1
+                val begin  = c.getLong(colBegin)
+                val allDay = c.getInt(colAllDay) == 1
 
-                if (colStatus >= 0) {
-                    val attendeeStatus = if (it.isNull(colStatus)) -1 else it.getInt(colStatus)
-                    if (attendeeStatus == ATTENDEE_STATUS_DECLINED) {
+                if (colStatus >= 0 && !c.isNull(colStatus)) {
+                    if (c.getInt(colStatus) == ATTENDEE_STATUS_DECLINED) {
                         Log.d(TAG, "[CALENDAR_EVENT_EXCLUDED] reason=declined title=\"$title\"")
                         continue
                     }
                 }
 
-                Log.d(TAG, "[CALENDAR_EVENT_INCLUDED] title=\"$title\" allDay=$allDay begin=$begin")
+                Log.d(TAG, "[CALENDAR_EVENT_INCLUDED] title=\"$title\" allDay=$allDay time=$begin")
                 results += CalEvent(title = title, startMs = begin, allDay = allDay)
             }
         }
         return results
     }
 
-    // -------------------------------------------------------------------------
-    // Period bounds
-    // -------------------------------------------------------------------------
+    // ─────────────────────────────────────────────────────────────────────────
+    // Spoken response builders
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private fun buildEmptyResponse(period: String): String = when (period) {
+        "tomorrow" -> "Nothing on your calendar tomorrow."
+        "week"     -> "Nothing on your calendar this week."
+        "next"     -> "Nothing coming up on your calendar."
+        else       -> "Nothing on your calendar today."
+    }
+
+    private fun buildSpokenSummary(
+        events: List<CalEvent>,
+        period: String,
+        limitToOne: Boolean,
+    ): String {
+        val label = periodLabel(period)
+
+        if (limitToOne || events.size == 1) {
+            val e = events.first()
+            return if (e.allDay) "You've got ${e.title} — all day $label."
+            else "You've got ${e.title} at ${e.spokenTime}."
+        }
+
+        return when (events.size) {
+            2 -> "You've got 2 things $label: ${events[0].spokenLabel} and ${events[1].spokenLabel}."
+            else -> {
+                val head = events.dropLast(1).joinToString(", ") { it.spokenLabel }
+                val tail = events.last().spokenLabel
+                "You've got ${events.size} things $label: $head, and $tail."
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // CalEvent model
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private data class CalEvent(
+        val title: String,
+        val startMs: Long,
+        val allDay: Boolean,
+    ) {
+        /** Colloquial time: "3pm", "3:30pm", "9am", "9:15am" */
+        val spokenTime: String get() {
+            val c = Calendar.getInstance().apply { timeInMillis = startMs }
+            val h24  = c.get(Calendar.HOUR_OF_DAY)
+            val min  = c.get(Calendar.MINUTE)
+            val h12  = if (h24 % 12 == 0) 12 else h24 % 12
+            val ampm = if (h24 < 12) "am" else "pm"
+            return if (min == 0) "$h12$ampm" else "$h12:${min.toString().padStart(2, '0')}$ampm"
+        }
+        val spokenLabel: String get() = if (allDay) "$title (all day)" else "$title at $spokenTime"
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Period bounds — uses device local timezone via Calendar.getInstance()
+    // ─────────────────────────────────────────────────────────────────────────
 
     private data class PeriodBounds(val startMs: Long, val endMs: Long)
-    private operator fun PeriodBounds.component1() = startMs
-    private operator fun PeriodBounds.component2() = endMs
 
     private fun periodBounds(period: String): PeriodBounds {
         val cal = Calendar.getInstance()
@@ -359,35 +379,30 @@ class CalendarTool(private val context: Context) : Tool {
         cal.set(Calendar.MINUTE, 0)
         cal.set(Calendar.SECOND, 0)
         cal.set(Calendar.MILLISECOND, 0)
+        val todayStart = cal.timeInMillis
 
         return when (period) {
             "tomorrow" -> {
                 cal.add(Calendar.DAY_OF_YEAR, 1)
                 val start = cal.timeInMillis
-                cal.set(Calendar.HOUR_OF_DAY, 23)
-                cal.set(Calendar.MINUTE, 59)
-                cal.set(Calendar.SECOND, 59)
-                PeriodBounds(start, cal.timeInMillis)
+                cal.add(Calendar.DAY_OF_YEAR, 1)
+                PeriodBounds(start, cal.timeInMillis - 1)
             }
             "week" -> {
-                val start = cal.timeInMillis
                 cal.add(Calendar.DAY_OF_YEAR, 7)
                 cal.set(Calendar.HOUR_OF_DAY, 23)
                 cal.set(Calendar.MINUTE, 59)
                 cal.set(Calendar.SECOND, 59)
-                PeriodBounds(start, cal.timeInMillis)
+                PeriodBounds(todayStart, cal.timeInMillis)
             }
             "next" -> {
                 val start = System.currentTimeMillis()
                 cal.add(Calendar.YEAR, 1)
                 PeriodBounds(start, cal.timeInMillis)
             }
-            else -> { // "today"
-                val start = cal.timeInMillis
-                cal.set(Calendar.HOUR_OF_DAY, 23)
-                cal.set(Calendar.MINUTE, 59)
-                cal.set(Calendar.SECOND, 59)
-                PeriodBounds(start, cal.timeInMillis)
+            else -> { // today
+                cal.add(Calendar.DAY_OF_YEAR, 1)
+                PeriodBounds(todayStart, cal.timeInMillis - 1)
             }
         }
     }
@@ -399,18 +414,15 @@ class CalendarTool(private val context: Context) : Tool {
         else       -> "today"
     }
 
-    // -------------------------------------------------------------------------
+    // ─────────────────────────────────────────────────────────────────────────
     // Create event
-    // -------------------------------------------------------------------------
+    // ─────────────────────────────────────────────────────────────────────────
 
     private fun createEvent(transcript: String): ToolResult {
         val parsed = ReminderParser.parse(transcript)
-        val startMs = parsed?.triggerAtMs ?: run {
-            extractEventTime(transcript) ?: return ToolResult.Failure(
-                "I couldn't work out when to add that. Try something like " +
-                "\"add dentist Friday at 3pm\"."
-            )
-        }
+        val startMs = parsed?.triggerAtMs ?: (extractEventTime(transcript) ?: return ToolResult.Failure(
+            "I couldn't work out when to add that. Try something like \"add dentist Friday at 3pm\"."
+        ))
         val endMs = startMs + 60 * 60 * 1000L
 
         val title = extractEventTitle(transcript).ifBlank {
@@ -418,8 +430,14 @@ class CalendarTool(private val context: Context) : Tool {
         }
 
         val calId = primaryCalendarId() ?: return ToolResult.Failure(
-            "No calendar found on this device. Please add a calendar account in Settings."
+            "No calendar found on this device. Add a Google account in Settings and enable Calendar sync."
         )
+
+        if (context.checkSelfPermission(Manifest.permission.WRITE_CALENDAR) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return ToolResult.Failure("I need calendar write permission to add events.")
+        }
 
         return try {
             val values = ContentValues().apply {
@@ -430,8 +448,8 @@ class CalendarTool(private val context: Context) : Tool {
                 put(CalendarContract.Events.EVENT_TIMEZONE, TimeZone.getDefault().id)
             }
             context.contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)
-            val timeFmt = SimpleDateFormat("EEE d MMM 'at' HH:mm", Locale.getDefault())
-            ToolResult.Success("Done. Added \"$title\" on ${timeFmt.format(startMs)}.")
+            val fmt = SimpleDateFormat("EEE d MMM 'at' h:mma", Locale.getDefault())
+            ToolResult.Success("Done. Added \"$title\" on ${fmt.format(startMs)}.")
         } catch (e: SecurityException) {
             ToolResult.Failure("I don't have permission to write to your calendar.")
         } catch (e: Exception) {
@@ -441,35 +459,42 @@ class CalendarTool(private val context: Context) : Tool {
     }
 
     private fun primaryCalendarId(): Long? {
-        val projection = arrayOf(CalendarContract.Calendars._ID)
-        val selection  = "${CalendarContract.Calendars.VISIBLE} = 1"
+        val proj = arrayOf(CalendarContract.Calendars._ID)
+        val sel  = "${CalendarContract.Calendars.VISIBLE} = 1 AND ${CalendarContract.Calendars.IS_PRIMARY} = 1"
+        val primary = context.contentResolver.query(
+            CalendarContract.Calendars.CONTENT_URI, proj, sel, null, null,
+        )?.use { c -> if (c.moveToFirst()) c.getLong(0) else null }
+        if (primary != null) return primary
+
+        // Fall back to any visible calendar
+        val fallbackSel = "${CalendarContract.Calendars.VISIBLE} = 1"
         return context.contentResolver.query(
-            CalendarContract.Calendars.CONTENT_URI, projection, selection, null,
-            "${CalendarContract.Calendars._ID} ASC"
+            CalendarContract.Calendars.CONTENT_URI, proj, fallbackSel, null,
+            "${CalendarContract.Calendars._ID} ASC",
         )?.use { c -> if (c.moveToFirst()) c.getLong(0) else null }
     }
 
     private fun extractEventTitle(transcript: String): String {
         val lower = transcript.lowercase()
-        val stripped = lower
+        return lower
             .replace(Regex("""^(?:add|create|schedule|book|put|set up)\s+(?:a\s+|an\s+|me\s+in\s+for\s+a?\s*)?"""), "")
             .replace(Regex("""\s+(?:to|on|in|at|this|next)\s+(?:my\s+)?calendar.*$"""), "")
             .replace(Regex("""\s+(?:on|for|at|this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|\d{1,2}).*$"""), "")
             .replace(Regex("""\s+(?:at|in)\s+\d.*$"""), "")
             .trim()
-        return stripped.replaceFirstChar { it.uppercaseChar() }
+            .replaceFirstChar { it.uppercaseChar() }
     }
 
     private val DAY_NAMES = mapOf(
         "monday" to Calendar.MONDAY, "tuesday" to Calendar.TUESDAY,
         "wednesday" to Calendar.WEDNESDAY, "thursday" to Calendar.THURSDAY,
         "friday" to Calendar.FRIDAY, "saturday" to Calendar.SATURDAY,
-        "sunday" to Calendar.SUNDAY
+        "sunday" to Calendar.SUNDAY,
     )
 
     private fun extractEventTime(transcript: String): Long? {
         val lower = transcript.lowercase()
-        val cal   = Calendar.getInstance()
+        val cal = Calendar.getInstance()
 
         val matchedDay = DAY_NAMES.entries.firstOrNull { (name, _) -> lower.contains(name) }
         if (matchedDay != null) {

@@ -13,8 +13,9 @@ optional eyes-and-hands-free module for Jarvis.
 | Settings UI + manifest perms + voice tool | ✅ Shipped |
 | Manifest `<meta-data>` for App ID + Client Token (build-time injection) | ✅ Shipped |
 | Maven repo + dependency wiring (GitHub Packages, token-gated) | ✅ Shipped |
-| `RealMetaWearablesProvider` — actual SDK binding | ⏳ Awaiting class-name confirmation |
-| Hardware smoke test | ⏳ After provider lands |
+| `RealMetaWearablesProvider` — device + streaming (mwdat-core) | ✅ Shipped (in `app/src/mwdat/java/`, conditional source set) |
+| `RealMetaWearablesProvider` — photo capture (mwdat-camera) | ⏳ Awaiting camera-module docs page |
+| Hardware smoke test | ⏳ After photo capture lands |
 
 ## What you need on your machine
 

@@ -207,6 +207,25 @@ dependencies {
     }
 }
 
+// ── Meta Wearables DAT — conditional source set ─────────────────────────
+// `app/src/mwdat/java/` holds RealMetaWearablesProvider which directly
+// imports `com.meta.wearable.mwdat.*` types.  Those types only resolve
+// when the SDK is on the classpath, which requires `github_token` in
+// local.properties.  We include the directory only in that case so a
+// fresh clone without a token still compiles cleanly — the stub stays
+// active, the rest of the app is unchanged.
+val mwdatSrcEnabled: Boolean = (System.getenv("GITHUB_TOKEN")?.isNotBlank() == true) ||
+    run {
+        val f = rootProject.file("local.properties")
+        f.exists() && Properties().apply { FileInputStream(f).use { load(it) } }
+            .getProperty("github_token")?.isNotBlank() == true
+    }
+if (mwdatSrcEnabled) {
+    android.sourceSets.getByName("main").java.srcDir("src/mwdat/java")
+    logger.lifecycle("[META_WEARABLES] Including src/mwdat/java source set " +
+        "(github_token present → DAT SDK available).")
+}
+
 /**
  * Architecture invariants — runs the pure-JVM source scanner under
  * `ArchitectureInvariantsTest`.  See

@@ -118,16 +118,40 @@ class MetaWearablesManager(
         if (!s.enabled) return DisabledProvider
         if (s.useMockDevice) return MockMetaWearablesProvider()
         if (sdkPresent()) {
-            // TODO(meta-dat): wire `RealMetaWearablesProvider(context)` once
-            // the Meta DAT SDK dependency is added to libs.versions.toml +
-            // app/build.gradle.kts.  See docs/wearables/meta-dat-integration.md.
-            // Until then, fall through to the stub so the app builds.
+            // Real Meta DAT SDK is on the classpath — instantiate the
+            // production provider reflectively.  We can't reference
+            // RealMetaWearablesProvider directly because that file
+            // lives in a conditional source set (src/mwdat/java) that
+            // is only included when `github_token` is configured in
+            // local.properties.  Going through Class.forName lets the
+            // manager compile cleanly regardless of token state.
+            return try {
+                val cls = Class.forName(
+                    "com.jarvis.assistant.wearables.meta.RealMetaWearablesProvider",
+                    true,
+                    this::class.java.classLoader,
+                )
+                @Suppress("UNCHECKED_CAST")
+                cls.getDeclaredConstructor(Context::class.java)
+                    .newInstance(context) as WearableDeviceProvider
+            } catch (t: Throwable) {
+                Log.w(TAG, "[META_WEARABLES_ERROR] " +
+                    "RealMetaWearablesProvider init threw — using stub: ${t.message}")
+                StubMetaWearablesProvider()
+            }
         }
         return StubMetaWearablesProvider()
     }
 
+    /**
+     * Probe for the DAT SDK by trying to load its canonical entry
+     * point (`com.meta.wearable.mwdat.objects.Wearables` as of
+     * mwdat-core v0.7).  ClassNotFoundException = SDK absent
+     * (developer hasn't configured `github_token` in local.properties)
+     * → stub stays active.
+     */
     private fun sdkPresent(): Boolean = try {
-        Class.forName("com.facebook.mwdat.core.MwDatClient", false,
+        Class.forName("com.meta.wearable.mwdat.objects.Wearables", false,
             this::class.java.classLoader)
         true
     } catch (_: ClassNotFoundException) { false }

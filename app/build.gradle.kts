@@ -210,3 +210,26 @@ tasks.register("checkArchitectureInvariants") {
 }
 
 tasks.named("check") { dependsOn("checkArchitectureInvariants") }
+
+/**
+ * AGP 9 dropped the legacy `unitTestClasses` task that older
+ * IntelliJ / Android Studio test runners (and some external test
+ * tools) still invoke when you tap the green "Run tests" arrow.
+ * Without this alias the IDE fails with
+ *   "Cannot locate tasks that match ':app:unitTestClasses'"
+ *
+ * Register it as an alias that depends on the real compile +
+ * resource tasks for the debug unit-test source set.  Running this
+ * task produces the same classpath the JVM test runner needs, so
+ * the IDE play button works again without us migrating every dev
+ * machine's run-configuration XML.
+ */
+tasks.register("unitTestClasses") {
+    group       = "build"
+    description = "AGP-9 compatibility alias for legacy IDE test runners."
+    dependsOn(
+        tasks.named("compileDebugUnitTestKotlin"),
+        tasks.named("processDebugUnitTestJavaRes"),
+        tasks.named("processDebugJavaRes"),
+    )
+}

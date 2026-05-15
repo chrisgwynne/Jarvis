@@ -288,6 +288,10 @@ class ToolRegistry constructor(
                     add(ShoppingListTool(shoppingRepo))
                     add(ConversationExportTool(context))
                     add(VoiceShortcutTool(VoiceShortcutRepository(db.voiceShortcutDao())))
+                    // NotificationSummaryTool BEFORE ReadNotificationsTool —
+                    // "anything important?" / "what have I missed?" are summary
+                    // intents and must not fall through to the generic read path.
+                    add(com.jarvis.assistant.tools.device.NotificationSummaryTool(context))
                     add(ReadNotificationsTool(context))
                     // Clear AFTER Read so "clear my notifications" doesn't get
                     // shadowed by Read's "read my notifications" pattern (they

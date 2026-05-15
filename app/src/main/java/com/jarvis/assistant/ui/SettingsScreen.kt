@@ -79,6 +79,11 @@ fun SettingsScreen(
                 onBack = popToRoot, onClose = onBack
             )
         }
+        composable(SettingsCategory.Messaging.route) {
+            com.jarvis.assistant.ui.settings.screens.MessagingDiagnosticsScreen(
+                onBack = popToRoot, onClose = onBack
+            )
+        }
         composable(SettingsCategory.LocalDiagnostics.route) {
             com.jarvis.assistant.ui.settings.screens.LocalDiagnosticsScreen(
                 onBack = popToRoot, onClose = onBack

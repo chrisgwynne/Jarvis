@@ -5,6 +5,7 @@ import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.ChatBubbleOutline
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.CheckCircle
@@ -81,6 +82,12 @@ internal enum class SettingsCategory(
         description = "Reminders, tasks and offline sync",
         icon        = Icons.Filled.CheckCircle,
         route       = "settings/todoist",
+    ),
+    Messaging(
+        title       = "Messaging",
+        description = "Notification access, message context and reply diagnostics",
+        icon        = Icons.Filled.Forum,
+        route       = "settings/messaging",
     ),
     LocalDiagnostics(
         title       = "Diagnostics",

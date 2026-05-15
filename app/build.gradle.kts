@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     // AGP 9+ ships built-in Kotlin support — the standalone
     // `org.jetbrains.kotlin.android` plugin must NOT be applied alongside
@@ -23,6 +26,24 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // ── Meta Wearables DAT — Application ID + Client Token ────────────
+        // Loaded from local.properties (gitignored) so the token never
+        // lands in the public repo.  The keys are:
+        //   meta.wearables.applicationId=<numeric id from Meta dev console>
+        //   meta.wearables.clientToken=AR|<id>|<token>
+        // If unset, both fall back to an empty string and the manifest
+        // entries are still present but inert — Meta's SDK falls back to
+        // Developer Mode (per their docs: "Do not set it if you are using
+        // Developer Mode to test your integration").
+        val metaProps = Properties().apply {
+            val f = rootProject.file("local.properties")
+            if (f.exists()) FileInputStream(f).use { load(it) }
+        }
+        manifestPlaceholders["metaWearablesApplicationId"] =
+            metaProps.getProperty("meta.wearables.applicationId", "")
+        manifestPlaceholders["metaWearablesClientToken"] =
+            metaProps.getProperty("meta.wearables.clientToken", "")
     }
 
     // Tier-A: let JVM unit tests return default values from un-mocked

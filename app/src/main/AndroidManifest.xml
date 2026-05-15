@@ -186,6 +186,20 @@
         android:theme="@style/Theme.Jarvis"
         android:networkSecurityConfig="@xml/network_security_config">
 
+        <!-- ── Meta Wearables DAT — Application ID + Client Token ──
+             Both values are injected at build time from
+             local.properties (see app/build.gradle.kts).  Empty
+             placeholder = Developer Mode fallback (per Meta's docs:
+             "Do not set it if you are using Developer Mode to test
+             your integration").  Real values live in local.properties
+             which is gitignored — never paste secrets here. -->
+        <meta-data
+            android:name="com.meta.wearable.mwdat.APPLICATION_ID"
+            android:value="${metaWearablesApplicationId}" />
+        <meta-data
+            android:name="com.meta.wearable.mwdat.CLIENT_TOKEN"
+            android:value="${metaWearablesClientToken}" />
+
         <!-- Main entry point -->
         <!--
              launchMode="singleTop" ensures that when the OAuth browser redirect

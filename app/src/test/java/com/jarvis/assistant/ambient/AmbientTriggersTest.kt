@@ -91,8 +91,8 @@ class AmbientTriggersTest {
         val c = trigger.match(ctx(ambient = ambient), emptyList())
         assertNotNull(c)
         assertEquals(ProactiveEventType.AMBIENT_APP_CONTEXT_NUDGE, c!!.eventType)
-        assertTrue(c.spokenText.contains("Etsy"))
-        assertTrue(c.spokenText.contains("2 messages"))
+        assertTrue(c.spokenText!!.contains("Etsy"))
+        assertTrue(c.spokenText!!.contains("2 messages"))
     }
 
     @Test
@@ -116,7 +116,7 @@ class AmbientTriggersTest {
         val snapshot = baseSnapshot(unreadNotifications = 3)
         val c = trigger.match(ctx(snapshot = snapshot, ambient = ambient), emptyList())
         assertNotNull(c)
-        assertTrue(c!!.spokenText.contains("3 messages"))
+        assertTrue(c!!.spokenText!!.contains("3 messages"))
     }
 
     // ── AmbientCarBluetoothTrigger ────────────────────────────────────────────
@@ -144,7 +144,7 @@ class AmbientTriggersTest {
         val c = trigger.match(ctx(snapshot = snapshot, ambient = ambient), emptyList())
         assertNotNull(c)
         assertEquals(ProactiveEventType.AMBIENT_TRAVEL_SUGGESTION, c!!.eventType)
-        assertTrue(c.spokenText.contains("Football"))
+        assertTrue(c.spokenText!!.contains("Football"))
     }
 
     @Test
@@ -183,7 +183,7 @@ class AmbientTriggersTest {
         val c = trigger.match(ctx(snapshot = snapshot), emptyList())
         assertNotNull(c)
         assertEquals(ProactiveEventType.AMBIENT_ROUTINE_SUGGESTION, c!!.eventType)
-        assertTrue(c.spokenText.contains("Team meeting"))
+        assertTrue(c.spokenText!!.contains("Team meeting"))
         assertEquals(0.55f, c.confidence, 0.001f) // no learned pattern
     }
 
@@ -239,7 +239,7 @@ class AmbientTriggersTest {
         val c = trigger.match(ctx(ambient = ambient), emptyList())
         assertNotNull(c)
         assertEquals(ProactiveEventType.AMBIENT_HOME_ASSISTANT_ALERT, c!!.eventType)
-        assertTrue(c.spokenText.contains("Printer"))
+        assertTrue(c.spokenText!!.contains("Printer"))
         assertTrue(c.urgency >= 0.60f)
     }
 
@@ -264,8 +264,8 @@ class AmbientTriggersTest {
         )
         val c = trigger.match(ctx(ambient = ambient), emptyList())
         assertNotNull(c)
-        assertTrue(c!!.spokenText.contains("Printer"))
-        assertTrue(c.spokenText.contains("Kettle"))
+        assertTrue(c!!.spokenText!!.contains("Printer"))
+        assertTrue(c.spokenText!!.contains("Kettle"))
     }
 
     // ── AmbientLocationTodoistTrigger ─────────────────────────────────────────
@@ -294,8 +294,8 @@ class AmbientTriggersTest {
         val c = trigger.match(ctx(ambient = ambient), emptyList())
         assertNotNull(c)
         assertEquals(ProactiveEventType.AMBIENT_LOCATION_TODOIST_MATCH, c!!.eventType)
-        assertTrue(c.spokenText.contains("Tesco"))
-        assertTrue(c.spokenText.contains("Milk"))
+        assertTrue(c.spokenText!!.contains("Tesco"))
+        assertTrue(c.spokenText!!.contains("Milk"))
     }
 
     @Test
@@ -307,8 +307,8 @@ class AmbientTriggersTest {
         )
         val c = trigger.match(ctx(ambient = ambient), emptyList())
         assertNotNull(c)
-        assertTrue(c!!.spokenText.contains("Milk"))
-        assertTrue(c.spokenText.contains("Bread"))
+        assertTrue(c!!.spokenText!!.contains("Milk"))
+        assertTrue(c.spokenText!!.contains("Bread"))
     }
 
     @Test

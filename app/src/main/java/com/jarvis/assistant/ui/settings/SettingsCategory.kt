@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
@@ -95,6 +96,12 @@ internal enum class SettingsCategory(
         description = "Local signal learning, routine nudges and context awareness",
         icon        = Icons.Filled.AutoAwesome,
         route       = "settings/ambient",
+    ),
+    ResponsePreferences(
+        title       = "Response Preferences",
+        description = "Teach Jarvis how to format responses by domain",
+        icon        = Icons.Filled.FilterList,
+        route       = "settings/response_preferences",
     ),
     LocalDiagnostics(
         title       = "Diagnostics",

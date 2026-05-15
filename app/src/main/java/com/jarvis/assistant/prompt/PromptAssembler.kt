@@ -74,6 +74,7 @@ class PromptAssembler(
         social              : SocialContext? = null,
         situationSummary    : String? = null,
         activeGoalTitle     : String? = null,
+        preferencesFragment : String? = null,
     ): List<Message> {
         val ctx = contextEngine.build()
 
@@ -105,16 +106,17 @@ class PromptAssembler(
         val recentFactFrag = recentFactCarrier?.toPromptFragment().orEmpty()
 
         val system = buildSystemPrompt(
-            contextFragment   = contextEngine.toPromptFragment(ctx, presence),
-            profileFragment   = profileFrag,
-            memories          = memories,
-            speakerContext    = speakerContext,
-            knowledgeFragment = sanitizer?.redactString(knowledgeFrag) ?: knowledgeFrag,
-            threadsFragment   = threadsFrag,
+            contextFragment     = contextEngine.toPromptFragment(ctx, presence),
+            profileFragment     = profileFrag,
+            memories            = memories,
+            speakerContext      = speakerContext,
+            knowledgeFragment   = sanitizer?.redactString(knowledgeFrag) ?: knowledgeFrag,
+            threadsFragment     = threadsFrag,
             expectationFragment = expectationFrag,
-            socialFragment    = social?.toPromptFragment().orEmpty(),
-            situationFragment = buildSituationFragment(situationSummary, activeGoalTitle),
-            recentFactFragment = recentFactFrag,
+            socialFragment      = social?.toPromptFragment().orEmpty(),
+            situationFragment   = buildSituationFragment(situationSummary, activeGoalTitle),
+            recentFactFragment  = recentFactFrag,
+            preferencesFragment = preferencesFragment.orEmpty(),
         )
 
         return buildList {
@@ -152,6 +154,7 @@ class PromptAssembler(
         socialFragment   : String = "",
         situationFragment: String = "",
         recentFactFragment: String = "",
+        preferencesFragment: String = "",
     ): String = buildString {
 
         // ── Personality injection ────────────────────────────────────────
@@ -333,6 +336,12 @@ State time and date confidently. Never disclaim real-time access or knowledge cu
         if (profileFragment.isNotBlank()) {
             append("\n\n")
             append(profileFragment)
+        }
+
+        // User response preferences — must override personality defaults
+        if (preferencesFragment.isNotBlank()) {
+            append("\n\n")
+            append(preferencesFragment)
         }
 
         // Compiled knowledge context — injected after profile

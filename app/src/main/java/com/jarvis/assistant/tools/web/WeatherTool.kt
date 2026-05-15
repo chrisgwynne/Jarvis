@@ -4,6 +4,8 @@ import android.Manifest
 import android.util.Log
 import com.jarvis.assistant.llm.NetworkClient
 import com.jarvis.assistant.location.CurrentLocationProvider
+import com.jarvis.assistant.preferences.ResponsePreferenceEngine
+import com.jarvis.assistant.preferences.WeatherComponents
 import com.jarvis.assistant.tools.framework.Tool
 import com.jarvis.assistant.tools.framework.ToolInput
 import com.jarvis.assistant.tools.framework.ToolResult
@@ -19,7 +21,10 @@ import kotlinx.coroutines.Dispatchers
  * Results are cached for [CACHE_TTL_MS] to avoid hammering the API on follow-up
  * questions ("how cold is it again?").
  */
-class WeatherTool(private val locationProvider: CurrentLocationProvider) : Tool {
+class WeatherTool(
+    private val locationProvider: CurrentLocationProvider,
+    private val preferenceEngine: ResponsePreferenceEngine? = null,
+) : Tool {
 
     override val name = "weather"
     override val description = "Get current weather conditions and forecast from Open-Meteo"
@@ -85,25 +90,20 @@ class WeatherTool(private val locationProvider: CurrentLocationProvider) : Tool 
         val body = NetworkClient.get(url, emptyMap())
         val root = NetworkClient.gson.fromJson(body, WeatherResponse::class.java)
 
-        val cur  = root.current ?: throw Exception("no current block")
+        val cur   = root.current ?: throw Exception("no current block")
         val daily = root.daily
 
-        val tempC = cur.temperature_2m?.let { "%.0f°C".format(it) } ?: "unknown temperature"
-        val feelsC = cur.apparent_temperature?.let { ", feels like %.0f°C".format(it) } ?: ""
-        val cond = conditionDescription(cur.weather_code)
-        val wind = cur.wind_speed_10m?.let { " Wind is ${"%.0f".format(it)} km/h." } ?: ""
+        val components = WeatherComponents(
+            condition       = conditionDescription(cur.weather_code),
+            temperature     = cur.temperature_2m?.let { "%.0f°C".format(it) } ?: "unknown",
+            feelsLike       = cur.apparent_temperature?.let { "%.0f°C".format(it) },
+            wind            = cur.wind_speed_10m?.let { "${"%.0f".format(it)} km/h" },
+            highC           = daily?.temperature_2m_max?.firstOrNull()?.let { "%.0f°C".format(it) },
+            lowC            = daily?.temperature_2m_min?.firstOrNull()?.let { "%.0f°C".format(it) },
+            precipitationMm = daily?.precipitation_sum?.firstOrNull(),
+        )
 
-        val highLow = if (daily != null) {
-            val hi = daily.temperature_2m_max?.firstOrNull()?.let { "%.0f°C".format(it) }
-            val lo = daily.temperature_2m_min?.firstOrNull()?.let { "%.0f°C".format(it) }
-            if (hi != null && lo != null) " Today's high is $hi, low is $lo." else ""
-        } else ""
-
-        val rain = daily?.precipitation_sum?.firstOrNull()?.let {
-            if (it > 0.5) " ${String.format("%.1f", it)} mm of rain expected today." else ""
-        } ?: ""
-
-        return "$cond. Currently $tempC$feelsC.$wind$highLow$rain"
+        return preferenceEngine?.formatWeather(components) ?: components.defaultFormat()
     }
 
     private fun conditionDescription(code: Int?): String = when (code) {

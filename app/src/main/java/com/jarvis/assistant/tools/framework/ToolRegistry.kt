@@ -152,6 +152,7 @@ class ToolRegistry constructor(
              * which previously bled adjacent facts ("I love you").
              */
             profileMemory: com.jarvis.assistant.memory.ProfileMemoryService? = null,
+            preferenceEngine: com.jarvis.assistant.preferences.ResponsePreferenceEngine? = null,
         ): ToolRegistry {
             val contacts = sharedContacts ?: run {
                 android.util.Log.d(TAG, "[CONTACT_LOOKUP_SHARED_INSTANCE_CREATED] " +
@@ -254,10 +255,10 @@ class ToolRegistry constructor(
                     add(FlashlightTool(context))
                     add(AlarmTool(context))
                     add(TimerTool(context))
-                    add(CalendarTool(context))
+                    add(CalendarTool(context, preferenceEngine))
                     add(SmartHomeTool(settings))
                     // Weather before web search — structured answer, no search cost
-                    locationProvider?.let { add(WeatherTool(it)) }
+                    locationProvider?.let { add(WeatherTool(it, preferenceEngine)) }
 
                     // Maps tools — must precede OpenAppTool so "open directions to X"
                     // and "show me Tesco on the map" aren't routed to the generic

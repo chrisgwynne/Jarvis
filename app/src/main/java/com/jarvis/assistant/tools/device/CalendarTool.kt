@@ -46,7 +46,10 @@ import java.util.TimeZone
  *   [CALENDAR_QUERY_EMPTY]           period=...
  *   [CALENDAR_QUERY_FAILED]          reason=...
  */
-class CalendarTool(private val context: Context) : Tool {
+class CalendarTool(
+    private val context: Context,
+    private val preferenceEngine: com.jarvis.assistant.preferences.ResponsePreferenceEngine? = null,
+) : Tool {
 
     override val name = "calendar"
     override val description = "Read and write calendar events on the device"
@@ -163,8 +166,12 @@ class CalendarTool(private val context: Context) : Tool {
                 )
             } else {
                 Log.d(TAG, "[CALENDAR_QUERY_SUCCESS] period=$period count=${events.size}")
+                val summary = buildSpokenSummary(events, period, limitToOne)
+                val spoken = preferenceEngine?.applyLengthPreference(
+                    com.jarvis.assistant.preferences.ResponseDomain.CALENDAR, summary
+                ) ?: summary
                 ToolResult.Success(
-                    spokenFeedback = buildSpokenSummary(events, period, limitToOne),
+                    spokenFeedback = spoken,
                     requiresLlmFollowUp = false,
                 )
             }

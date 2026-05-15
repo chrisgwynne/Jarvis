@@ -112,6 +112,11 @@ fun SettingsScreen(
                 onBack = popToRoot, onClose = onBack
             )
         }
+        composable(SettingsCategory.ResponsePreferences.route) {
+            com.jarvis.assistant.ui.settings.screens.ResponsePreferencesSettingsScreen(
+                onBack = popToRoot, onClose = onBack
+            )
+        }
         composable(SettingsCategory.ExperimentalFlags.route) {
             com.jarvis.assistant.ui.settings.screens.ExperimentalFlagsSettingsScreen(
                 onBack = popToRoot, onClose = onBack

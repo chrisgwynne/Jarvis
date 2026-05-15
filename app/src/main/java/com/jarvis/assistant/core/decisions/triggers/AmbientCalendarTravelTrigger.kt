@@ -25,7 +25,7 @@ class AmbientCalendarTravelTrigger : Trigger {
         val minutesUntil = (nextMeetingMs - ctx.nowMs) / 60_000L
         if (minutesUntil < 0) return null
 
-        val leaveLeadMinutes = ctx.ambient.learnedLeaveLeadMinutes ?: DEFAULT_LEAD_MINUTES
+        val leaveLeadMinutes: Long = (ctx.ambient.learnedLeaveLeadMinutes ?: DEFAULT_LEAD_MINUTES_INT).toLong()
         val targetLeaveMinutes = minutesUntil - leaveLeadMinutes
 
         // Fire when it's time to leave (within the trigger window)
@@ -63,7 +63,7 @@ class AmbientCalendarTravelTrigger : Trigger {
     }
 
     companion object {
-        private const val DEFAULT_LEAD_MINUTES = 20L
+        private const val DEFAULT_LEAD_MINUTES_INT = 20
         private const val TRIGGER_WINDOW_MINUTES = 5L
     }
 }

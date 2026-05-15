@@ -86,7 +86,7 @@ class AmbientEventStore(
     }
 
     private fun translate(event: com.jarvis.assistant.core.events.Event): AmbientEvent? {
-        val now = event.timestamp
+        val now = event.tsMillis
         return when (event.kind) {
             EventKind.FOREGROUND_APP_CHANGED -> {
                 val pkg = event.payload["package_name"] ?: return null

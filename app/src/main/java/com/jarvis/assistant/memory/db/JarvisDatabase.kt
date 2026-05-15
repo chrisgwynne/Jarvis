@@ -61,6 +61,8 @@ import com.jarvis.assistant.ambient.db.AmbientEventDao
 import com.jarvis.assistant.ambient.db.AmbientEventEntity
 import com.jarvis.assistant.ambient.db.RoutinePatternDao
 import com.jarvis.assistant.ambient.db.RoutinePatternEntity
+import com.jarvis.assistant.preferences.db.ResponsePreferenceDao
+import com.jarvis.assistant.preferences.db.ResponsePreferenceEntity
 
 @Database(
     entities = [
@@ -92,8 +94,9 @@ import com.jarvis.assistant.ambient.db.RoutinePatternEntity
         OutcomeEntity::class,
         AmbientEventEntity::class,
         RoutinePatternEntity::class,
+        ResponsePreferenceEntity::class,
     ],
-    version = 17,
+    version = 18,
     exportSchema = false
 )
 abstract class JarvisDatabase : RoomDatabase() {
@@ -125,6 +128,7 @@ abstract class JarvisDatabase : RoomDatabase() {
     abstract fun outcomeDao(): OutcomeDao
     abstract fun ambientEventDao(): AmbientEventDao
     abstract fun routinePatternDao(): RoutinePatternDao
+    abstract fun responsePreferenceDao(): ResponsePreferenceDao
 
     companion object {
         private const val DB_NAME = "jarvis.db"
@@ -582,6 +586,38 @@ abstract class JarvisDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration 17 → 18: add response_preferences table for persisted
+         * user formatting preferences per domain.
+         */
+        private val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS response_preferences (
+                        id                  INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        domain              TEXT    NOT NULL,
+                        ruleType            TEXT    NOT NULL,
+                        includeFieldsJson   TEXT    NOT NULL DEFAULT '[]',
+                        excludeFieldsJson   TEXT    NOT NULL DEFAULT '[]',
+                        preferredLength     TEXT    NOT NULL DEFAULT 'DEFAULT',
+                        preferredOrderJson  TEXT    NOT NULL DEFAULT '[]',
+                        exampleFormat       TEXT,
+                        appliesToVoice      INTEGER NOT NULL DEFAULT 1,
+                        appliesToText       INTEGER NOT NULL DEFAULT 1,
+                        confidence          REAL    NOT NULL DEFAULT 1.0,
+                        createdAt           INTEGER NOT NULL,
+                        updatedAt           INTEGER NOT NULL,
+                        sourceUtterance     TEXT    NOT NULL,
+                        enabled             INTEGER NOT NULL DEFAULT 1
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_response_preferences_domain ON response_preferences(domain)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_response_preferences_enabled ON response_preferences(enabled)")
+            }
+        }
+
+        /**
          * Migration 13 → 14: add saved_routines table for persisted tool-call
          * sequences the user has promoted to reusable plans.
          */
@@ -638,7 +674,7 @@ abstract class JarvisDatabase : RoomDatabase() {
                                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                                    MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
                                    MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
-                                   MIGRATION_15_16, MIGRATION_16_17)
+                                   MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18)
                     // WAL journal mode lets readers and a single writer run
                     // concurrently — important here because JarvisRuntime has
                     // many overlapping writers (memory, knowledge, telemetry,

@@ -217,5 +217,14 @@ class EventScorer(
         ProactiveEventType.TODOIST_TASK_10M,
         ProactiveEventType.LOCAL_REMINDER_30M,
         ProactiveEventType.LOCAL_REMINDER_10M    -> config.cooldownUpcomingReminderMs
+        // Ambient lanes — use a 15-minute cooldown per trigger to avoid
+        // repeating the same nudge in quick succession.
+        ProactiveEventType.AMBIENT_ROUTINE_SUGGESTION,
+        ProactiveEventType.AMBIENT_LOCATION_TODOIST_MATCH,
+        ProactiveEventType.AMBIENT_APP_CONTEXT_NUDGE,
+        ProactiveEventType.AMBIENT_HOME_ASSISTANT_ALERT,
+        ProactiveEventType.AMBIENT_TRAVEL_SUGGESTION,
+        ProactiveEventType.AMBIENT_MISSED_ROUTINE,
+        ProactiveEventType.AMBIENT_CUSTOMER_MESSAGE_NUDGE -> 15 * 60_000L
     }
 }

@@ -106,6 +106,10 @@ class JarvisApp : Application() {
         var ambientEmitter
             : com.jarvis.assistant.ambient.AmbientProactiveEventEmitter? = null
             internal set
+        @Volatile
+        lateinit var preferenceEngine
+            : com.jarvis.assistant.preferences.ResponsePreferenceEngine
+            internal set
     }
 
     override fun onCreate() {

@@ -374,6 +374,7 @@ class JarvisRuntime(
     private val speechStateSource = AppSpeechStateSource(machine)
     private lateinit var proactiveEngine   : ProactiveEngine
     private lateinit var ambientEmitter    : com.jarvis.assistant.ambient.AmbientProactiveEventEmitter
+    private lateinit var preferenceEngine  : com.jarvis.assistant.preferences.ResponsePreferenceEngine
     /**
      * Scheduled-reminder engine — fires the 30m + 10m pre-warnings for
      * Calendar / Todoist / local reminders.  Hands events to
@@ -631,6 +632,14 @@ class JarvisRuntime(
         // Routine repository — persistent saved sequences.
         val routineRepository = com.jarvis.assistant.core.routines.RoutineRepository(db.savedRoutineDao())
 
+        // Response preference engine — constructed before ToolRegistry so tools
+        // receive the engine on first instantiation.
+        val prefRepo = com.jarvis.assistant.preferences.ResponsePreferenceRepository(
+            db.responsePreferenceDao()
+        )
+        preferenceEngine = com.jarvis.assistant.preferences.ResponsePreferenceEngine(prefRepo)
+        JarvisApp.preferenceEngine = preferenceEngine
+
         // Tool registry
         toolRegistry = ToolRegistry.buildDefault(
             context                = context,
@@ -649,6 +658,7 @@ class JarvisRuntime(
             sharedContacts         = sharedContactLookup, // A2: one ContactLookup for whole runtime
             openClawRepo           = openClawRepo,        // enables OpenClawStatusTool
             profileMemory          = profileMemory,       // enables PersonalFactTool
+            preferenceEngine       = this.preferenceEngine,
         )
         toolDispatcher = ToolDispatcher(
             context,
@@ -2941,6 +2951,21 @@ class JarvisRuntime(
                         FlowResult.PassThrough -> { /* fall through */ }
                     }
 
+                    // ── Response preference detection ────────────────────────
+                    // Must run before IntentClassifier — "I prefer…" phrases
+                    // would otherwise be captured as memory-store actions.
+                    if (::preferenceEngine.isInitialized) {
+                        val prefResult = withContext(Dispatchers.IO) {
+                            preferenceEngine.tryDetectAndStore(transcript)
+                        }
+                        if (prefResult != null) {
+                            speakAndRecord(prefResult.confirmation)
+                            machine.transition(JarvisState.Listening)
+                            syncState(JarvisState.Listening)
+                            continue
+                        }
+                    }
+
                     // ── Intent classifier (memory / reminder pre-filter) ───────
                     machine.transition(JarvisState.Thinking)
                     syncState(JarvisState.Thinking)
@@ -3088,6 +3113,13 @@ class JarvisRuntime(
                             tool, input, sessionSpeaker, transcript,
                             confidenceTier = turnConfidenceTier      // gate confirmations by tier
                         )
+
+                        // Domain tracking — update lastActiveDomain so preference extraction
+                        // has a context fallback for the next "I prefer…" utterance.
+                        if (::preferenceEngine.isInitialized) {
+                            com.jarvis.assistant.preferences.ResponseDomain.TOOL_DOMAIN_MAP[tool.name]
+                                ?.let { preferenceEngine.lastActiveDomain = it }
+                        }
 
                         // Brain: log tool-triggered events for any dispatch that ran the tool
                         dispatchResult.let { r ->
@@ -3552,10 +3584,14 @@ class JarvisRuntime(
             llmRouter.conversationStore.addMessage("user", transcript)
             val history = llmRouter.conversationStore.getContextMessages()
                 .filter { it.role != "system" }
+            val prefFrag = if (::preferenceEngine.isInitialized)
+                kotlinx.coroutines.withContext(Dispatchers.IO) { preferenceEngine.buildPromptFragment() }
+            else null
             val messages = promptAssembler.assemble(
                 transcript, history, maxMemories = 2,
-                speakerContext = sessionSpeaker,
-                presence       = currentPresence()
+                speakerContext      = sessionSpeaker,
+                presence            = currentPresence(),
+                preferencesFragment = prefFrag,
             )
             llmRouter.completeWithMessages(messages)
 
@@ -3607,10 +3643,14 @@ class JarvisRuntime(
             llmRouter.conversationStore.addMessage("user", transcript)
             val history  = llmRouter.conversationStore.getContextMessages()
                 .filter { it.role != "system" }
+            val prefFrag2 = if (::preferenceEngine.isInitialized)
+                kotlinx.coroutines.withContext(Dispatchers.IO) { preferenceEngine.buildPromptFragment() }
+            else null
             val messages = promptAssembler.assemble(
                 transcript, history, maxMemories = 4,
-                speakerContext = sessionSpeaker,
-                presence       = currentPresence()
+                speakerContext      = sessionSpeaker,
+                presence            = currentPresence(),
+                preferencesFragment = prefFrag2,
             )
 
             // ── Agentic tool chaining (up to MAX_TOOL_HOPS per turn) ──────────────
@@ -3877,12 +3917,16 @@ class JarvisRuntime(
             )
         )
 
+        val prefFrag3 = if (::preferenceEngine.isInitialized)
+            kotlinx.coroutines.withContext(Dispatchers.IO) { preferenceEngine.buildPromptFragment() }
+        else null
         val messages = promptAssembler.assemble(
             userQuery           = resumable.userTranscript,
             conversationHistory = history,
             maxMemories         = 2,
             speakerContext      = sessionSpeaker,
-            presence            = currentPresence()
+            presence            = currentPresence(),
+            preferencesFragment = prefFrag3,
         )
 
         currentSpokenSoFar    = ""

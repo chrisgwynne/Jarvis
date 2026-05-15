@@ -128,13 +128,29 @@ class RealMetaWearablesProvider(
         // null == success.  initialize returns DatResult<Unit,...>;
         // success "value" is just Unit so we don't need to capture it.
         val initErr = Wearables.initialize(context).errorOrNull()
-        if (initErr == null) {
-            Log.d(TAG, "[META_WEARABLES_INIT] Wearables.initialize → Success")
-            startRegistryObservers()
-        } else {
-            Log.w(TAG, "[META_WEARABLES_ERROR] init failed: $initErr")
-            lastError = initErr.toString()
-            _stateFlow.value = MetaWearablesState.ERROR
+        when {
+            initErr == null -> {
+                Log.d(TAG, "[META_WEARABLES_INIT] Wearables.initialize → Success")
+                startRegistryObservers()
+            }
+            // The DAT SDK's `Wearables` object has a static initializer
+            // that runs on class load — and our sdkPresent() probe loads
+            // the class via Class.forName before we ever call init.  By
+            // the time this init() fires, the SDK has self-initialised
+            // and returns ALREADY_INITIALIZED.  That's a no-op success
+            // for our purposes — the SDK is up; we just didn't drive
+            // the bring-up.  Proceed to wire observers + stay at
+            // DISCONNECTED so connect() can run normally.
+            initErr.toString().contains("ALREADY_INITIALIZED", ignoreCase = true) -> {
+                Log.d(TAG, "[META_WEARABLES_INIT] Wearables.initialize → ALREADY_INITIALIZED " +
+                    "(SDK self-init via class loader) — proceeding as success")
+                startRegistryObservers()
+            }
+            else -> {
+                Log.w(TAG, "[META_WEARABLES_ERROR] init failed: $initErr")
+                lastError = initErr.toString()
+                _stateFlow.value = MetaWearablesState.ERROR
+            }
         }
     }
 

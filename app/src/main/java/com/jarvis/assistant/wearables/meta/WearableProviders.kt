@@ -47,6 +47,32 @@ interface WearableDeviceProvider {
 
     /** Test-only: simulate a transport-level disconnect (used by mock + diagnostics). */
     suspend fun simulateDisconnect() {}
+
+    /**
+     * Open the Meta AI companion app's app-registration flow.  This is
+     * the prerequisite for [connect] to find an eligible device — the
+     * SDK can only see glasses that the user has explicitly approved
+     * for this Android app (via its package name + signature).  Without
+     * registration, `Wearables.createSession(...)` returns
+     * `DeviceSessionError.NO_ELIGIBLE_DEVICE` and state stays
+     * DISCONNECTED.
+     *
+     * @return true when the registration intent was launched, false
+     *         when the SDK is absent / disabled / refused (stub +
+     *         disabled providers always return false).
+     */
+    fun startRegistration(activity: android.app.Activity): Boolean = false
+
+    /**
+     * One-line summary of the current registration state for the
+     * Settings UI.  Examples: "registered", "not registered",
+     * "pending approval", "dev mode".  Default empty for backends
+     * without a registry concept (stub / mock).
+     */
+    val registrationStatusLabel: String get() = ""
+
+    /** Count of devices visible to the SDK (paired + reachable). */
+    val visibleDeviceCount: Int get() = 0
 }
 
 /**

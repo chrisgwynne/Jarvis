@@ -361,7 +361,11 @@ class RealMetaWearablesProvider(
             Log.d(TAG, "[META_WEARABLES_CONNECT_SKIP] already at $current")
             return true
         }
-        Log.d(TAG, "[META_WEARABLES_CONNECT_START] backend=real")
+        Log.d(TAG, "[META_WEARABLES_CONNECT_START] backend=real force=$force")
+        // Clear any stale error from a previous failed attempt so the
+        // Settings "Last error" row doesn't lie to the user when this
+        // attempt succeeds (or fails differently).
+        lastError = null
         _stateFlow.value = MetaWearablesState.CONNECTING
 
         // DatResult is an inline value class whose `getOrElse` member is

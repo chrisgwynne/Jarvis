@@ -125,5 +125,15 @@ fun SettingsScreen(
         composable(SettingsCategory.Faq.route) {
             FaqSettingsScreen(onBack = popToRoot, onClose = onBack)
         }
+        composable(SettingsCategory.Vision.route) {
+            com.jarvis.assistant.ui.settings.screens.VisionSettingsScreen(
+                onBack = popToRoot, onClose = onBack
+            )
+        }
+        composable(SettingsCategory.VisionDiagnostics.route) {
+            com.jarvis.assistant.ui.settings.screens.VisionDiagnosticsScreen(
+                onBack = popToRoot, onClose = onBack
+            )
+        }
     }
 }

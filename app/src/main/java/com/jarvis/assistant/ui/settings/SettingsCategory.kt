@@ -20,6 +20,8 @@ import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
@@ -156,6 +158,18 @@ internal enum class SettingsCategory(
         description = "What Jarvis can do and how to ask",
         icon        = Icons.AutoMirrored.Filled.HelpOutline,
         route       = "settings/faq",
+    ),
+    Vision(
+        title       = "Vision",
+        description = "Camera, screenshots, OCR and visual memory",
+        icon        = Icons.Filled.CameraAlt,
+        route       = "settings/vision",
+    ),
+    VisionDiagnostics(
+        title       = "Vision Diagnostics",
+        description = "Test camera capture, OCR and screenshot analysis",
+        icon        = Icons.Filled.BugReport,
+        route       = "settings/vision_diagnostics",
     ),
 }
 

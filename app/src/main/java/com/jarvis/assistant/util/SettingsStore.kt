@@ -1027,4 +1027,57 @@ class SettingsStore(context: Context) {
     var ambientMaxNudgesPerDay: Int
         get() = prefs.getInt("ambient_max_nudges", 10)
         set(v) = prefs.edit().putInt("ambient_max_nudges", v).apply()
+
+    // ── Vision ────────────────────────────────────────────────────────────────
+
+    /** Master switch — disabling this suppresses all vision capture and OCR. */
+    var visionEnabled: Boolean
+        get() = prefs.getBoolean("vision_enabled", true)
+        set(v) = prefs.edit().putBoolean("vision_enabled", v).apply()
+
+    /** Enable automatic analysis of screenshots when the user asks. */
+    var screenshotAnalysisEnabled: Boolean
+        get() = prefs.getBoolean("vision_screenshot_analysis", true)
+        set(v) = prefs.edit().putBoolean("vision_screenshot_analysis", v).apply()
+
+    /** Enable the OCR pipeline for "read this" / "what does this say" commands. */
+    var ocrEnabled: Boolean
+        get() = prefs.getBoolean("vision_ocr_enabled", true)
+        set(v) = prefs.edit().putBoolean("vision_ocr_enabled", v).apply()
+
+    /** Persist visual context summaries in the memory store. */
+    var saveVisualContext: Boolean
+        get() = prefs.getBoolean("vision_save_context", true)
+        set(v) = prefs.edit().putBoolean("vision_save_context", v).apply()
+
+    /** Prefer the phone camera over Meta glasses when both are available. */
+    var preferPhoneCamera: Boolean
+        get() = prefs.getBoolean("vision_prefer_phone_camera", true)
+        set(v) = prefs.edit().putBoolean("vision_prefer_phone_camera", v).apply()
+
+    /**
+     * Automatically fall back to phone camera when Meta glasses are unavailable.
+     * When false, the glasses tool declines silently (existing behaviour).
+     */
+    var visionAutoFallbackToPhone: Boolean
+        get() = prefs.getBoolean("vision_auto_fallback", true)
+        set(v) = prefs.edit().putBoolean("vision_auto_fallback", v).apply()
+
+    /**
+     * Register a [ScreenshotContextManager] ContentObserver that watches the
+     * media store for new screenshots and updates VisualContextStore.
+     */
+    var screenshotListenerEnabled: Boolean
+        get() = prefs.getBoolean("vision_screenshot_listener", false)
+        set(v) = prefs.edit().putBoolean("vision_screenshot_listener", v).apply()
+
+    /** Allow proactive suggestions based on repeated screenshot patterns. */
+    var screenshotProactiveSuggestionsEnabled: Boolean
+        get() = prefs.getBoolean("vision_screenshot_proactive", false)
+        set(v) = prefs.edit().putBoolean("vision_screenshot_proactive", v).apply()
+
+    /** Retention period (days) for stored visual observations. */
+    var visualMemoryRetentionDays: Int
+        get() = prefs.getInt("vision_retention_days", 30)
+        set(v) = prefs.edit().putInt("vision_retention_days", v).apply()
 }

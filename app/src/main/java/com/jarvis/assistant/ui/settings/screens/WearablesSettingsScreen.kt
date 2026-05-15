@@ -166,6 +166,45 @@ internal fun WearablesSettingsScreen(
                     }
                 },
             )
+            SettingsRowDivider()
+            SettingsActionRow(
+                title       = "Unregister with Meta AI",
+                description = "Opens Meta AI to revoke this app's registration. " +
+                    "After completion you'll need to Register again before " +
+                    "connect will find a device.  Use when switching Meta " +
+                    "accounts or recovering from a stuck registration.",
+                actionLabel = "Unregister",
+                onAction    = {
+                    val activity = (context as? android.app.Activity)
+                    if (activity == null) {
+                        Toast.makeText(context,
+                            "Open Settings from the main Jarvis screen so " +
+                                "we have an Activity to launch from.",
+                            Toast.LENGTH_LONG).show()
+                    } else if (!mgr.startUnregistration(activity)) {
+                        Toast.makeText(context,
+                            "Unregistration unavailable — DAT SDK not active.",
+                            Toast.LENGTH_LONG).show()
+                    }
+                },
+            )
+            SettingsRowDivider()
+            SettingsActionRow(
+                title       = "Reset SDK state (local)",
+                description = "Drop any active session and clear local SDK " +
+                    "caches without touching Meta-side registration.  Cheap " +
+                    "recovery for 'SDK is confused' — try this before " +
+                    "Unregister.",
+                actionLabel = "Reset",
+                onAction    = {
+                    scope.launch {
+                        mgr.resetSdkState()
+                        Toast.makeText(context,
+                            "SDK state reset. Registration kept; reconnect to retry.",
+                            Toast.LENGTH_SHORT).show()
+                    }
+                },
+            )
         }
 
         // Glasses-side permission status + grant buttons.  Distinct

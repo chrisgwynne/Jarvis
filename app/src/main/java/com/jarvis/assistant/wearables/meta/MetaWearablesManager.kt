@@ -102,6 +102,15 @@ class MetaWearablesManager(
     fun openDatAppUpdate(activity: android.app.Activity): Boolean =
         deviceProvider.openDatAppUpdate(activity)
 
+    /** Launch Meta AI's unregistration flow.  After completion the
+     *  registration state returns to NOT_REGISTERED. */
+    fun startUnregistration(activity: android.app.Activity): Boolean =
+        deviceProvider.startUnregistration(activity)
+
+    /** Full local SDK-state reset — drops session, clears caches,
+     *  re-primes observers.  Does NOT touch Meta-side registration. */
+    suspend fun resetSdkState() = deviceProvider.resetSdkState()
+
     /** Last user-safe error message surfaced by the active backend. */
     val lastError: String? get() = deviceProvider.lastError
 

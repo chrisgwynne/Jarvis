@@ -131,6 +131,26 @@ interface WearableDeviceProvider {
 
     /** Open Meta AI's DAT-app-update screen (for this App ID). */
     fun openDatAppUpdate(activity: android.app.Activity): Boolean = false
+
+    /**
+     * Launch the SDK's unregistration flow — opens Meta AI to revoke
+     * this app's registration.  After completion, registration state
+     * returns to NOT_REGISTERED and the user must re-register before
+     * connect() will find an eligible device.  Use when handing the
+     * app to another user, switching Meta accounts, or recovering
+     * from a stuck registration.  Returns true when the intent was
+     * dispatched; false when SDK is absent / disabled.
+     */
+    fun startUnregistration(activity: android.app.Activity): Boolean = false
+
+    /**
+     * Full local SDK-state reset.  Drops any in-memory session,
+     * permission cache, and device registry without touching the
+     * user's Meta-side registration.  Cheap recovery for "SDK is
+     * confused" without forcing a full re-registration round-trip.
+     * Always synchronous and best-effort; never throws.
+     */
+    suspend fun resetSdkState() {}
 }
 
 /**

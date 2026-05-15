@@ -328,6 +328,55 @@ class RealMetaWearablesProvider(
         }
     }
 
+    override fun startUnregistration(activity: android.app.Activity): Boolean {
+        return try {
+            Log.d(TAG, "[META_WEARABLES_UNREGISTRATION_START]")
+            Wearables.startUnregistration(activity)
+            // Clear local cached fields immediately so the UI reflects
+            // "not registered" without waiting for the registrationState
+            // flow to emit (which only fires once the user completes the
+            // Meta AI revocation flow).
+            lastError = null
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "[META_WEARABLES_ERROR] startUnregistration threw: ${t.message}")
+            lastError = t.message
+            false
+        }
+    }
+
+    override suspend fun resetSdkState() {
+        Log.d(TAG, "[META_WEARABLES_RESET]")
+        // Tear down any active stream + session first so the SDK
+        // doesn't leak callbacks into the new state.
+        try { disconnect() } catch (_: Throwable) {}
+        try {
+            Wearables.reset()
+        } catch (t: Throwable) {
+            Log.w(TAG, "[META_WEARABLES_ERROR] Wearables.reset threw: ${t.message}")
+            lastError = t.message
+            return
+        }
+        // Clear our cached labels — they'll repopulate as the
+        // registry observers re-emit after re-init.
+        registrationStatusLabel = "unknown"
+        visibleDeviceCount      = 0
+        firstDeviceLinkLabel    = ""
+        compatibilityLabel      = ""
+        cameraPermissionLabel   = "UNKNOWN"
+        microphonePermissionLabel = "UNKNOWN"
+        deviceName              = null
+        batteryPercent          = null
+        lastError               = null
+        _stateFlow.value        = MetaWearablesState.DISCONNECTED
+        // Re-prime the SDK + observers.  initialize() returning
+        // ALREADY_INITIALIZED is fine — startRegistryObservers wires
+        // fresh collectors regardless.
+        val initErr = Wearables.initialize(context).errorOrNull()
+        Log.d(TAG, "[META_WEARABLES_RESET] re-init err=$initErr")
+        startRegistryObservers()
+    }
+
     override fun openDatAppUpdate(activity: android.app.Activity): Boolean {
         return try {
             Log.d(TAG, "[META_WEARABLES_OPEN_DAT_APP_UPDATE]")

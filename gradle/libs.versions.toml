@@ -22,6 +22,7 @@ androidxTestCore = "1.6.1"
 androidxTestRunner = "1.6.2"
 mockitoKotlin = "5.4.0"
 coroutinesTest = "1.9.0"
+mwdat = "0.7.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -56,6 +57,15 @@ androidx-test-core = { group = "androidx.test", name = "core-ktx", version.ref =
 androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
 mockito-kotlin = { group = "org.mockito.kotlin", name = "mockito-kotlin", version.ref = "mockitoKotlin" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutinesTest" }
+
+# Meta Wearables DAT — hosted on GitHub Packages (auth wired in
+# settings.gradle.kts).  See docs/wearables/meta-dat-integration.md
+# for setup.  Resolves only when `github_token` is configured in
+# local.properties (or GITHUB_TOKEN is in the env); otherwise the
+# StubMetaWearablesProvider stays the active backend.
+mwdat-core       = { group = "com.meta.wearable", name = "mwdat-core",       version.ref = "mwdat" }
+mwdat-camera     = { group = "com.meta.wearable", name = "mwdat-camera",     version.ref = "mwdat" }
+mwdat-mockdevice = { group = "com.meta.wearable", name = "mwdat-mockdevice", version.ref = "mwdat" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

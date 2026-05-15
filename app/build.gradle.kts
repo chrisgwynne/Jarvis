@@ -187,6 +187,24 @@ dependencies {
     // Instrumented tests
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.core)
+
+    // ── Meta Wearables DAT (optional, gated on github_token) ──────────────
+    // The dependency resolves only when settings.gradle.kts registered the
+    // GitHub Packages repo (i.e. a token was found in local.properties or
+    // the GITHUB_TOKEN env var).  Without a token the deps simply aren't
+    // declared — the StubMetaWearablesProvider stays the active backend
+    // and Jarvis still builds.  See docs/wearables/meta-dat-integration.md.
+    val mwdatTokenPresent = (System.getenv("GITHUB_TOKEN")?.isNotBlank() == true) ||
+        run {
+            val f = rootProject.file("local.properties")
+            f.exists() && Properties().apply { FileInputStream(f).use { load(it) } }
+                .getProperty("github_token")?.isNotBlank() == true
+        }
+    if (mwdatTokenPresent) {
+        implementation(libs.mwdat.core)
+        implementation(libs.mwdat.camera)
+        debugImplementation(libs.mwdat.mockdevice)
+    }
 }
 
 /**

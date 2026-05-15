@@ -195,16 +195,34 @@ class RealMetaWearablesProvider(
                 if (first != null) {
                     deviceStateWatchJob = scope.launch {
                         try {
-                            Wearables.getDeviceState(first).collect { ds ->
-                                firstDeviceLinkLabel = ds.toString()
-                                Log.d(TAG, "[META_WEARABLES_DEVICE_STATE] device=$first state=$ds")
+                            // Wearables.devicesMetadata: Map<DeviceIdentifier,
+                            // StateFlow<Device>>.  Device carries `name`,
+                            // `linkState: LinkState` (CONNECTED / CONNECTING /
+                            // DISCONNECTED), `deviceType`, `firmwareInfo`,
+                            // `compatibility`.  This is the BLE-link info we
+                            // want for diagnostics — *not* `Wearables.
+                            // getDeviceState` which only carries thermalLevel.
+                            val metaFlow = Wearables.devicesMetadata[first]
+                            if (metaFlow == null) {
+                                Log.w(TAG, "[META_WEARABLES_METADATA_MISSING] device=$first")
+                                firstDeviceLinkLabel = "unknown"
+                                return@launch
+                            }
+                            metaFlow.collect { device ->
+                                firstDeviceLinkLabel = device.linkState.name
+                                deviceName = device.name
+                                Log.d(TAG, "[META_WEARABLES_DEVICE] name=${device.name} " +
+                                    "linkState=${device.linkState} " +
+                                    "compat=${device.compatibility} " +
+                                    "type=${device.deviceType}")
                             }
                         } catch (t: Throwable) {
-                            Log.w(TAG, "getDeviceState collector failed", t)
+                            Log.w(TAG, "devicesMetadata collector failed", t)
                         }
                     }
                 } else {
                     firstDeviceLinkLabel = ""
+                    deviceName = null
                 }
             }
         }

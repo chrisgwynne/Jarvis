@@ -358,6 +358,31 @@ internal fun WearablesSettingsScreen(
             )
             SettingsRowDivider()
             SettingsActionRow(
+                title       = "Force connect (ignore compatibility)",
+                description = "Skip the DEVICE_UPDATE_REQUIRED pre-check and let " +
+                    "the SDK attempt session.start anyway.  Use this when Meta AI " +
+                    "says firmware is current but the SDK still reports the device " +
+                    "as incompatible.  Will hang at CONNECTING and time out if the " +
+                    "firmware genuinely isn't on the DAT track.",
+                actionLabel = "Force",
+                onAction    = {
+                    scope.launch {
+                        val ok = mgr.connect(withCamera = true, force = true)
+                        val message = if (ok) {
+                            "Connected (force)."
+                        } else {
+                            val err = mgr.lastError
+                            if (!err.isNullOrBlank())
+                                "Force connect failed: $err"
+                            else
+                                "Force connect failed (state=${mgr.currentState})."
+                        }
+                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                    }
+                },
+            )
+            SettingsRowDivider()
+            SettingsActionRow(
                 title       = "Disconnect",
                 description = "Drop the active session.",
                 actionLabel = "Disconnect",

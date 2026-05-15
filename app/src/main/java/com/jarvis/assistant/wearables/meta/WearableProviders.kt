@@ -42,6 +42,17 @@ interface WearableDeviceProvider {
      */
     suspend fun connect(): Boolean
 
+    /**
+     * Force-attempt connection even when the device reports a
+     * non-COMPATIBLE compatibility (e.g. DEVICE_UPDATE_REQUIRED).
+     * Used by the Settings UI to override the pre-flight short-
+     * circuit when the user believes the compatibility report is
+     * stale — exposes the underlying createSession / session.start
+     * failure instead of failing fast on the cached field.
+     * Default delegates to [connect] for backends without a pre-check.
+     */
+    suspend fun forceConnect(): Boolean = connect()
+
     /** Disconnect, releasing any camera session. */
     suspend fun disconnect()
 

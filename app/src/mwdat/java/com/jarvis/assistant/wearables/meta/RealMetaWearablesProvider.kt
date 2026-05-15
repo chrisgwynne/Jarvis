@@ -346,7 +346,11 @@ class RealMetaWearablesProvider(
 
     // ── WearableDeviceProvider ─────────────────────────────────────────────
 
-    override suspend fun connect(): Boolean = mutex.withLock {
+    override suspend fun connect(): Boolean = connectInternal(force = false)
+
+    override suspend fun forceConnect(): Boolean = connectInternal(force = true)
+
+    private suspend fun connectInternal(force: Boolean): Boolean = mutex.withLock {
         val current = _stateFlow.value
         if (current == MetaWearablesState.CONNECTING ||
             current == MetaWearablesState.CONNECTED ||
@@ -372,7 +376,8 @@ class RealMetaWearablesProvider(
         // CAMERA on the glasses, the Last error row will tell them
         // before the session times out at STARTING.
         refreshPermissionStatus()
-        if (cameraPermissionLabel != "GRANTED") {
+        // SDK returns "Granted" (PascalCase), not "GRANTED" — case-fold.
+        if (!cameraPermissionLabel.equals("GRANTED", ignoreCase = true)) {
             Log.w(TAG, "[META_WEARABLES_PERMISSION_MISSING] camera=$cameraPermissionLabel " +
                 "— addStream/Stream.start may hang until granted via Meta AI")
         }
@@ -396,7 +401,7 @@ class RealMetaWearablesProvider(
         // surface "Capture failed" silently.  Short-circuit with a
         // pointer to the firmware-update flow.
         val compatSnapshot = compatibilityLabel
-        if (compatSnapshot.isNotEmpty() && !compatSnapshot.equals("COMPATIBLE", ignoreCase = true)) {
+        if (!force && compatSnapshot.isNotEmpty() && !compatSnapshot.equals("COMPATIBLE", ignoreCase = true)) {
             val hint = when {
                 compatSnapshot.contains("DEVICE_UPDATE", ignoreCase = true) ->
                     "glasses firmware update required — tap 'Check firmware update' " +

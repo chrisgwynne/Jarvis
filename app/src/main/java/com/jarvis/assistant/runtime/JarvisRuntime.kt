@@ -1680,7 +1680,11 @@ class JarvisRuntime(
                 // Skipped during first-run setup / voice enrollment.
                 if (!sessionSpeaker.awaitingOwnerName && !sessionSpeaker.awaitingVoiceEnrollmentSample) {
                     val brief = tryMorningBriefing()
+                    Log.d(TAG, "[AUDIO_FOCUS_REQUEST] wake ack")
+                    audioFocus.requestFocus()
                     ttsEngine.speak(brief ?: WakeAcknowledgements.random())
+                    audioFocus.abandonFocus()
+                    Log.d(TAG, "[AUDIO_FOCUS_ABANDON] wake ack done")
                 }
 
                 var consecutiveFastFails = 0
@@ -2414,7 +2418,9 @@ class JarvisRuntime(
                             }
                             is AttentionDecision.AskIfForMe -> {
                                 Log.d(TAG, "[ATTENTION_ASK_BRIEF] \"${decision.prompt}\"")
+                                audioFocus.requestFocus()
                                 ttsEngine.speak(decision.prompt)
+                                audioFocus.abandonFocus()
                                 machine.transition(JarvisState.Listening)
                                 syncState(JarvisState.Listening)
                                 continue
@@ -3080,7 +3086,9 @@ class JarvisRuntime(
                             // Echo back what we'd do and ask for explicit go/no-go.
                             Log.d(TAG, "[CONFIDENCE_CONFIRM_MEDIUM_RISKY] " +
                                 "tool=${routeOutcome.tool.name} tier=${routeOutcome.tier}")
+                            audioFocus.requestFocus()
                             ttsEngine.speak(routeOutcome.confirmPrompt)
+                            audioFocus.abandonFocus()
                             machine.transition(JarvisState.Listening)
                             syncState(JarvisState.Listening)
                             continue
@@ -3299,7 +3307,9 @@ class JarvisRuntime(
                             transcript.trim().lowercase().startsWith(ocKeyword.lowercase())
 
                         if (route == com.jarvis.assistant.remote.openclaw.RouteType.REMOTE_LONG) {
+                            audioFocus.requestFocus()
                             ttsEngine.speak("Looking into that.")
+                            audioFocus.abandonFocus()
                         }
 
                         val streamFlow = openClawRouter.executeStreaming(
@@ -3362,6 +3372,8 @@ class JarvisRuntime(
                                             syncState(JarvisState.Speaking)
                                             if (settings.voiceResponse) {
                                                 LatencyTracker.mark("TTS_START")
+                                                Log.d(TAG, "[AUDIO_FOCUS_REQUEST] openclaw stream start")
+                                                audioFocus.requestFocus()
                                                 bargeIn.start()
                                             }
                                         }
@@ -3371,7 +3383,11 @@ class JarvisRuntime(
                                     }
                                 }
                                 if (speakingStarted) {
-                                    if (settings.voiceResponse) bargeIn.stop()
+                                    if (settings.voiceResponse) {
+                                        bargeIn.stop()
+                                        audioFocus.abandonFocus()
+                                        Log.d(TAG, "[AUDIO_FOCUS_ABANDON] openclaw stream done")
+                                    }
                                     DeviceStateStore.update { copy(ttsPlaying = false) }
                                 }
                                 LatencyTracker.mark("OPENCLAW_COMPLETE")
@@ -3475,7 +3491,9 @@ class JarvisRuntime(
                     // here is effectively free.
                     val implicitMemoryStored = implicitMemoryStoredDeferred.await()
                     if (implicitMemoryStored && settings.voiceResponse) {
+                        audioFocus.requestFocus()
                         ttsEngine.speak("Noted.")
+                        audioFocus.abandonFocus()
                     }
 
                     // Schedule a follow-up if this was a personal update with a
@@ -3803,6 +3821,8 @@ class JarvisRuntime(
                     syncState(JarvisState.Speaking)
                     if (settings.voiceResponse) {
                         LatencyTracker.mark("TTS_START")
+                        Log.d(TAG, "[AUDIO_FOCUS_REQUEST] local llm stream start")
+                        audioFocus.requestFocus()
                         bargeIn.start()
                     }
                 }
@@ -3823,7 +3843,11 @@ class JarvisRuntime(
                 }
             }
 
-            if (settings.voiceResponse && speakingStarted) bargeIn.stop()
+            if (settings.voiceResponse && speakingStarted) {
+                bargeIn.stop()
+                audioFocus.abandonFocus()
+                Log.d(TAG, "[AUDIO_FOCUS_ABANDON] local llm stream done")
+            }
             DeviceStateStore.update { copy(ttsPlaying = false) }
             LatencyTracker.mark("PIPELINE_DONE")
 
@@ -3945,14 +3969,22 @@ class JarvisRuntime(
                     machine.transition(JarvisState.Speaking)
                     DeviceStateStore.update { copy(ttsPlaying = true) }
                     syncState(JarvisState.Speaking)
-                    if (settings.voiceResponse) bargeIn.start()
+                    if (settings.voiceResponse) {
+                        Log.d(TAG, "[AUDIO_FOCUS_REQUEST] resume stream start")
+                        audioFocus.requestFocus()
+                        bargeIn.start()
+                    }
                 }
                 val stillSpeaking = machine.isIn<JarvisState.Speaking>()
                 if (stillSpeaking) currentSpokenSoFar += "$sentence "
                 else currentPendingTail += "$sentence "
                 if (settings.voiceResponse && stillSpeaking) ttsEngine.speak(sentence)
             }
-            if (settings.voiceResponse && speakingStarted) bargeIn.stop()
+            if (settings.voiceResponse && speakingStarted) {
+                bargeIn.stop()
+                audioFocus.abandonFocus()
+                Log.d(TAG, "[AUDIO_FOCUS_ABANDON] resume stream done")
+            }
             DeviceStateStore.update { copy(ttsPlaying = false) }
 
             val responseText = fullResponse.toString().trim()
@@ -3970,6 +4002,7 @@ class JarvisRuntime(
         } catch (e: Exception) {
             Log.e(TAG, "Resume error: ${e.message}", e)
             bargeIn.stop()
+            audioFocus.abandonFocus()
             DeviceStateStore.update { copy(ttsPlaying = false) }
         } finally {
             currentSpokenSoFar    = ""

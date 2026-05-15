@@ -143,13 +143,13 @@ class MetaWearablesManager(
      *   4. **Await** state CAMERA_READY / STREAMING (still bounded).
      *   5. Return true iff the final state is capture-ready.
      */
-    suspend fun connect(withCamera: Boolean = true): Boolean {
+    suspend fun connect(withCamera: Boolean = true, force: Boolean = false): Boolean {
         val s = settingsProvider()
         if (!s.enabled) {
             Log.d(TAG, "[META_WEARABLES_DISABLED] state=$currentState")
             return false
         }
-        val kicked = deviceProvider.connect()
+        val kicked = if (force) deviceProvider.forceConnect() else deviceProvider.connect()
         if (!kicked) {
             Log.d(TAG, "[META_WEARABLES_CONNECT_REJECTED] state=$currentState")
             return false

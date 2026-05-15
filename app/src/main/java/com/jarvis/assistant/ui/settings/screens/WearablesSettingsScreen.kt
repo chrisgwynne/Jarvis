@@ -100,11 +100,27 @@ internal fun WearablesSettingsScreen(
                 description = "Glasses paired in Meta AI that the SDK can see. " +
                     "Zero means the glasses aren't paired or aren't on.",
             )
+            // Device link state — critical when "couldn't connect" but
+            // the device count is > 0.  CONNECTED here means the BLE
+            // link is up and AutoDeviceSelector will accept it.
+            // DISCONNECTED here means the glasses are paired in Meta
+            // AI but not actively reachable right now — wake them up
+            // (open the case, wear them, open Meta AI).
+            mgr.firstDeviceLinkLabel.takeIf { it.isNotBlank() }?.let { link ->
+                SettingsRowDivider()
+                SettingsValueRow(
+                    title       = "Device link state",
+                    value       = link,
+                    description = "BLE link health for the first visible device. " +
+                        "CONNECTED = ready; DISCONNECTED = paired but offline " +
+                        "(wake the glasses).",
+                )
+            }
             mgr.lastError?.takeIf { it.isNotBlank() }?.let { err ->
                 SettingsRowDivider()
                 SettingsValueRow(
                     title       = "Last error",
-                    value       = err.take(64),
+                    value       = err.take(120),
                     description = "Most recent failure from the SDK (logged " +
                         "with [META_WEARABLES_ERROR] in logcat).",
                 )
@@ -222,9 +238,16 @@ internal fun WearablesSettingsScreen(
                 onAction    = {
                     scope.launch {
                         val ok = mgr.connect(withCamera = true)
-                        Toast.makeText(context,
-                            if (ok) "Connected." else "Couldn't connect (state=${mgr.currentState}).",
-                            Toast.LENGTH_SHORT).show()
+                        val message = if (ok) {
+                            "Connected."
+                        } else {
+                            val err = mgr.lastError
+                            if (!err.isNullOrBlank())
+                                "Couldn't connect: $err"
+                            else
+                                "Couldn't connect (state=${mgr.currentState})."
+                        }
+                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                     }
                 },
             )

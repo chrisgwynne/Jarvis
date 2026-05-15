@@ -8,7 +8,6 @@ import com.jarvis.assistant.tools.framework.ToolSchema
 import com.jarvis.assistant.vision.ScreenObservationRepository
 import com.jarvis.assistant.vision.ScreenshotCaptureService
 import com.jarvis.assistant.vision.VisionScreenAnalyzer
-import com.jarvis.assistant.vision.VisualContextStore
 
 /**
  * LookAtThisIntentHandler — the "look at this" voice intent.
@@ -47,8 +46,7 @@ import com.jarvis.assistant.vision.VisualContextStore
 class LookAtThisIntentHandler(
     private val screenshotCapture: ScreenshotCaptureService,
     private val analyzer:          VisionScreenAnalyzer,
-    private val repository:        ScreenObservationRepository,
-    private val visualContextStore: VisualContextStore? = null,
+    private val repository:        ScreenObservationRepository
 ) : Tool {
 
     override val name            = "look_at_this"
@@ -138,20 +136,7 @@ class LookAtThisIntentHandler(
                 Log.i(TAG, "Not persisting — low confidence ${saveResult.confidence}")
         }
 
-        // Step 4 — update visual context store for follow-up commands
-        if (!analysis.sensitive) {
-            visualContextStore?.update(
-                VisualContextStore.VisualContext(
-                    source        = VisualContextStore.Source.SCREENSHOT,
-                    imageFilePath = capture.file.absolutePath,
-                    summary       = analysis.summary.ifBlank { null },
-                    appName       = capture.snapshot.foregroundPackage,
-                    capturedAtMs  = capture.snapshot.capturedAtMs,
-                )
-            )
-        }
-
-        // Step 5 — speak. Never echo extracted text when the screen was sensitive.
+        // Step 4 — speak. Never echo extracted text when the screen was sensitive.
         val spoken = if (analysis.sensitive) SENSITIVE_REPLY
                      else analysis.summary.ifBlank { "Had a look — not much I can say about that one." }
 

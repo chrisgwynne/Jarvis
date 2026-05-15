@@ -73,6 +73,16 @@ interface WearableDeviceProvider {
 
     /** Count of devices visible to the SDK (paired + reachable). */
     val visibleDeviceCount: Int get() = 0
+
+    /**
+     * One-line summary of the first visible device's link health
+     * (e.g. "CONNECTED", "DISCONNECTED", "CONNECTING") — separate
+     * from our own [stateFlow] which describes the SESSION state.
+     * A device can be visible-but-disconnected, which is the most
+     * common reason connect() fails despite registration succeeding.
+     * Empty string when no devices visible or backend doesn't support.
+     */
+    val firstDeviceLinkLabel: String get() = ""
 }
 
 /**

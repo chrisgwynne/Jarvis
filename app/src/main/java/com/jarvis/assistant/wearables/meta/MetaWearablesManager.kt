@@ -68,6 +68,12 @@ class MetaWearablesManager(
      *  0 for stub / mock / disabled. */
     val visibleDeviceCount: Int get() = deviceProvider.visibleDeviceCount
 
+    /** Link-state label for the first visible device (e.g.
+     *  "CONNECTED" / "DISCONNECTED" / "CONNECTING").  Empty when no
+     *  devices visible.  Distinct from [stateFlow] which describes
+     *  the SESSION, not the BLE link. */
+    val firstDeviceLinkLabel: String get() = deviceProvider.firstDeviceLinkLabel
+
     /** Last user-safe error message surfaced by the active backend. */
     val lastError: String? get() = deviceProvider.lastError
 
